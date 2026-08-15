@@ -1,0 +1,29 @@
+.DS_Store
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.venv/
+venv/
+build/
+dist/
+*.egg-info/
+
+# Secrets and local configuration
+.env
+.env.*
+!.env.example
+
+# Generated corpora and bulky research outputs
+data/
+outputs/
+artifacts/
+downloads/
+*.pdf
+*.mp3
+*.zip
+
+# Notebooks are allowed when deliberate thin clients.
+notebooks/.ipynb_checkpoints/
+
