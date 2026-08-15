@@ -10,6 +10,8 @@ This file records historical implementation origins and their clean-package dest
 - Historical `H2HLitFetcher.ipynb`
   - `escape_bibtex`, `to_bibtex`, `save_bib` behavior -> `src/h2h_lit/bibtex_io.py`
   - DOI/title deduplication behavior -> `src/h2h_lit/dedupe.py`
+- Shared historical behavior
+  - filename sanitization -> `src/h2h_lit/normalize.py`
+  - DOI-first duplicate keys, title fallback -> `src/h2h_lit/normalize.py` and `src/h2h_lit/dedupe.py`
 - Current `H2H STAR 3/preprocess.ipynb`
   - JSON conversion and full-text analysis are deferred to later checkpoints.
-
