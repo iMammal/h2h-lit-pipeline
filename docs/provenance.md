@@ -8,3 +8,7 @@ Supported provenance fields include source service, source query, retrieval time
 source identifier, URL, original bibliographic metadata, pipeline stage, software version,
 provider/model, prompt name/version, inference parameters, classification, retained
 reasoning, processing status, retries/errors, and input/output relationship.
+
+Source adapters attach `source_derived` events. PDF candidate resolution and transfer
+attach deterministic events with candidate ordering, chosen URL, HTTP status/content-type,
+and errors where available.
