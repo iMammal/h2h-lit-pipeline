@@ -10,6 +10,12 @@ build/
 dist/
 *.egg-info/
 
+# JetBrains IDE folder
+.idea/
+
+# Private submission/reviewer correspondence
+docs/H2H2/
+
 # Secrets and local configuration
 .env
 .env.*

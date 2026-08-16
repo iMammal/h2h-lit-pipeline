@@ -1,11 +1,6 @@
-Z# Default ignored files
+# Default ignored files
 /shelf/
 /workspace.xml
 # Editor-based HTTP Client requests
 /httpRequests/
 
-# JetBrains IDE folder
-.idea/
-
-# Private submission/reviewer correspondence
-docs/H2H2/
