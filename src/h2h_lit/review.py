@@ -180,9 +180,14 @@ class SourceQuery:
     status: ProcessingStatus = ProcessingStatus.OK
     run_id: str | None = None
     endpoint: str | None = None
+    query_version: str | None = None
+    page: int | None = None
+    cursor: str | None = None
+    result_count: int | None = None
     fields: list[str] = field(default_factory=list)
     filters: dict[str, Any] = field(default_factory=dict)
     software_version: str | None = None
+    errors: list[str] = field(default_factory=list)
     metadata: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
@@ -200,6 +205,8 @@ class RecordOccurrence:
     retrieved_at: str
     record: LiteratureRecord
     source_rank: int | None = None
+    page: int | None = None
+    cursor: str | None = None
     raw_payload_hash: str | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
 
@@ -460,6 +467,9 @@ class ReviewDataset:
     def effective_screening_decisions(self) -> list[ScreeningDecision]:
         return _effective_decisions(self.screening_decisions)
 
+    def effective_duplicate_decisions(self) -> list[DuplicateDecision]:
+        return _effective_decisions(self.duplicate_decisions)
+
     def effective_corpus_memberships(self) -> list[CorpusMembership]:
         return _effective_decisions(self.corpus_memberships)
 
@@ -469,12 +479,32 @@ class ReviewDataset:
         canonical = _unique_by_id(self.canonical_records, "canonical_id", "canonical record")
         evidence = _unique_by_id(self.evidence, "evidence_id", "evidence reference")
 
+        occurrence_counts = {query_id: 0 for query_id in queries}
         for occurrence in self.occurrences:
             if occurrence.source_query_id not in queries:
                 raise ValueError(
                     f"occurrence {occurrence.occurrence_id} references missing source query "
                     f"{occurrence.source_query_id}"
                 )
+            query = queries[occurrence.source_query_id]
+            occurrence_counts[occurrence.source_query_id] += 1
+            if occurrence.page != query.page or occurrence.cursor != query.cursor:
+                raise ValueError(
+                    f"occurrence {occurrence.occurrence_id} page/cursor disagrees with its query"
+                )
+
+        for query in self.source_queries:
+            actual_count = occurrence_counts[query.query_id]
+            if query.result_count is not None and query.result_count != actual_count:
+                raise ValueError(
+                    f"source query {query.query_id} result_count={query.result_count} "
+                    f"but has {actual_count} occurrences"
+                )
+            if query.status is ProcessingStatus.FAILED:
+                if actual_count:
+                    raise ValueError("failed source queries cannot contain occurrences")
+                if not query.errors:
+                    raise ValueError("failed source queries must preserve at least one error")
 
         for item in self.evidence:
             if item.canonical_record_id not in canonical:
