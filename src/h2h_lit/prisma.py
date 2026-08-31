@@ -1,4 +1,4 @@
-"""PRISMA identification and deduplication counts derived from review provenance."""
+"""PRISMA counts derived from persisted retrieval and screening provenance."""
 
 from __future__ import annotations
 
@@ -6,7 +6,13 @@ import json
 from dataclasses import asdict, dataclass
 
 from h2h_lit.models import ProcessingStatus
-from h2h_lit.review import DedupeOutcome, ReviewDataset
+from h2h_lit.review import (
+    DecisionScope,
+    DedupeOutcome,
+    EligibilityStatus,
+    ReviewDataset,
+    ScreeningStage,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -23,6 +29,15 @@ class PrismaReconciliation:
     records_by_run: dict[str, int]
     duplicate_records_removed: int
     records_after_deduplication: int
+    records_screened: int
+    title_abstract_screened: int
+    full_text_assessed: int
+    eligible_records: int
+    excluded_records: int
+    unresolved_records: int
+    excluded_by_primary_reason: dict[str, int]
+    effective_screening_decisions_by_authority: dict[str, int]
+    effective_memberships_by_authority: dict[str, int]
     reconciled: bool
 
     def to_dict(self) -> dict[str, object]:
@@ -67,6 +82,45 @@ def reconcile_prisma(dataset: ReviewDataset) -> PrismaReconciliation:
     )
     records_after_deduplication = len(dataset.canonical_records)
 
+    prospective_screens = [
+        decision
+        for decision in dataset.screening_decisions
+        if decision.provenance.scope is DecisionScope.PROSPECTIVE
+    ]
+    screened_ids = {decision.canonical_record_id for decision in prospective_screens}
+    title_abstract_ids = {
+        decision.canonical_record_id
+        for decision in prospective_screens
+        if decision.stage is ScreeningStage.TITLE_ABSTRACT
+    }
+    full_text_ids = {
+        decision.canonical_record_id
+        for decision in prospective_screens
+        if decision.stage is ScreeningStage.FULL_TEXT
+    }
+    effective_screens = dataset.effective_screening_decisions()
+    screen_authorities: dict[str, int] = {}
+    for decision in effective_screens:
+        _increment(screen_authorities, decision.provenance.authority.value)
+
+    effective_memberships = dataset.effective_corpus_memberships()
+    membership_authorities: dict[str, int] = {}
+    eligible_ids: set[str] = set()
+    excluded_ids: set[str] = set()
+    excluded_by_reason: dict[str, int] = {}
+    screens_by_id = {decision.decision_id: decision for decision in dataset.screening_decisions}
+    for membership in effective_memberships:
+        _increment(membership_authorities, membership.provenance.authority.value)
+        if membership.status is EligibilityStatus.ELIGIBLE:
+            eligible_ids.add(membership.canonical_record_id)
+        elif membership.status is EligibilityStatus.EXCLUDED:
+            excluded_ids.add(membership.canonical_record_id)
+            screen = screens_by_id[membership.screening_decision_id]
+            if screen.primary_exclusion_reason is None:
+                raise ValueError("excluded PRISMA records require a primary exclusion reason")
+            _increment(excluded_by_reason, screen.primary_exclusion_reason.value)
+    unresolved_ids = screened_ids - eligible_ids - excluded_ids
+
     if len(decisions) != records_identified:
         raise ValueError("PRISMA reconciliation requires one effective decision per occurrence")
     if sum(record_source_counts.values()) != records_identified:
@@ -77,6 +131,12 @@ def reconcile_prisma(dataset: ReviewDataset) -> PrismaReconciliation:
         raise ValueError("unique survivors do not equal canonical records after deduplication")
     if records_identified - duplicates != records_after_deduplication:
         raise ValueError("identified minus duplicates does not equal records after deduplication")
+    if not eligible_ids.union(excluded_ids).issubset(screened_ids):
+        raise ValueError("corpus membership cannot precede screening")
+    if len(screened_ids) != len(eligible_ids) + len(excluded_ids) + len(unresolved_ids):
+        raise ValueError("screened records do not reconcile to eligible/excluded/unresolved")
+    if sum(excluded_by_reason.values()) != len(excluded_ids):
+        raise ValueError("excluded reasons do not reconcile to excluded records")
 
     run_ids = sorted({query.run_id for query in dataset.source_queries if query.run_id})
     return PrismaReconciliation(
@@ -95,6 +155,15 @@ def reconcile_prisma(dataset: ReviewDataset) -> PrismaReconciliation:
         records_by_run=_sorted_counts(record_run_counts),
         duplicate_records_removed=duplicates,
         records_after_deduplication=records_after_deduplication,
+        records_screened=len(screened_ids),
+        title_abstract_screened=len(title_abstract_ids),
+        full_text_assessed=len(full_text_ids),
+        eligible_records=len(eligible_ids),
+        excluded_records=len(excluded_ids),
+        unresolved_records=len(unresolved_ids),
+        excluded_by_primary_reason=_sorted_counts(excluded_by_reason),
+        effective_screening_decisions_by_authority=_sorted_counts(screen_authorities),
+        effective_memberships_by_authority=_sorted_counts(membership_authorities),
         reconciled=True,
     )
 

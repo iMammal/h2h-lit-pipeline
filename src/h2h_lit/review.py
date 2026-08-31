@@ -296,6 +296,8 @@ class ScreeningDecision:
     provenance: DecisionProvenance
     primary_exclusion_reason: ExclusionReason | None = None
     secondary_exclusion_reasons: list[ExclusionReason] = field(default_factory=list)
+    technical_failure_criteria: list[EligibilityCriterion] = field(default_factory=list)
+    technical_errors: list[str] = field(default_factory=list)
     notes: str = ""
 
     @classmethod
@@ -315,6 +317,11 @@ class ScreeningDecision:
             secondary_exclusion_reasons=[
                 ExclusionReason(value) for value in data.get("secondary_exclusion_reasons", [])
             ],
+            technical_failure_criteria=[
+                EligibilityCriterion(value)
+                for value in data.get("technical_failure_criteria", [])
+            ],
+            technical_errors=list(data.get("technical_errors", [])),
             notes=data.get("notes", ""),
         )
 
@@ -611,6 +618,16 @@ class ReviewDataset:
                 self._validate_evidence_ids(
                     item.evidence_ids, decision.canonical_record_id, evidence, decision.decision_id
                 )
+            criterion_values = {item.criterion: item.value for item in decision.criteria}
+            technical_criteria = set(decision.technical_failure_criteria)
+            if len(technical_criteria) != len(decision.technical_failure_criteria):
+                raise ValueError("technical failure criteria must not contain duplicates")
+            if technical_criteria and not decision.technical_errors:
+                raise ValueError("technical failure criteria require preserved technical errors")
+            if decision.technical_errors and not technical_criteria:
+                raise ValueError("technical errors must identify the affected criteria")
+            if any(criterion_values[item] is not TriState.UNCERTAIN for item in technical_criteria):
+                raise ValueError("technically blocked criteria must remain UNCERTAIN")
             values = [item.value for item in decision.criteria]
             if decision.status is EligibilityStatus.ELIGIBLE and any(
                 value is not TriState.YES for value in values
@@ -659,6 +676,8 @@ class ReviewDataset:
                 raise ValueError(
                     "effective corpus membership requires one effective prospective screening decision"
                 )
+            if membership.status is EligibilityStatus.UNCERTAIN:
+                raise ValueError("unresolved screening cannot create effective corpus membership")
 
     def _validate_annotations(
         self,
