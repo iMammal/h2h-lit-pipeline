@@ -242,6 +242,11 @@ def build_pilot_dataset(
         "config_path": _portable(config_file),
         "config_hash": _file_hash(config_file),
         "created_at": created_at,
+        "pilot_execution_date": created_at[:10],
+        "execution_controls": {
+            **config["execution_controls"],
+            "pilot_administrative_observation_cutoff": created_at[:10],
+        },
         "selection_rule": (
             "Explicit version-controlled IDs/keys, preserving config order; historical strata "
             "are sampling intent only and are not current eligibility or taxonomy truth."
@@ -253,7 +258,7 @@ def build_pilot_dataset(
     return dataset, manifest
 
 
-def inference_input_for(record: Any) -> InferenceInput:
+def inference_input_for(record: Any, *, pilot_execution_date: str) -> InferenceInput:
     metadata = record.record.original_metadata
     source_file = metadata.get("source_file")
     local_full_text = bool(source_file and _resolve_project_path(source_file).is_file())
@@ -274,7 +279,12 @@ def inference_input_for(record: Any) -> InferenceInput:
             f"DOCUMENT_TYPE: {document_type}",
             f"LANGUAGE: {language}",
             f"FULL_TEXT_AVAILABILITY: {full_text}",
-            "RETRIEVAL_END_DATE: not yet established (pilot precedes regenerated retrieval)",
+            (
+                "E6_CUTOFF_FOR_THIS_PILOT_PROPOSAL: "
+                f"{pilot_execution_date}"
+            ),
+            "E6_CUTOFF_SCOPE: pilot_only; not a production retrieval cutoff",
+            "PRODUCTION_RETRIEVAL_END_DATE: not established by this pilot",
             f"SOURCE: {record.record.source_database or 'not recorded'}",
         ]
     )
@@ -290,6 +300,9 @@ def inference_input_for(record: Any) -> InferenceInput:
             "doi": record.record.doi,
             "source_identifier": record.record.source_identifier,
             "input_policy": "title_abstract_plus_administrative_metadata",
+            "e6_decision_scope": "pilot_only",
+            "pilot_administrative_observation_cutoff": pilot_execution_date,
+            "production_retrieval_cutoff_status": "not_established_by_pilot",
         },
     )
 
@@ -326,7 +339,9 @@ def run_live_pilot(
 
     retry_limit = int(config["retry_limit_per_record"])
     for record in dataset.canonical_records:
-        inference_input = inference_input_for(record)
+        inference_input = inference_input_for(
+            record, pilot_execution_date=timestamp[:10]
+        )
         for _ in range(retry_limit + 1):
             attempt = run_inference_attempt(
                 dataset,
@@ -338,8 +353,31 @@ def run_live_pilot(
                 attempt.metadata["provider_response"] = provider.metadata_for(
                     attempt.request_id, attempt.attempt_number
                 )
+            retryable, retry_reason = _retry_disposition(attempt)
+            retry_permitted = retryable and attempt.attempt_number <= retry_limit
+            attempt.metadata["pilot_execution_controls"] = {
+                "e6_decision_scope": "pilot_only",
+                "pilot_administrative_observation_cutoff": timestamp[:10],
+                "production_retrieval_cutoff_status": "not_established_by_pilot",
+                "retry_condition_met": retryable,
+                "retry_permitted_by_budget": retry_permitted,
+                "retry_reason": retry_reason,
+            }
+            if attempt.screening_decision_id:
+                screen = next(
+                    item
+                    for item in dataset.screening_decisions
+                    if item.decision_id == attempt.screening_decision_id
+                )
+                screen.provenance.metadata.update(
+                    {
+                        "e6_decision_scope": "pilot_only",
+                        "pilot_administrative_observation_cutoff": timestamp[:10],
+                        "production_retrieval_cutoff_status": "not_established_by_pilot",
+                    }
+                )
             save_review_dataset(paths.review_dataset, dataset)
-            if attempt.validation_status is InferenceValidationStatus.VALID:
+            if not retry_permitted:
                 break
 
     report = build_pilot_report(dataset, config=config, manifest=manifest)
@@ -378,7 +416,9 @@ def prepare_pilot(
     max_calls = len(dataset.canonical_records) * (retries + 1)
     estimated_input_tokens = 0
     for record in dataset.canonical_records:
-        snapshot = inference_input_for(record).to_snapshot()
+        snapshot = inference_input_for(
+            record, pilot_execution_date=timestamp[:10]
+        ).to_snapshot()
         characters = len(prompt.content) + len(
             json.dumps(snapshot, sort_keys=True, ensure_ascii=True)
         )
@@ -412,6 +452,12 @@ def prepare_pilot(
         "selected_occurrences": manifest["selected_occurrence_count"],
         "canonical_records": manifest["canonical_record_count"],
         "retry_limit_per_record": retries,
+        "retry_policy": config["execution_controls"]["retry_conditions"],
+        "e6_pilot_control": {
+            "decision_scope": "pilot_only",
+            "pilot_administrative_observation_cutoff": timestamp[:10],
+            "production_retrieval_cutoff_status": "not_established_by_pilot",
+        },
         "maximum_model_calls": max_calls,
         "estimated_token_exposure": {
             "input_tokens_approximate": estimated_input_tokens,
@@ -549,6 +595,7 @@ def build_pilot_report(
         "pilot_config_version": config["config_version"],
         "selection_manifest_hash": _json_hash(manifest),
         "model": config["model"],
+        "e6_pilot_control": manifest["execution_controls"],
         "records": len(dataset.canonical_records),
         "attempts": len(dataset.inference_attempts),
         "valid_attempts": valid_attempts,
@@ -586,18 +633,13 @@ def build_pilot_report(
         },
         "methodological_constraints": [
             (
-                "The regenerated retrieval end date does not yet exist; E6 must remain uncertain "
-                "when that date is necessary for a determination."
+                "E6 is evaluated for this pilot only against the persisted pilot execution date; "
+                "that observation cannot establish or modify the production retrieval cutoff."
             ),
             "Pilot selection strata are challenge-set intent, not human gold labels.",
             "No LLM proposal creates corpus membership.",
         ],
         "prompt_rubric_failure_modes": [
-            (
-                "E6 publication-date evaluation cannot be completed until the regenerated "
-                "retrieval run establishes its end date; the pilot input exposes that value as "
-                "not yet established rather than silently choosing a cutoff."
-            ),
             *(
                 ["One or more provider outputs failed the frozen Stage 4 validator."]
                 if invalid_errors
@@ -606,6 +648,21 @@ def build_pilot_report(
         ],
         "review_rows": review_rows,
     }
+
+
+def _retry_disposition(attempt: Any) -> tuple[bool, str]:
+    if attempt.validation_status is InferenceValidationStatus.VALID:
+        return False, "valid_response_including_valid_uncertainty"
+    retryable_prefixes = (
+        "provider error:",
+        "output validation error:",
+        "proposal validation error:",
+    )
+    if attempt.validation_errors and all(
+        error.startswith(retryable_prefixes) for error in attempt.validation_errors
+    ):
+        return True, "provider_failure_or_invalid_model_response"
+    return False, "non_retryable_local_input_or_prompt_error"
 
 
 def _occurrence(

@@ -76,6 +76,15 @@ def _write_config(tmp_path: Path, *, include_bibtex: bool = True) -> Path:
             },
         },
         "retry_limit_per_record": 1,
+        "execution_controls": {
+            "e6_cutoff_scope": "pilot_only",
+            "e6_cutoff_rule": "actual_pilot_execution_date",
+            "production_retrieval_cutoff_status": "not_established_by_pilot",
+            "retry_conditions": [
+                "transport_or_api_failure",
+                "structurally_or_semantically_invalid_model_response",
+            ],
+        },
         "foundational_papers": [
             {"paper_id": "paper-foundation", "selection_stratum": "ambiguous"}
         ],
@@ -170,10 +179,18 @@ def test_local_pilot_selection_is_deterministic_and_does_not_feed_strata_to_mode
         "likely",
         "unlikely",
     ]
-    model_input = inference_input_for(first.canonical_records[0])
+    model_input = inference_input_for(
+        first.canonical_records[0], pilot_execution_date="2026-08-30"
+    )
     assert "selection_stratum" not in model_input.text
     assert "selection_stratum" not in json.dumps(model_input.metadata)
-    assert "RETRIEVAL_END_DATE: not yet established" in model_input.text
+    assert "E6_CUTOFF_FOR_THIS_PILOT_PROPOSAL: 2026-08-30" in model_input.text
+    assert "E6_CUTOFF_SCOPE: pilot_only" in model_input.text
+    assert "PRODUCTION_RETRIEVAL_END_DATE: not established by this pilot" in model_input.text
+    assert model_input.metadata["e6_decision_scope"] == "pilot_only"
+    assert first_manifest["execution_controls"][
+        "pilot_administrative_observation_cutoff"
+    ] == "2026-08-30"
 
 
 def test_prepare_pilot_writes_no_call_dataset_and_bounded_preflight(tmp_path):
@@ -201,7 +218,9 @@ def test_mocked_live_pilot_preserves_invalid_retry_and_never_finalizes_membershi
     initial, _ = build_pilot_dataset(
         config_path=config_path, historical_root=tmp_path, created_at=NOW
     )
-    text = inference_input_for(initial.canonical_records[0]).text
+    text = inference_input_for(
+        initial.canonical_records[0], pilot_execution_date="2026-08-30"
+    ).text
     provider = MockInferenceProvider(["{malformed", json.dumps(_payload(text))])
 
     dataset, report, paths = run_live_pilot(
@@ -219,6 +238,44 @@ def test_mocked_live_pilot_preserves_invalid_retry_and_never_finalizes_membershi
     assert report["retry_rate"] == 1.0
     assert report["full_text_escalation_count"] == 1
     assert report["assistance_mode_overlap"] == {"Adaptive + Algorithmic": 1}
+    assert report["e6_pilot_control"]["e6_cutoff_scope"] == "pilot_only"
+    assert dataset.inference_attempts[1].metadata["pilot_execution_controls"] == {
+        "e6_decision_scope": "pilot_only",
+        "pilot_administrative_observation_cutoff": "2026-08-30",
+        "production_retrieval_cutoff_status": "not_established_by_pilot",
+        "retry_condition_met": False,
+        "retry_permitted_by_budget": False,
+        "retry_reason": "valid_response_including_valid_uncertainty",
+    }
+    screen = dataset.screening_decisions[0]
+    assert screen.provenance.metadata["e6_decision_scope"] == "pilot_only"
+    assert len(provider.calls) == 2
     assert dataset.corpus_memberships == []
     assert paths.report.is_file()
     assert paths.review_table.is_file()
+
+
+def test_valid_uncertain_proposal_is_not_retried(tmp_path):
+    config_path = _write_config(tmp_path, include_bibtex=False)
+    initial, _ = build_pilot_dataset(
+        config_path=config_path, historical_root=tmp_path, created_at=NOW
+    )
+    text = inference_input_for(
+        initial.canonical_records[0], pilot_execution_date="2026-08-30"
+    ).text
+    provider = MockInferenceProvider(
+        [json.dumps(_payload(text)), AssertionError("valid uncertainty must not be retried")]
+    )
+
+    dataset, report, _ = run_live_pilot(
+        provider=provider,
+        config_path=config_path,
+        historical_root=tmp_path,
+        output_dir=tmp_path / "uncertain",
+        created_at=NOW,
+    )
+
+    assert len(provider.calls) == 1
+    assert len(dataset.inference_attempts) == 1
+    assert report["eligibility_proposal_distribution"] == {"UNCERTAIN": 1}
+    assert report["full_text_escalation_count"] == 1

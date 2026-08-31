@@ -21,6 +21,15 @@
       "output": 2.0
     }
   },
+  "execution_controls": {
+    "e6_cutoff_scope": "pilot_only",
+    "e6_cutoff_rule": "actual_pilot_execution_date",
+    "production_retrieval_cutoff_status": "not_established_by_pilot",
+    "retry_conditions": [
+      "transport_or_api_failure",
+      "structurally_or_semantically_invalid_model_response"
+    ]
+  },
   "retry_limit_per_record": 1,
   "foundational_papers": [
     {"paper_id": "horvitz-1999", "selection_stratum": "foundational_background_likely_ineligible"},
