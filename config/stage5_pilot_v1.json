@@ -1,0 +1,80 @@
+{
+  "config_version": "1.0.0",
+  "description": "Deterministic, intentionally heterogeneous Stage 5 title/abstract pilot selected from read-only local material.",
+  "historical_root_environment": "H2H_HISTORICAL_ROOT",
+  "historical_root_default": "/Users/morris/PyCharmMiscProject",
+  "foundational_source": "examples/cytocave/foundational_agency/source_graph.json",
+  "model": {
+    "provider": "OpenAI",
+    "name": "gpt-5-mini-2025-08-07",
+    "parameters": {
+      "max_output_tokens": 6000,
+      "reasoning_effort": "low",
+      "response_schema_version": "1.0.0",
+      "store": false,
+      "structured_output": "revised_star_proposal_v1_0_0",
+      "verbosity": "low"
+    },
+    "pricing_usd_per_million_tokens": {
+      "cached_input": 0.025,
+      "input": 0.25,
+      "output": 2.0
+    }
+  },
+  "retry_limit_per_record": 1,
+  "foundational_papers": [
+    {"paper_id": "horvitz-1999", "selection_stratum": "foundational_background_likely_ineligible"},
+    {"paper_id": "domova-vrotsou-2023", "selection_stratum": "foundational_background_ambiguous"},
+    {"paper_id": "biowheel-2017", "selection_stratum": "foundational_likely_eligible"},
+    {"paper_id": "icave-2017", "selection_stratum": "foundational_likely_eligible_multimodal"},
+    {"paper_id": "aegis-2018", "selection_stratum": "foundational_likely_eligible"},
+    {"paper_id": "fathomnet-2022", "selection_stratum": "foundational_ambiguous_workflow"},
+    {"paper_id": "holter-elassady-2024", "selection_stratum": "foundational_background_likely_ineligible"},
+    {"paper_id": "monadjemi-et-al-2026", "selection_stratum": "foundational_background_ambiguous"},
+    {"paper_id": "dtbia-2025", "selection_stratum": "foundational_likely_eligible_immersive"},
+    {"paper_id": "wang-et-al-2025", "selection_stratum": "foundational_likely_eligible_conversational"},
+    {"paper_id": "phenoflow-2025", "selection_stratum": "foundational_likely_eligible_conversational"}
+  ],
+  "bibtex_records": [
+    {"path": "BroadSearches2/sorted__sorted__fetchALL12000_ALGORITHMIC_DESKTOP.bib", "key": "entry10000_2", "selection_stratum": "algorithmic_desktop_life_science"},
+    {"path": "BroadSearches2/sorted__sorted__fetchALL12000_ALGORITHMIC_DESKTOP.bib", "key": "entry10002_2", "selection_stratum": "algorithmic_desktop_likely_ineligible"},
+    {"path": "BroadSearches2/sorted__sorted__fetchALL12000_ALGORITHMIC_DESKTOP.bib", "key": "entry10004_2", "selection_stratum": "algorithmic_desktop_life_science"},
+    {"path": "BroadSearches2/sorted__sorted__fetchALL12000_ALGORITHMIC_DESKTOP.bib", "key": "entry10006_2", "selection_stratum": "algorithmic_desktop_life_science"},
+    {"path": "BroadSearches2/sorted__sorted__fetchALL12000_ALGORITHMIC_DESKTOP.bib", "key": "entry1000_2", "selection_stratum": "algorithmic_desktop_life_science"},
+    {"path": "BroadSearches2/sorted__sorted__fetchALL12000_ALGORITHMIC_DESKTOP.bib", "key": "entry10104_2", "selection_stratum": "algorithmic_desktop_non_life_science"},
+
+    {"path": "BroadSearches2/sorted__sorted__fetchALL12000_ADAPTIVE_VR.bib", "key": "entry10131_2", "selection_stratum": "adaptive_vr_non_life_science"},
+    {"path": "BroadSearches2/sorted__sorted__fetchALL12000_ADAPTIVE_VR.bib", "key": "entry13532", "selection_stratum": "adaptive_vr_non_life_science"},
+    {"path": "BroadSearches2/sorted__sorted__fetchALL12000_ADAPTIVE_VR.bib", "key": "entry5006", "selection_stratum": "adaptive_vr_non_life_science"},
+    {"path": "BroadSearches2/sorted__sorted__fetchALL12000_ADAPTIVE_VR.bib", "key": "entry593_2", "selection_stratum": "adaptive_immersive_life_science"},
+
+    {"path": "BroadSearches2/sorted__sorted__fetchALL12000_IMMERSIVE_VR.bib", "key": "entry10246_2", "selection_stratum": "immersive_vr_life_science"},
+    {"path": "BroadSearches2/sorted__sorted__fetchALL12000_IMMERSIVE_VR.bib", "key": "entry11263_2", "selection_stratum": "immersive_vr_life_science"},
+    {"path": "BroadSearches2/sorted__sorted__fetchALL12000_IMMERSIVE_VR.bib", "key": "entry112_2", "selection_stratum": "immersive_vr_life_science"},
+    {"path": "BroadSearches2/sorted__sorted__fetchALL12000_IMMERSIVE_VR.bib", "key": "entry11599", "selection_stratum": "immersive_vr_clinical"},
+    {"path": "BroadSearches2/sorted__sorted__fetchALL12000_IMMERSIVE_VR.bib", "key": "entry11700", "selection_stratum": "immersive_vr_life_science"},
+
+    {"path": "BroadSearches2/sorted__sorted__fetchALL12000_IMMERSIVE_CAVE.bib", "key": "entry6580", "selection_stratum": "cave_ambiguous_application"},
+    {"path": "BroadSearches2/sorted__sorted__fetchALL12000_IMMERSIVE_CAVE.bib", "key": "entry690_2", "selection_stratum": "cave_life_science"},
+    {"path": "BroadSearches2/sorted__sorted__fetchALL12000_IMMERSIVE_CAVE.bib", "key": "entry727_2", "selection_stratum": "cave_life_science"},
+
+    {"path": "BroadSearches2/sorted__sorted__fetchALL12000_ALGORITHMIC_AR_XR.bib", "key": "entry12123", "selection_stratum": "ar_mr_life_science"},
+    {"path": "BroadSearches2/sorted__sorted__fetchALL12000_ALGORITHMIC_AR_XR.bib", "key": "entry12964", "selection_stratum": "ar_mr_clinical"},
+    {"path": "BroadSearches2/sorted__sorted__fetchALL12000_ALGORITHMIC_AR_XR.bib", "key": "entry600_2", "selection_stratum": "ar_mr_life_science"},
+    {"path": "BroadSearches2/sorted__sorted__fetchALL12000_ALGORITHMIC_AR_XR.bib", "key": "entry605_2", "selection_stratum": "ar_mr_life_science"},
+
+    {"path": "BroadSearches2/sorted__sorted__fetchALL12000_IMMERSIVE_LARGEDISPLAY.bib", "key": "entry596_2", "selection_stratum": "large_display_life_science"},
+    {"path": "BroadSearches2/sorted__sorted__fetchALL12000_ALGORITHMIC_LARGEDISPLAY.bib", "key": "entry6241", "selection_stratum": "large_display_non_life_science"},
+
+    {"path": "BroadSearches2/Conversational/Conversational.bib", "key": "nath_genevic_2024", "selection_stratum": "conversational_life_science"},
+    {"path": "BroadSearches2/Conversational/Conversational.bib", "key": "schaefer_multimodal_2025", "selection_stratum": "conversational_life_science_multilabel"},
+    {"path": "BroadSearches2/Conversational/Conversational.bib", "key": "juntong_chen_interchat_2025", "selection_stratum": "conversational_non_life_science"},
+    {"path": "BroadSearches2/Conversational/Conversational.bib", "key": "tom_peterka_chatvis_2025", "selection_stratum": "conversational_ambiguous_application"},
+    {"path": "BroadSearches2/Conversational/Conversational.bib", "key": "ayan_biswas_vizgenie_2025", "selection_stratum": "conversational_ambiguous_application"},
+
+    {"path": "BroadSearches2/sorted__fetchALL12000_OFF-TOPIC.bib", "key": "entry1001_2", "selection_stratum": "off_topic_computational_life_science"},
+    {"path": "BroadSearches2/sorted__fetchALL12000_OFF-TOPIC.bib", "key": "entry10008_2", "selection_stratum": "off_topic_clinical"},
+    {"path": "BroadSearches2/sorted__fetchALL12000_OFF-TOPIC.bib", "key": "entry10011_2", "selection_stratum": "off_topic_clinical"},
+    {"path": "BroadSearches2/sorted__fetchALL12000_OFF-TOPIC.bib", "key": "entry10016_2", "selection_stratum": "off_topic_non_life_science"}
+  ]
+}
