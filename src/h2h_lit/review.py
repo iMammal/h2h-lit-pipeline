@@ -54,6 +54,11 @@ class ScreeningStage(str, Enum):
     FULL_TEXT = "full_text"
 
 
+class InferenceValidationStatus(str, Enum):
+    VALID = "valid"
+    INVALID = "invalid"
+
+
 class EligibilityCriterion(str, Enum):
     LIFE_SCIENCE_APPLICATION = "E1_life_science_application"
     RELATIONAL_MULTISCALE_RELEVANCE = "E2_relational_multiscale_relevance"
@@ -252,6 +257,60 @@ class DuplicateDecision:
 
 
 @dataclass(slots=True)
+class InferenceRun:
+    run_id: str
+    stage: ScreeningStage
+    provider: str
+    model: str
+    parameters: dict[str, Any]
+    prompt_name: str
+    prompt_version: str
+    prompt_hash: str
+    prompt_path: str
+    created_at: str
+    output_schema_version: str = "1.0.0"
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> InferenceRun:
+        payload = dict(data)
+        payload["stage"] = ScreeningStage(payload["stage"])
+        return cls(**payload)
+
+
+@dataclass(slots=True)
+class InferenceAttempt:
+    attempt_id: str
+    request_id: str
+    run_id: str
+    canonical_record_id: str
+    stage: ScreeningStage
+    attempt_number: int
+    started_at: str
+    ended_at: str
+    input_hash: str
+    input_snapshot: dict[str, Any]
+    raw_response: str
+    validation_status: InferenceValidationStatus
+    parsed_response: dict[str, Any] | None = None
+    validation_errors: list[str] = field(default_factory=list)
+    retry_of_attempt_id: str | None = None
+    prior_screening_decision_id: str | None = None
+    screening_decision_id: str | None = None
+    annotation_ids: list[str] = field(default_factory=list)
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> InferenceAttempt:
+        payload = dict(data)
+        payload["stage"] = ScreeningStage(payload["stage"])
+        payload["validation_status"] = InferenceValidationStatus(
+            payload["validation_status"]
+        )
+        return cls(**payload)
+
+
+@dataclass(slots=True)
 class EvidenceReference:
     evidence_id: str
     canonical_record_id: str
@@ -424,6 +483,8 @@ class ReviewDataset:
     occurrences: list[RecordOccurrence] = field(default_factory=list)
     canonical_records: list[CanonicalRecord] = field(default_factory=list)
     duplicate_decisions: list[DuplicateDecision] = field(default_factory=list)
+    inference_runs: list[InferenceRun] = field(default_factory=list)
+    inference_attempts: list[InferenceAttempt] = field(default_factory=list)
     evidence: list[EvidenceReference] = field(default_factory=list)
     screening_decisions: list[ScreeningDecision] = field(default_factory=list)
     corpus_memberships: list[CorpusMembership] = field(default_factory=list)
@@ -448,6 +509,13 @@ class ReviewDataset:
             ],
             duplicate_decisions=[
                 DuplicateDecision.from_dict(item) for item in data.get("duplicate_decisions", [])
+            ],
+            inference_runs=[
+                InferenceRun.from_dict(item) for item in data.get("inference_runs", [])
+            ],
+            inference_attempts=[
+                InferenceAttempt.from_dict(item)
+                for item in data.get("inference_attempts", [])
             ],
             evidence=[EvidenceReference.from_dict(item) for item in data.get("evidence", [])],
             screening_decisions=[
@@ -520,6 +588,7 @@ class ReviewDataset:
         self._validate_decision_histories()
         self._validate_deduplication(occurrences, canonical)
         self._validate_screening(canonical, evidence)
+        self._validate_inference(canonical)
         self._validate_membership(canonical)
         self._validate_annotations(canonical, evidence)
         self._validate_priorities(canonical, evidence)
@@ -679,6 +748,123 @@ class ReviewDataset:
             if membership.status is EligibilityStatus.UNCERTAIN:
                 raise ValueError("unresolved screening cannot create effective corpus membership")
 
+    def _validate_inference(self, canonical: dict[str, CanonicalRecord]) -> None:
+        runs = _unique_by_id(self.inference_runs, "run_id", "inference run")
+        attempts = _unique_by_id(
+            self.inference_attempts, "attempt_id", "inference attempt"
+        )
+        screens = {item.decision_id: item for item in self.screening_decisions}
+        annotations = {item.annotation_id: item for item in self.annotations}
+        request_numbers: set[tuple[str, int]] = set()
+
+        for run in self.inference_runs:
+            if not all(
+                [
+                    run.provider.strip(),
+                    run.model.strip(),
+                    run.prompt_name.strip(),
+                    run.prompt_version.strip(),
+                    run.prompt_hash.strip(),
+                ]
+            ):
+                raise ValueError(f"inference run {run.run_id} has incomplete model/prompt metadata")
+
+        for attempt in self.inference_attempts:
+            run = runs.get(attempt.run_id)
+            if run is None:
+                raise ValueError(f"inference attempt {attempt.attempt_id} has missing run")
+            if attempt.canonical_record_id not in canonical:
+                raise ValueError(f"inference attempt {attempt.attempt_id} has missing record")
+            if attempt.stage is not run.stage:
+                raise ValueError("inference attempt stage must match its run")
+            if attempt.request_id != _stable_id(
+                "inference-request", attempt.run_id, attempt.input_hash
+            ):
+                raise ValueError("inference request ID is not stable for its run and input")
+            if attempt.attempt_id != _stable_id(
+                "inference-attempt", attempt.request_id, str(attempt.attempt_number)
+            ):
+                raise ValueError("inference attempt ID is not stable for its request number")
+            if attempt.attempt_number < 1:
+                raise ValueError("inference attempt numbers start at one")
+            request_number = (attempt.request_id, attempt.attempt_number)
+            if request_number in request_numbers:
+                raise ValueError("inference request attempt numbers must be unique")
+            request_numbers.add(request_number)
+            if _json_hash(attempt.input_snapshot) != attempt.input_hash:
+                raise ValueError(f"inference attempt {attempt.attempt_id} input hash mismatch")
+
+            if attempt.attempt_number == 1 and attempt.retry_of_attempt_id is not None:
+                raise ValueError("first inference attempts cannot be retries")
+            if attempt.attempt_number > 1:
+                previous = attempts.get(attempt.retry_of_attempt_id or "")
+                if previous is None:
+                    raise ValueError("retried inference attempts must reference an earlier attempt")
+                if (
+                    previous.request_id != attempt.request_id
+                    or previous.attempt_number != attempt.attempt_number - 1
+                    or previous.run_id != attempt.run_id
+                    or previous.canonical_record_id != attempt.canonical_record_id
+                    or previous.input_hash != attempt.input_hash
+                ):
+                    raise ValueError("retry lineage must follow the same request in order")
+
+            if attempt.validation_status is InferenceValidationStatus.INVALID:
+                if not attempt.validation_errors:
+                    raise ValueError("invalid inference attempts require validation errors")
+                if attempt.screening_decision_id or attempt.annotation_ids:
+                    raise ValueError("invalid inference attempts cannot create proposals")
+                continue
+
+            if attempt.stage is ScreeningStage.TITLE_ABSTRACT:
+                if attempt.prior_screening_decision_id is not None:
+                    raise ValueError("title/abstract proposals cannot have a prior screening link")
+            elif attempt.prior_screening_decision_id is None:
+                raise ValueError("full-text proposals require a prior screening link")
+            if attempt.validation_errors or attempt.parsed_response is None:
+                raise ValueError("valid inference attempts need parsed output without errors")
+            screen = screens.get(attempt.screening_decision_id or "")
+            if screen is None:
+                raise ValueError("valid inference attempts require a screening proposal")
+            if (
+                screen.canonical_record_id != attempt.canonical_record_id
+                or screen.stage is not attempt.stage
+                or screen.provenance.actor.actor_type is not ActorType.LLM
+                or screen.provenance.authority is not DecisionAuthority.PROPOSED
+            ):
+                raise ValueError("inference screening outputs must remain LLM proposals")
+            if attempt.stage is ScreeningStage.FULL_TEXT and (
+                attempt.prior_screening_decision_id not in screen.provenance.supersedes_ids
+            ):
+                raise ValueError("full-text proposal does not supersede its prior screening decision")
+            if len(attempt.annotation_ids) != len(set(attempt.annotation_ids)):
+                raise ValueError("inference annotation IDs must not contain duplicates")
+            expected_annotations = {
+                *(
+                    (AnnotationDimension.ASSISTANCE_MODE, item.value)
+                    for item in AssistanceMode
+                ),
+                *(
+                    (AnnotationDimension.VISUALIZATION_MODALITY, item.value)
+                    for item in VisualizationModality
+                ),
+                *((AnnotationDimension.TASK, item.value) for item in TaskCategory),
+            }
+            actual_annotations: set[tuple[AnnotationDimension, str]] = set()
+            for annotation_id in attempt.annotation_ids:
+                annotation = annotations.get(annotation_id)
+                if annotation is None:
+                    raise ValueError("valid inference attempt references a missing annotation")
+                if (
+                    annotation.canonical_record_id != attempt.canonical_record_id
+                    or annotation.provenance.actor.actor_type is not ActorType.LLM
+                    or annotation.provenance.authority is not DecisionAuthority.PROPOSED
+                ):
+                    raise ValueError("inference annotations must remain LLM proposals")
+                actual_annotations.add((annotation.dimension, annotation.value))
+            if actual_annotations != expected_annotations:
+                raise ValueError("valid inference attempts must code every frozen label")
+
     def _validate_annotations(
         self,
         canonical: dict[str, CanonicalRecord],
@@ -805,6 +991,11 @@ def canonicalize_occurrences(
 def _stable_id(prefix: str, *parts: str) -> str:
     digest = hashlib.sha256("\x1f".join(parts).encode("utf-8")).hexdigest()[:24]
     return f"{prefix}:{digest}"
+
+
+def _json_hash(value: Any) -> str:
+    encoded = json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
 
 def _decision_id_field(name: str) -> str:
