@@ -84,7 +84,9 @@ class OpenAIResponsesProvider:
                         parameters.get("structured_output", "revised_star_proposal")
                     ),
                     "strict": True,
-                    "schema": revised_star_response_schema(),
+                    "schema": _response_schema_for_version(
+                        str(parameters.get("response_schema_version", "1.0.0"))
+                    ),
                 },
                 "verbosity": str(parameters.get("verbosity", "low")),
             },
@@ -292,3 +294,13 @@ def revised_star_response_schema() -> dict[str, Any]:
             "overall_rationale",
         ],
     }
+
+
+def _response_schema_for_version(version: str) -> dict[str, Any]:
+    if version == "1.0.0":
+        return revised_star_response_schema()
+    if version == "1.1.0":
+        from h2h_lit.pilot5b import pilot5b_response_schema
+
+        return pilot5b_response_schema()
+    raise ValueError(f"unsupported response schema version: {version}")

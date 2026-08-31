@@ -1,0 +1,23 @@
+{
+  "config_version": "1.1.0",
+  "description": "Prospective Pilot 5B repair using the unchanged Stage 5A 44-record selection.",
+  "selection_config": "config/stage5_pilot_v1.json",
+  "prompt_path": "prompts/revised_star_title_abstract_screening_pilot5b_v1_1_0.md",
+  "prompt_version": "1.1.0",
+  "output_schema_version": "1.1.0",
+  "output_dir": "outputs/stage5b_live_pilot_v1",
+  "model_parameter_overrides": {
+    "response_schema_version": "1.1.0",
+    "structured_output": "revised_star_proposal_pilot5b_v1_1_0"
+  },
+  "execution_controls": {
+    "e6_source": "deterministic_structured_administrative_metadata",
+    "e6_cutoff_scope": "pilot_only",
+    "evidence_resolution": "exact_verbatim_substring_with_field_locator",
+    "model_offsets_authoritative": false,
+    "retry_conditions": [
+      "transport_or_api_failure",
+      "structurally_or_semantically_invalid_model_response"
+    ]
+  }
+}

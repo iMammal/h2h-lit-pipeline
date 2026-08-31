@@ -114,6 +114,12 @@ class _EvidenceSpan:
     end: int
     quote: str
     locator: str
+    source_field: str | None = None
+    raw_quote: str | None = None
+    claimed_start: int | None = None
+    claimed_end: int | None = None
+    resolution_method: str | None = None
+    source: EvidenceSource | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -143,13 +149,14 @@ def load_prompt_artifact(
     stage: ScreeningStage,
     name: str | None = None,
     version: str = PROMPT_VERSION,
+    output_schema_version: str = OUTPUT_SCHEMA_VERSION,
 ) -> PromptArtifact:
     prompt_path = _resolve_path(path)
     content = prompt_path.read_text(encoding="utf-8")
     required_markers = [
         f"Prompt-Version: {version}",
         f"Stage: {stage.value}",
-        f"Output-Schema-Version: {OUTPUT_SCHEMA_VERSION}",
+        f"Output-Schema-Version: {output_schema_version}",
     ]
     missing = [marker for marker in required_markers if marker not in content]
     if missing:
@@ -161,7 +168,7 @@ def load_prompt_artifact(
         path=_portable_path(prompt_path),
         content=content,
         content_hash=hashlib.sha256(content.encode("utf-8")).hexdigest(),
-        output_schema_version=OUTPUT_SCHEMA_VERSION,
+        output_schema_version=output_schema_version,
     )
 
 
@@ -176,6 +183,7 @@ def register_inference_run(
     created_at: str,
     prompt_name: str | None = None,
     prompt_version: str = PROMPT_VERSION,
+    output_schema_version: str = OUTPUT_SCHEMA_VERSION,
     run_id: str | None = None,
 ) -> InferenceRun:
     artifact = load_prompt_artifact(
@@ -183,6 +191,7 @@ def register_inference_run(
         stage=stage,
         name=prompt_name,
         version=prompt_version,
+        output_schema_version=output_schema_version,
     )
     parameters_copy = dict(parameters)
     generated_run_id = run_id or _stable_id(
@@ -262,6 +271,7 @@ def run_inference_attempt(
                 stage=run.stage,
                 name=run.prompt_name,
                 version=run.prompt_version,
+                output_schema_version=run.output_schema_version,
             )
             if artifact.content_hash != run.prompt_hash:
                 errors.append("prompt hash does not match the registered inference run")
@@ -293,7 +303,16 @@ def run_inference_attempt(
             if not isinstance(loaded, dict):
                 raise TypeError("top-level response must be a JSON object")
             parsed_response = loaded
-            parsed = _parse_proposal(loaded, inference_input)
+            if run.output_schema_version == OUTPUT_SCHEMA_VERSION:
+                parsed = _parse_proposal(loaded, inference_input)
+            elif run.output_schema_version == "1.1.0":
+                from h2h_lit.pilot5b import parse_pilot5b_proposal
+
+                parsed = parse_pilot5b_proposal(loaded, inference_input)
+            else:
+                raise ValueError(
+                    f"unsupported inference output schema: {run.output_schema_version}"
+                )
         except (json.JSONDecodeError, ValueError, TypeError) as exc:
             errors.append(f"output validation error: {exc}")
 
@@ -567,7 +586,8 @@ def _materialize_proposal(
             evidence = EvidenceReference(
                 evidence_id=evidence_id,
                 canonical_record_id=inference_input.canonical_record_id,
-                source=(
+                source=span.source
+                or (
                     EvidenceSource.TITLE_ABSTRACT
                     if run.stage is ScreeningStage.TITLE_ABSTRACT
                     else EvidenceSource.FULL_TEXT
@@ -581,6 +601,31 @@ def _materialize_proposal(
                     "end": span.end,
                     "request_id": request_id,
                     "attempt_id": attempt_id,
+                    **(
+                        {"source_field": span.source_field}
+                        if span.source_field is not None
+                        else {}
+                    ),
+                    **(
+                        {"raw_model_quote": span.raw_quote}
+                        if span.raw_quote is not None
+                        else {}
+                    ),
+                    **(
+                        {"model_claimed_start": span.claimed_start}
+                        if span.claimed_start is not None
+                        else {}
+                    ),
+                    **(
+                        {"model_claimed_end": span.claimed_end}
+                        if span.claimed_end is not None
+                        else {}
+                    ),
+                    **(
+                        {"resolution_method": span.resolution_method}
+                        if span.resolution_method is not None
+                        else {}
+                    ),
                 },
             )
             dataset.evidence.append(evidence)
