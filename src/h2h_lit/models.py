@@ -88,6 +88,13 @@ class ProvenanceEvent:
     def to_dict(self) -> dict[str, Any]:
         return _clean_dict(self)
 
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> ProvenanceEvent:
+        payload = dict(data)
+        payload["kind"] = ProvenanceKind(payload["kind"])
+        payload["status"] = ProcessingStatus(payload.get("status", ProcessingStatus.OK.value))
+        return cls(**payload)
+
 
 @dataclass(slots=True)
 class LiteratureRecord:
@@ -121,6 +128,15 @@ class LiteratureRecord:
     def to_dict(self) -> dict[str, Any]:
         return _clean_dict(self)
 
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> LiteratureRecord:
+        payload = dict(data)
+        payload["provenance"] = [
+            event if isinstance(event, ProvenanceEvent) else ProvenanceEvent.from_dict(event)
+            for event in payload.get("provenance", [])
+        ]
+        return cls(**payload)
+
 
 @dataclass(slots=True)
 class LLMAnnotation:
@@ -134,4 +150,3 @@ class LLMAnnotation:
 
     def to_dict(self) -> dict[str, Any]:
         return _clean_dict(self)
-
