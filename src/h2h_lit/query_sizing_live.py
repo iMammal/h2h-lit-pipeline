@@ -22,6 +22,9 @@ from h2h_lit.query_development import (
     SIZING_RUN_SCHEMA_VERSION,
     SIZING_RUN_V2_SCHEMA_VERSION,
     QuerySizingRun,
+    SemanticAssertionResult,
+    SemanticControlGateEvaluation,
+    SemanticControlObservation,
     SentinelCandidateMatchState,
     SentinelDiagnostic,
     SentinelDiagnosticOutcome,
@@ -173,8 +176,38 @@ def load_validated_sizing_plan(
             raise SizingPlanError("candidate diagnostic lacks a frozen identity resolution")
         if len(semantic_control_specs) != 6:
             raise SizingPlanError("v0.2 requires six Semantic Scholar semantic controls")
-        if any(item.get("mode") != "bulk" for item in semantic_control_specs):
-            raise SizingPlanError("Semantic Scholar controls cannot switch modes")
+        control_ids = [item.get("control_query_id") for item in semantic_control_specs]
+        probe_ids = [item.get("probe_id") for item in semantic_control_specs]
+        if len(set(control_ids)) != 6 or len(set(probe_ids)) != 6:
+            raise SizingPlanError("Semantic Scholar controls must have unique IDs")
+        for item in semantic_control_specs:
+            request = item.get("request", {})
+            if item.get("mode") != "bulk" or "/search/bulk" not in request.get("url", ""):
+                raise SizingPlanError("Semantic Scholar controls cannot switch modes")
+            if request.get("params", {}).get("query") != item.get("expression"):
+                raise SizingPlanError("semantic-control request changed its frozen expression")
+            if sizing_request_hash(request) != item.get("request_hash"):
+                raise SizingPlanError("semantic-control request hash mismatch")
+            if hashlib.sha256(item["expression"].encode("utf-8")).hexdigest() != item.get(
+                "expression_hash"
+            ):
+                raise SizingPlanError("semantic-control expression hash mismatch")
+        assertions = payload.get("semantic_control_provenance", {}).get("assertions", [])
+        if len(assertions) != 5:
+            raise SizingPlanError("v0.2 requires five frozen Boolean assertions")
+        known_probes = set(probe_ids)
+        for assertion in assertions:
+            if assertion.get("relation") not in {
+                "less_than_or_equal",
+                "greater_than_or_equal",
+                "equal",
+            }:
+                raise SizingPlanError("semantic-control assertion relation changed")
+            if {
+                assertion.get("left_probe_id"),
+                assertion.get("right_probe_id"),
+            } - known_probes:
+                raise SizingPlanError("semantic-control assertion references an unknown probe")
     return ValidatedSizingPlan(
         payload,
         actual,
@@ -223,13 +256,39 @@ class LiveSizingExecutor:
             return run
         spec_by_id = {item["candidate_query_id"]: item for item in plan.candidate_specs}
         observations = {item.candidate_query_id: item for item in run.observations}
+        semantic_gate = None
+        if plan.semantic_control_specs:
+            semantic_gate = self._execute_semantic_controls(
+                plan, run, credentials, output
+            )
 
         for candidate_id in run.planned_candidate_query_ids:
             current = observations[candidate_id]
             if _observation_terminal(current, self.retry_policy.max_attempts):
                 continue
             spec = spec_by_id[candidate_id]
-            if spec["source"] == MANUAL_SOURCE:
+            if plan.semantic_control_specs and spec["source"] == "SemanticScholar" and (
+                semantic_gate is None
+                or semantic_gate.state is not SizingGateStatus.PASSED
+            ):
+                if semantic_gate is None:
+                    raise SizingPlanError(
+                        "Semantic Scholar candidate lacks a persisted semantic gate"
+                    )
+                current = replace(
+                    current,
+                    observed_at=self.timestamp(),
+                    transport_status=SizingTransportStatus.BLOCKED_GATE,
+                    response_status="BLOCKED_SEMANTIC_GATE",
+                    gate_name=semantic_gate.gate_name,
+                    gate_status=semantic_gate.state,
+                    gate_evaluation_id=semantic_gate.evaluation_id,
+                    warnings=[
+                        *current.warnings,
+                        *[f"semantic_control_gate:{reason}" for reason in semantic_gate.reasons],
+                    ],
+                )
+            elif spec["source"] == MANUAL_SOURCE:
                 current = replace(
                     current,
                     observed_at=self.timestamp(),
@@ -248,6 +307,15 @@ class LiveSizingExecutor:
                     warnings=[*current.warnings, "credential required: IEEE_XPLORE_API_KEY"],
                 )
             else:
+                if plan.semantic_control_specs and spec["source"] == "SemanticScholar":
+                    if semantic_gate is None:
+                        raise SizingPlanError("Semantic Scholar semantic gate is missing")
+                    current = replace(
+                        current,
+                        gate_name=semantic_gate.gate_name,
+                        gate_status=SizingGateStatus.PASSED,
+                        gate_evaluation_id=semantic_gate.evaluation_id,
+                    )
                 current = self._execute_observation(
                     spec, current, credentials=credentials, checkpoint=lambda item: self._checkpoint(
                         run, observations, item, output
@@ -267,6 +335,197 @@ class LiveSizingExecutor:
         report = build_comparison_report(run)
         atomic_write(Path(report_path), (canonical_json(report) + "\n").encode("utf-8"))
         return run
+
+    def _execute_semantic_controls(
+        self,
+        plan: ValidatedSizingPlan,
+        run: QuerySizingRun,
+        credentials: Mapping[str, str],
+        output: Path,
+    ) -> SemanticControlGateEvaluation:
+        if run.semantic_control_gate is not None:
+            return run.semantic_control_gate
+        by_id = {
+            item.control_query_id: item for item in run.semantic_control_observations
+        }
+        for spec in plan.semantic_control_specs:
+            control_id = spec["control_query_id"]
+            current = by_id.get(control_id)
+            if current is None:
+                current = SemanticControlObservation(
+                    control_query_id=control_id,
+                    probe_id=spec["probe_id"],
+                    source="SemanticScholar",
+                    observed_at=self.timestamp(),
+                    request=dict(spec["request"]),
+                    request_hash=spec["request_hash"],
+                    transport_status=SizingTransportStatus.PLANNED,
+                )
+                by_id[control_id] = current
+                self._checkpoint_semantic_control(run, plan, by_id, output)
+            if _semantic_control_terminal(current, self.retry_policy.max_attempts):
+                continue
+            current = self._execute_semantic_control(
+                spec,
+                current,
+                credentials=credentials,
+                checkpoint=lambda item: self._checkpoint_semantic_control(
+                    run,
+                    plan,
+                    {**by_id, item.control_query_id: item},
+                    output,
+                ),
+                pending_path=_semantic_control_pending_path(output, control_id),
+            )
+            by_id[control_id] = current
+            self._checkpoint_semantic_control(run, plan, by_id, output)
+
+        evaluation = _evaluate_semantic_control_gate(plan, by_id, self.timestamp())
+        run.semantic_control_gate = evaluation
+        self._checkpoint_semantic_control(run, plan, by_id, output)
+        return evaluation
+
+    def _checkpoint_semantic_control(
+        self,
+        run: QuerySizingRun,
+        plan: ValidatedSizingPlan,
+        by_id: dict[str, SemanticControlObservation],
+        output: Path,
+    ) -> None:
+        run.semantic_control_observations = [
+            by_id[spec["control_query_id"]]
+            for spec in plan.semantic_control_specs
+            if spec["control_query_id"] in by_id
+        ]
+        save_sizing_run(output, run)
+
+    def _execute_semantic_control(
+        self,
+        spec: dict[str, Any],
+        observation: SemanticControlObservation,
+        *,
+        credentials: Mapping[str, str],
+        checkpoint: Callable[[SemanticControlObservation], None],
+        pending_path: Path,
+    ) -> SemanticControlObservation:
+        if sizing_request_hash(spec["request"]) != spec["request_hash"]:
+            raise SizingPlanError("semantic-control request hash changed before transport")
+        attempt_number = len(observation.attempts) + 1
+        retry_reason = _semantic_control_retry_reason(observation)
+        replay = _load_semantic_control_pending(
+            pending_path, observation, attempt_number
+        )
+        if replay is not None:
+            return _successful_semantic_control(
+                observation,
+                attempt_number=attempt_number,
+                started_at=str(replay["started_at"]),
+                completed_at=str(replay["completed_at"]),
+                retry_reason=retry_reason,
+                response_status=int(replay["response_status"]),
+                response_hash=str(replay["response_hash"]),
+                count=int(replay["sanitized_envelope"]["total"]),
+                warnings=list(replay["sanitized_envelope"].get("warnings", [])),
+            )
+        while attempt_number <= self.retry_policy.max_attempts:
+            started = self.timestamp()
+            try:
+                self.rate_limiter.wait("SemanticScholar")
+                response = self._send(
+                    observation.request, "SemanticScholar", credentials
+                )
+            except Exception as exc:  # noqa: BLE001
+                current = _failed_semantic_control(
+                    observation,
+                    attempt_number=attempt_number,
+                    started_at=started,
+                    completed_at=self.timestamp(),
+                    retry_reason=retry_reason,
+                    failure_state="transport_failure",
+                    error=f"transport_error:{type(exc).__name__}",
+                )
+                checkpoint(current)
+                observation = current
+                if attempt_number >= self.retry_policy.max_attempts:
+                    return observation
+                self.sleep(self.retry_policy.delay(attempt_number))
+                attempt_number += 1
+                retry_reason = "transport_failure"
+                continue
+
+            response_hash = hashlib.sha256(bytes(response.content)).hexdigest()
+            status = int(response.status_code)
+            retry_after = response.headers.get("Retry-After")
+            if status in self.retry_policy.retry_statuses:
+                current = _failed_semantic_control(
+                    observation,
+                    attempt_number=attempt_number,
+                    started_at=started,
+                    completed_at=self.timestamp(),
+                    retry_reason=retry_reason,
+                    failure_state="retryable_http_failure",
+                    error=f"retryable_http_status:{status}",
+                    response_status=status,
+                    response_hash=response_hash,
+                    retry_after=retry_after,
+                )
+                checkpoint(current)
+                observation = current
+                if attempt_number >= self.retry_policy.max_attempts:
+                    return observation
+                self.sleep(self.retry_policy.delay(attempt_number, retry_after))
+                attempt_number += 1
+                retry_reason = f"retryable_http_status:{status}"
+                continue
+            if status < 200 or status >= 300:
+                return _failed_semantic_control(
+                    observation,
+                    attempt_number=attempt_number,
+                    started_at=started,
+                    completed_at=self.timestamp(),
+                    retry_reason=retry_reason,
+                    failure_state="terminal_http_failure",
+                    error=f"terminal_http_status:{status}",
+                    response_status=status,
+                    response_hash=response_hash,
+                )
+            try:
+                count, sanitized = _parse_semantic_control_response(response)
+            except Exception as exc:  # noqa: BLE001
+                return _failed_semantic_control(
+                    observation,
+                    attempt_number=attempt_number,
+                    started_at=started,
+                    completed_at=self.timestamp(),
+                    retry_reason=retry_reason,
+                    failure_state="parser_failure",
+                    error=f"control_envelope_error:{type(exc).__name__}",
+                    response_status=status,
+                    response_hash=response_hash,
+                )
+            completed = self.timestamp()
+            _save_semantic_control_pending(
+                pending_path,
+                observation,
+                attempt_number,
+                started,
+                completed,
+                status,
+                response_hash,
+                sanitized,
+            )
+            return _successful_semantic_control(
+                observation,
+                attempt_number=attempt_number,
+                started_at=started,
+                completed_at=completed,
+                retry_reason=retry_reason,
+                response_status=status,
+                response_hash=response_hash,
+                count=count,
+                warnings=list(sanitized.get("warnings", [])),
+            )
+        return observation
 
     def _load_or_create_run(
         self, plan: ValidatedSizingPlan, output: Path
@@ -526,9 +785,22 @@ class LiveSizingExecutor:
                 continue
             if plan.identity_specs:
                 resolution = identity_by_id[spec["identity_resolution_id"]]
-                diagnostic = self._execute_match_diagnostic(
-                    spec, resolution, credentials
-                )
+                if spec["source"] == "SemanticScholar" and (
+                    run.semantic_control_gate is None
+                    or run.semantic_control_gate.state is not SizingGateStatus.PASSED
+                ):
+                    gate_state = (
+                        run.semantic_control_gate.state.value
+                        if run.semantic_control_gate is not None
+                        else "unresolved"
+                    )
+                    diagnostic = _unsupported_diagnostic(
+                        spec, f"semantic_control_gate:{gate_state}"
+                    )
+                else:
+                    diagnostic = self._execute_match_diagnostic(
+                        spec, resolution, credentials
+                    )
             else:
                 diagnostic = self._execute_diagnostic(spec, credentials)
             completed[key] = diagnostic
@@ -887,6 +1159,209 @@ def _fresh_observation(spec: dict[str, Any], timestamp: str) -> SizingObservatio
     )
 
 
+def _semantic_control_terminal(
+    observation: SemanticControlObservation,
+    max_attempts: int,
+) -> bool:
+    if observation.transport_status is SizingTransportStatus.SUCCEEDED:
+        return True
+    if observation.failure_state in {"terminal_http_failure", "parser_failure"}:
+        return True
+    return (
+        observation.transport_status is SizingTransportStatus.FAILED
+        and len(observation.attempts) >= max_attempts
+    )
+
+
+def _semantic_control_retry_reason(
+    observation: SemanticControlObservation,
+) -> str | None:
+    if not observation.attempts:
+        return None
+    final = observation.attempts[-1]
+    return final.errors[-1] if final.errors else "resumed_retry"
+
+
+def _parse_semantic_control_response(
+    response: HttpResponse,
+) -> tuple[int, dict[str, Any]]:
+    data = response.json()
+    if not isinstance(data, dict):
+        raise TypeError("Semantic Scholar control response is not an object")
+    if data.get("error") or data.get("errors"):
+        raise ValueError("Semantic Scholar control response reported an error")
+    if "total" not in data:
+        raise ValueError("Semantic Scholar control response omitted total")
+    count = int(data["total"])
+    if count < 0:
+        raise ValueError("Semantic Scholar control count cannot be negative")
+    sanitized = {
+        "total": count,
+        "continuation_token_present": bool(data.get("token")),
+        "warnings": [f"continuation_token_present={bool(data.get('token'))}"],
+    }
+    return count, sanitized
+
+
+def _successful_semantic_control(
+    observation: SemanticControlObservation,
+    *,
+    attempt_number: int,
+    started_at: str,
+    completed_at: str,
+    retry_reason: str | None,
+    response_status: int,
+    response_hash: str,
+    count: int,
+    warnings: list[str],
+) -> SemanticControlObservation:
+    attempt = SizingAttempt(
+        attempt_number=attempt_number,
+        started_at=started_at,
+        completed_at=completed_at,
+        request=observation.request,
+        request_hash=observation.request_hash,
+        transport_status=SizingTransportStatus.SUCCEEDED,
+        response_status=response_status,
+        retry_of_attempt_number=(attempt_number - 1 if attempt_number > 1 else None),
+        retry_reason=retry_reason,
+        response_hash=response_hash,
+        warnings=list(warnings),
+    )
+    return replace(
+        observation,
+        observed_at=completed_at,
+        transport_status=SizingTransportStatus.SUCCEEDED,
+        response_status=response_status,
+        response_hash=response_hash,
+        reported_count=count,
+        syntax_status=SizingSyntaxStatus.ACCEPTED,
+        attempts=[*observation.attempts, attempt],
+        failure_state=None,
+        warnings=[*observation.warnings, *warnings],
+        errors=[],
+    )
+
+
+def _failed_semantic_control(
+    observation: SemanticControlObservation,
+    *,
+    attempt_number: int,
+    started_at: str,
+    completed_at: str,
+    retry_reason: str | None,
+    failure_state: str,
+    error: str,
+    response_status: int | None = None,
+    response_hash: str | None = None,
+    retry_after: str | None = None,
+) -> SemanticControlObservation:
+    attempt = SizingAttempt(
+        attempt_number=attempt_number,
+        started_at=started_at,
+        completed_at=completed_at,
+        request=observation.request,
+        request_hash=observation.request_hash,
+        transport_status=SizingTransportStatus.FAILED,
+        response_status=response_status,
+        retry_of_attempt_number=(attempt_number - 1 if attempt_number > 1 else None),
+        retry_reason=retry_reason,
+        response_hash=response_hash,
+        errors=[error],
+        retry_after=retry_after,
+    )
+    return replace(
+        observation,
+        observed_at=completed_at,
+        transport_status=SizingTransportStatus.FAILED,
+        response_status=response_status,
+        response_hash=response_hash,
+        reported_count=None,
+        syntax_status=(
+            SizingSyntaxStatus.REJECTED
+            if failure_state in {"terminal_http_failure", "parser_failure"}
+            else SizingSyntaxStatus.UNTESTED
+        ),
+        attempts=[*observation.attempts, attempt],
+        failure_state=failure_state,
+        errors=[*observation.errors, error],
+    )
+
+
+def _evaluate_semantic_control_gate(
+    plan: ValidatedSizingPlan,
+    observations: dict[str, SemanticControlObservation],
+    evaluated_at: str,
+) -> SemanticControlGateEvaluation:
+    control_ids = [item["control_query_id"] for item in plan.semantic_control_specs]
+    unresolved = [
+        control_id
+        for control_id in control_ids
+        if control_id not in observations
+        or observations[control_id].transport_status
+        is not SizingTransportStatus.SUCCEEDED
+        or observations[control_id].reported_count is None
+    ]
+    results: list[SemanticAssertionResult] = []
+    reasons: list[str] = []
+    if unresolved:
+        state = SizingGateStatus.UNRESOLVED
+        reasons = [
+            "control_unresolved:"
+            + control_id
+            + ":"
+            + str(observations.get(control_id).failure_state if control_id in observations else "missing")
+            for control_id in unresolved
+        ]
+    else:
+        counts = {
+            item["probe_id"]: int(observations[item["control_query_id"]].reported_count)
+            for item in plan.semantic_control_specs
+        }
+        for assertion in plan.payload["semantic_control_provenance"]["assertions"]:
+            left = counts[assertion["left_probe_id"]]
+            right = counts[assertion["right_probe_id"]]
+            passed = {
+                "less_than_or_equal": left <= right,
+                "greater_than_or_equal": left >= right,
+                "equal": left == right,
+            }[assertion["relation"]]
+            results.append(
+                SemanticAssertionResult(
+                    assertion_id=assertion["assertion_id"],
+                    left_probe_id=assertion["left_probe_id"],
+                    relation=assertion["relation"],
+                    right_probe_id=assertion["right_probe_id"],
+                    left_count=left,
+                    right_count=right,
+                    passed=passed,
+                )
+            )
+        failed = [item.assertion_id for item in results if not item.passed]
+        state = SizingGateStatus.FAILED if failed else SizingGateStatus.PASSED
+        reasons = [f"assertion_failed:{assertion_id}" for assertion_id in failed]
+    evaluation_material = {
+        "dry_run_plan_hash": plan.plan_hash,
+        "control_query_ids": control_ids,
+        "state": state.value,
+        "assertion_results": [item.to_dict() for item in results],
+        "reasons": reasons,
+    }
+    evaluation_id = "semantic-gate:" + hashlib.sha256(
+        canonical_json(evaluation_material).encode("utf-8")
+    ).hexdigest()[:24]
+    return SemanticControlGateEvaluation(
+        evaluation_id=evaluation_id,
+        gate_name="bulk_boolean_semantics",
+        state=state,
+        evaluated_at=evaluated_at,
+        dry_run_plan_hash=plan.plan_hash,
+        control_query_ids=control_ids,
+        assertion_results=results,
+        reasons=reasons,
+    )
+
+
 def _parse_envelope(
     source: str,
     response: HttpResponse,
@@ -1090,6 +1565,11 @@ def _successful_observation(
     if envelope.count is not None and observation.hard_window is not None:
         window = (SizingWindowStatus.OVERFLOW if envelope.count > observation.hard_window
                   else SizingWindowStatus.CLEAR)
+    gate_name = envelope.gate_name or observation.gate_name
+    gate_status = envelope.gate_status
+    if observation.gate_evaluation_id is not None:
+        gate_name = observation.gate_name
+        gate_status = observation.gate_status
     return replace(observation, observed_at=completed, response_hash=response_hash,
                    reported_count=envelope.count, count_kind=envelope.count_kind,
                    window_status=window, syntax_status=envelope.syntax_status,
@@ -1097,8 +1577,8 @@ def _successful_observation(
                    source_query_translation=envelope.translation,
                    source_messages=envelope.source_messages or {},
                    warnings=[*observation.warnings, *envelope.warnings],
-                   gate_name=envelope.gate_name or observation.gate_name,
-                   gate_status=envelope.gate_status, attempts=[*observation.attempts, attempt])
+                   gate_name=gate_name, gate_status=gate_status,
+                   attempts=[*observation.attempts, attempt])
 
 
 def _failed_attempt(
@@ -1153,6 +1633,7 @@ def _observation_terminal(observation: SizingObservation, max_attempts: int) -> 
     if observation.transport_status in {
         SizingTransportStatus.SUCCEEDED, SizingTransportStatus.BLOCKED_CREDENTIAL,
         SizingTransportStatus.PENDING_MANUAL, SizingTransportStatus.GATE_FAILED,
+        SizingTransportStatus.BLOCKED_GATE,
     }:
         return True
     if observation.syntax_status is SizingSyntaxStatus.REJECTED:
@@ -1174,11 +1655,45 @@ def _unsupported_diagnostic(spec: dict[str, Any], warning: str) -> SentinelDiagn
 def build_comparison_report(run: QuerySizingRun) -> dict[str, Any]:
     qf01_counts = _variant_counts(run, "STAR-QF01-RELATIONAL-VIS", ("anchored", "unanchored"))
     qf02_counts = _variant_counts(run, "STAR-QF02-ASSISTED-VIS", ("A", "B", "C", "D"))
+    semantic_gate = run.semantic_control_gate
+    semantic_candidates = [
+        item for item in run.observations if item.source == "SemanticScholar"
+    ]
     return {
         "report_kind": "non_production_query_sizing_comparison",
         "sizing_run_id": run.sizing_run_id,
         "run_hash": run.run_hash(),
         "dry_run_plan_hash": run.dry_run_plan_hash,
+        "semantic_controls": {
+            "planned": 6 if run.schema_version == SIZING_RUN_V2_SCHEMA_VERSION else 0,
+            "attempted": sum(
+                bool(item.attempts) for item in run.semantic_control_observations
+            ),
+            "completed": sum(
+                item.transport_status is SizingTransportStatus.SUCCEEDED
+                for item in run.semantic_control_observations
+            ),
+            "counts": {
+                item.probe_id: item.reported_count
+                for item in run.semantic_control_observations
+            },
+            "gate_state": semantic_gate.state.value if semantic_gate else None,
+            "gate_evaluation_id": semantic_gate.evaluation_id if semantic_gate else None,
+            "assertions": (
+                [item.to_dict() for item in semantic_gate.assertion_results]
+                if semantic_gate
+                else []
+            ),
+            "reasons": list(semantic_gate.reasons) if semantic_gate else [],
+            "candidate_requests_executed": [
+                item.candidate_query_id for item in semantic_candidates if item.attempts
+            ],
+            "candidate_requests_blocked": [
+                item.candidate_query_id
+                for item in semantic_candidates
+                if item.transport_status is SizingTransportStatus.BLOCKED_GATE
+            ],
+        },
         "qf01": {
             source: {
                 "counts": counts,
@@ -1276,6 +1791,63 @@ def _hash_without_key(payload: dict[str, Any], key: str) -> str:
 def _pending_envelope_path(output: Path, candidate_id: str) -> Path:
     digest = hashlib.sha256(candidate_id.encode("utf-8")).hexdigest()
     return output.parent / ".query_sizing_pending" / f"{digest}.json"
+
+
+def _semantic_control_pending_path(output: Path, control_id: str) -> Path:
+    digest = hashlib.sha256(control_id.encode("utf-8")).hexdigest()
+    return output.parent / ".query_sizing_pending" / f"semantic-control-{digest}.json"
+
+
+def _save_semantic_control_pending(
+    path: Path,
+    observation: SemanticControlObservation,
+    attempt_number: int,
+    started_at: str,
+    completed_at: str,
+    response_status: int,
+    response_hash: str,
+    sanitized_envelope: dict[str, Any],
+) -> None:
+    allowed = {"total", "continuation_token_present", "warnings"}
+    if set(sanitized_envelope) - allowed:
+        raise SizingPlanError("semantic-control envelope contains bibliographic content")
+    payload = {
+        "artifact_kind": "semantic_control_sanitized_response_envelope",
+        "control_query_id": observation.control_query_id,
+        "request_hash": observation.request_hash,
+        "attempt_number": attempt_number,
+        "started_at": started_at,
+        "completed_at": completed_at,
+        "response_status": response_status,
+        "response_hash": response_hash,
+        "sanitized_envelope": sanitized_envelope,
+        "contains_bibliographic_records": False,
+    }
+    atomic_write(path, (canonical_json(payload) + "\n").encode("utf-8"))
+
+
+def _load_semantic_control_pending(
+    path: Path,
+    observation: SemanticControlObservation,
+    attempt_number: int,
+) -> dict[str, Any] | None:
+    if not path.is_file():
+        return None
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if payload.get("artifact_kind") != "semantic_control_sanitized_response_envelope":
+        raise SizingPlanError("pending semantic-control artifact has the wrong kind")
+    if payload.get("control_query_id") != observation.control_query_id:
+        raise SizingPlanError("pending semantic-control ID mismatch")
+    if payload.get("request_hash") != observation.request_hash:
+        raise SizingPlanError("pending semantic-control request hash mismatch")
+    if payload.get("attempt_number") != attempt_number:
+        return None
+    if payload.get("contains_bibliographic_records") is not False:
+        raise SizingPlanError("pending semantic-control envelope contains record data")
+    sanitized = payload.get("sanitized_envelope", {})
+    if set(sanitized) - {"total", "continuation_token_present", "warnings"}:
+        raise SizingPlanError("pending semantic-control envelope contains unexpected fields")
+    return payload
 
 
 def _save_pending_envelope(

@@ -341,9 +341,9 @@ class SizingAttempt:
     retry_reason: str | None = None
     response_hash: str | None = None
     credential_reference: str | None = None
-    retry_after: str | None = None
     warnings: list[str] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
+    retry_after: str | None = None
 
     def validate(self) -> None:
         if self.attempt_number < 1:
@@ -791,6 +791,164 @@ class SemanticControlSet:
         )
 
 
+@dataclass(frozen=True, slots=True)
+class SemanticControlObservation:
+    control_query_id: str
+    probe_id: str
+    source: str
+    observed_at: str
+    request: dict[str, Any]
+    request_hash: str
+    transport_status: SizingTransportStatus
+    response_status: str | int | None = None
+    response_hash: str | None = None
+    reported_count: int | None = None
+    count_kind: SizingCountKind = SizingCountKind.ESTIMATED
+    syntax_status: SizingSyntaxStatus = SizingSyntaxStatus.UNTESTED
+    attempts: list[SizingAttempt] = field(default_factory=list)
+    failure_state: str | None = None
+    warnings: list[str] = field(default_factory=list)
+    errors: list[str] = field(default_factory=list)
+
+    def validate(self) -> None:
+        if self.source != "SemanticScholar":
+            raise ValueError("semantic controls are only valid for Semantic Scholar")
+        _validate_request(self.request, self.request_hash)
+        _validate_hash(self.response_hash, "semantic-control response hash")
+        if self.reported_count is not None and self.reported_count < 0:
+            raise ValueError("semantic-control counts cannot be negative")
+        for expected, attempt in enumerate(self.attempts, start=1):
+            attempt.validate()
+            if attempt.attempt_number != expected:
+                raise ValueError("semantic-control attempts must be contiguous and ordered")
+            if attempt.request_hash != self.request_hash:
+                raise ValueError("semantic-control retry changed the frozen request")
+        if self.transport_status is SizingTransportStatus.SUCCEEDED:
+            if self.reported_count is None or not self.attempts:
+                raise ValueError("successful semantic control requires a completed count")
+            if self.attempts[-1].transport_status is not SizingTransportStatus.SUCCEEDED:
+                raise ValueError("semantic-control status must match its final attempt")
+        if self.transport_status is SizingTransportStatus.FAILED and not self.failure_state:
+            raise ValueError("failed semantic control requires an explicit failure state")
+
+    def to_dict(self) -> dict[str, Any]:
+        self.validate()
+        return _serialize(self)
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> SemanticControlObservation:
+        return cls(
+            control_query_id=str(data["control_query_id"]),
+            probe_id=str(data["probe_id"]),
+            source=str(data["source"]),
+            observed_at=str(data["observed_at"]),
+            request=dict(data["request"]),
+            request_hash=str(data["request_hash"]),
+            transport_status=SizingTransportStatus(data["transport_status"]),
+            response_status=data.get("response_status"),
+            response_hash=data.get("response_hash"),
+            reported_count=data.get("reported_count"),
+            count_kind=SizingCountKind(data.get("count_kind", "estimated")),
+            syntax_status=SizingSyntaxStatus(data.get("syntax_status", "untested")),
+            attempts=[SizingAttempt.from_dict(item) for item in data.get("attempts", [])],
+            failure_state=data.get("failure_state"),
+            warnings=list(data.get("warnings", [])),
+            errors=list(data.get("errors", [])),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class SemanticAssertionResult:
+    assertion_id: str
+    left_probe_id: str
+    relation: str
+    right_probe_id: str
+    left_count: int
+    right_count: int
+    passed: bool
+
+    def validate(self) -> None:
+        if self.relation not in {"less_than_or_equal", "greater_than_or_equal", "equal"}:
+            raise ValueError("unsupported semantic-control assertion relation")
+        expected = {
+            "less_than_or_equal": self.left_count <= self.right_count,
+            "greater_than_or_equal": self.left_count >= self.right_count,
+            "equal": self.left_count == self.right_count,
+        }[self.relation]
+        if self.passed is not expected:
+            raise ValueError("semantic-control assertion result is inconsistent")
+
+    def to_dict(self) -> dict[str, Any]:
+        self.validate()
+        return _serialize(self)
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> SemanticAssertionResult:
+        return cls(
+            assertion_id=str(data["assertion_id"]),
+            left_probe_id=str(data["left_probe_id"]),
+            relation=str(data["relation"]),
+            right_probe_id=str(data["right_probe_id"]),
+            left_count=int(data["left_count"]),
+            right_count=int(data["right_count"]),
+            passed=bool(data["passed"]),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class SemanticControlGateEvaluation:
+    evaluation_id: str
+    gate_name: str
+    state: SizingGateStatus
+    evaluated_at: str
+    dry_run_plan_hash: str
+    control_query_ids: list[str]
+    assertion_results: list[SemanticAssertionResult] = field(default_factory=list)
+    reasons: list[str] = field(default_factory=list)
+
+    def validate(self) -> None:
+        if self.gate_name != "bulk_boolean_semantics":
+            raise ValueError("semantic-control evaluation has an unexpected gate")
+        if self.state not in {
+            SizingGateStatus.PASSED,
+            SizingGateStatus.FAILED,
+            SizingGateStatus.UNRESOLVED,
+        }:
+            raise ValueError("semantic-control gate must be PASS, FAIL, or UNRESOLVED")
+        _validate_hash(self.dry_run_plan_hash, "semantic-control dry-run plan hash")
+        if len(self.control_query_ids) != 6 or len(set(self.control_query_ids)) != 6:
+            raise ValueError("semantic-control gate requires the six frozen controls")
+        for result in self.assertion_results:
+            result.validate()
+        if self.state is SizingGateStatus.PASSED:
+            if self.reasons or not self.assertion_results:
+                raise ValueError("passing semantic-control gate requires passed assertions")
+            if not all(item.passed for item in self.assertion_results):
+                raise ValueError("passing semantic-control gate has a failed assertion")
+        elif not self.reasons:
+            raise ValueError("failed/unresolved semantic-control gates require reasons")
+
+    def to_dict(self) -> dict[str, Any]:
+        self.validate()
+        return _serialize(self)
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> SemanticControlGateEvaluation:
+        return cls(
+            evaluation_id=str(data["evaluation_id"]),
+            gate_name=str(data["gate_name"]),
+            state=SizingGateStatus(data["state"]),
+            evaluated_at=str(data["evaluated_at"]),
+            dry_run_plan_hash=str(data["dry_run_plan_hash"]),
+            control_query_ids=list(data["control_query_ids"]),
+            assertion_results=[
+                SemanticAssertionResult.from_dict(item)
+                for item in data.get("assertion_results", [])
+            ],
+            reasons=list(data.get("reasons", [])),
+        )
+
+
 @dataclass(slots=True)
 class QuerySizingRun:
     schema_version: str
@@ -807,6 +965,10 @@ class QuerySizingRun:
     dry_run_plan_hash: str | None = None
     started_at: str | None = None
     observations: list[SizingObservation] = field(default_factory=list)
+    semantic_control_observations: list[SemanticControlObservation] = field(
+        default_factory=list
+    )
+    semantic_control_gate: SemanticControlGateEvaluation | None = None
     sentinel_identity_resolutions: list[SentinelIdentityResolution] = field(
         default_factory=list
     )
@@ -866,6 +1028,28 @@ class QuerySizingRun:
             raise ValueError(f"observations reference unplanned candidate queries: {sorted(unknown)}")
         for observation in self.observations:
             observation.validate()
+        control_ids = []
+        for control in self.semantic_control_observations:
+            control.validate()
+            control_ids.append(control.control_query_id)
+        if len(control_ids) != len(set(control_ids)):
+            raise ValueError("semantic-control observations must have unique IDs")
+        if self.semantic_control_gate is not None:
+            self.semantic_control_gate.validate()
+            if set(self.semantic_control_gate.control_query_ids) != set(control_ids):
+                raise ValueError("semantic-control gate does not cover committed controls")
+            if self.semantic_control_gate.dry_run_plan_hash != self.dry_run_plan_hash:
+                raise ValueError("semantic-control gate references another dry-run plan")
+        if self.schema_version != SIZING_RUN_V2_SCHEMA_VERSION and (
+            control_ids or self.semantic_control_gate is not None
+        ):
+            raise ValueError("semantic-control execution provenance requires sizing v1.2")
+        if self.semantic_control_gate is not None:
+            for observation in self.observations:
+                if observation.gate_evaluation_id is None:
+                    continue
+                if observation.gate_evaluation_id != self.semantic_control_gate.evaluation_id:
+                    raise ValueError("candidate references another semantic-control gate")
         identity_keys = []
         for resolution in self.sentinel_identity_resolutions:
             resolution.validate()
@@ -927,6 +1111,15 @@ class QuerySizingRun:
             created_at=str(data["created_at"]),
             started_at=data.get("started_at"),
             observations=[SizingObservation.from_dict(item) for item in data["observations"]],
+            semantic_control_observations=[
+                SemanticControlObservation.from_dict(item)
+                for item in data.get("semantic_control_observations", [])
+            ],
+            semantic_control_gate=(
+                SemanticControlGateEvaluation.from_dict(data["semantic_control_gate"])
+                if data.get("semantic_control_gate") is not None
+                else None
+            ),
             sentinel_identity_resolutions=[
                 SentinelIdentityResolution.from_dict(item)
                 for item in data.get("sentinel_identity_resolutions", [])
