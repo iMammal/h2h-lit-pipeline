@@ -141,6 +141,7 @@ class _ParsedProposal:
     primary_exclusion_reason: ExclusionReason | None
     secondary_exclusion_reasons: tuple[ExclusionReason, ...]
     overall_rationale: str
+    audit_flags: tuple[dict[str, Any], ...] = ()
 
 
 def load_prompt_artifact(
@@ -309,6 +310,10 @@ def run_inference_attempt(
                 from h2h_lit.pilot5b import parse_pilot5b_proposal
 
                 parsed = parse_pilot5b_proposal(loaded, inference_input)
+            elif run.output_schema_version == "1.2.0":
+                from h2h_lit.pilot5c import parse_pilot5c_proposal
+
+                parsed = parse_pilot5c_proposal(loaded, inference_input)
             else:
                 raise ValueError(
                     f"unsupported inference output schema: {run.output_schema_version}"
@@ -353,7 +358,10 @@ def run_inference_attempt(
         prior_screening_decision_id=inference_input.prior_screening_decision_id,
         screening_decision_id=proposal_id,
         annotation_ids=annotation_ids,
-        metadata={"prompt_hash": run.prompt_hash},
+        metadata={
+            "prompt_hash": run.prompt_hash,
+            **({"audit_flags": list(parsed.audit_flags)} if parsed else {}),
+        },
     )
     dataset.inference_attempts.append(attempt)
     try:
@@ -655,6 +663,33 @@ def _materialize_proposal(
             "prompt_version": run.prompt_version,
             "prompt_hash": run.prompt_hash,
             "input_hash": input_hash,
+            **(
+                {
+                    "derived_screening": {
+                        "actor_id": "software:h2h-lit-pipeline:stage3-derivation",
+                        "actor_type": ActorType.SOFTWARE.value,
+                        "authority": DecisionAuthority.DETERMINISTIC.value,
+                        "rule": "stage3_eligibility_and_exclusion_derivation",
+                        "primary_exclusion_reason": (
+                            parsed.primary_exclusion_reason.value
+                            if parsed.primary_exclusion_reason is not None
+                            else None
+                        ),
+                        "secondary_exclusion_reasons": [
+                            reason.value
+                            for reason in parsed.secondary_exclusion_reasons
+                        ],
+                    },
+                    "human_review_audit": {
+                        "actor_id": "software:h2h-lit-pipeline:stage5c-audit",
+                        "actor_type": ActorType.SOFTWARE.value,
+                        "authority": DecisionAuthority.DETERMINISTIC.value,
+                        "flags": list(parsed.audit_flags),
+                    },
+                }
+                if run.output_schema_version == "1.2.0"
+                else {}
+            ),
         },
     )
 

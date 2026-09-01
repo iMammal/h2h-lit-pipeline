@@ -1,0 +1,28 @@
+{
+  "config_version": "1.2.0",
+  "description": "Prospective Stage 5C pre-production hardening using the unchanged Stage 5A/5B 44-record challenge-set specification.",
+  "selection_config": "config/stage5_pilot_v1.json",
+  "prompt_path": "prompts/revised_star_title_abstract_screening_pilot5c_v1_2_0.md",
+  "prompt_version": "1.2.0",
+  "output_schema_version": "1.2.0",
+  "output_dir": "outputs/stage5c_preproduction_v1",
+  "model_parameter_overrides": {
+    "response_schema_version": "1.2.0",
+    "structured_output": "revised_star_proposal_pilot5c_v1_2_0"
+  },
+  "execution_controls": {
+    "e6_source": "deterministic_structured_administrative_metadata",
+    "e6_cutoff_scope": "pilot_only",
+    "production_e6_cutoff": "must_be_documented_prospectively_before_production",
+    "evidence_resolution": "exact_verbatim_substring_with_field_locator",
+    "model_offsets_authoritative": false,
+    "source_artifact_id_model_input": "neutral_opaque_identifier_only",
+    "historical_paths_preserved_outside_model_input": true,
+    "aggregate_eligibility_and_exclusions": "deterministic_stage3_derivation",
+    "audit_flags": "non_dispositive_human_review_signals",
+    "retry_conditions": [
+      "transport_or_api_failure",
+      "structurally_or_semantically_invalid_model_response"
+    ]
+  }
+}

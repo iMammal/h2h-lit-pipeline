@@ -8,6 +8,7 @@ from h2h_lit.openai_provider import (
     revised_star_response_schema,
 )
 from h2h_lit.pilot5b import pilot5b_response_schema
+from h2h_lit.pilot5c import pilot5c_response_schema
 from h2h_lit.review import AssistanceMode, EligibilityCriterion
 
 
@@ -121,6 +122,35 @@ def test_responses_provider_selects_pilot5b_schema_explicitly():
 
     _, kwargs = session.calls[0]
     assert kwargs["json"]["text"]["format"]["schema"] == pilot5b_response_schema()
+
+
+def test_responses_provider_selects_pilot5c_schema_explicitly():
+    output = json.dumps({"proposal": "preserved"})
+    session = FakeSession(
+        FakeResponse(
+            {
+                "output": [
+                    {
+                        "type": "message",
+                        "content": [{"type": "output_text", "text": output}],
+                    }
+                ]
+            }
+        )
+    )
+    provider = OpenAIResponsesProvider(api_key="test-key", session=session)
+
+    provider.generate(
+        model="model",
+        prompt="prompt",
+        input_snapshot={"text": "record"},
+        parameters={"response_schema_version": "1.2.0"},
+        request_id="request:5c",
+        attempt_number=1,
+    )
+
+    _, kwargs = session.calls[0]
+    assert kwargs["json"]["text"]["format"]["schema"] == pilot5c_response_schema()
 
 
 def test_provider_rejects_unknown_parameters_before_network_use():

@@ -303,4 +303,8 @@ def _response_schema_for_version(version: str) -> dict[str, Any]:
         from h2h_lit.pilot5b import pilot5b_response_schema
 
         return pilot5b_response_schema()
+    if version == "1.2.0":
+        from h2h_lit.pilot5c import pilot5c_response_schema
+
+        return pilot5c_response_schema()
     raise ValueError(f"unsupported response schema version: {version}")
