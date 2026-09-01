@@ -67,6 +67,9 @@ from h2h_lit.sources.europe_pmc import (
 from h2h_lit.sources.europe_pmc import (
     search_europe_pmc,
 )
+from h2h_lit.sources.ieee_xplore import ABSTRACT_CONTENT_POLICY
+from h2h_lit.sources.ieee_xplore import PAGINATOR as IEEE_XPLORE_PAGINATOR
+from h2h_lit.sources.ieee_xplore import SEARCH_URL as IEEE_XPLORE_SEARCH_URL
 from h2h_lit.sources.pubmed import (
     EUTILS as PUBMED_EUTILS,
 )
@@ -104,6 +107,7 @@ SOURCE_ENDPOINTS = {
     "CrossRef": CROSSREF_SEARCH_URL,
     "SemanticScholar": SEMANTIC_SCHOLAR_SEARCH_URL,
     "arXiv": ARXIV_API_URL,
+    "IEEEXplore": IEEE_XPLORE_SEARCH_URL,
 }
 
 PAGINATED_SOURCE_ADAPTERS: dict[str, PaginatedSourceAdapter] = {
@@ -112,6 +116,7 @@ PAGINATED_SOURCE_ADAPTERS: dict[str, PaginatedSourceAdapter] = {
     "CrossRef": CROSSREF_PAGINATOR,
     "SemanticScholar": SEMANTIC_SCHOLAR_PAGINATOR,
     "arXiv": ARXIV_PAGINATOR,
+    "IEEEXplore": IEEE_XPLORE_PAGINATOR,
 }
 
 
@@ -372,6 +377,12 @@ def execute_paginated_retrieval_run(
             raise ValueError(f"unsupported paginated source: {spec.source_database}")
         if spec.source_database not in http_clients:
             raise ValueError(f"missing HTTP client for {spec.source_database}")
+        if (
+            spec.source_database == "IEEEXplore"
+            and isinstance(http_clients[spec.source_database], RequestsHttpClient)
+            and not spec.credentials.get("api_key")
+        ):
+            raise ValueError("IEEE Xplore Metadata API credential is required for live retrieval")
         if spec.page is not None or spec.cursor is not None:
             raise ValueError(
                 "paginated runs must start from adapter initial state or a persisted checkpoint"
@@ -442,6 +453,11 @@ def execute_paginated_retrieval_run(
                     "credential_names": sorted(spec.credentials),
                 },
                 completion_status=RetrievalCompletionStatus.PLANNED,
+                content_policy=(
+                    {"abstract": ABSTRACT_CONTENT_POLICY}
+                    if spec.source_database == "IEEEXplore"
+                    else dict(spec.metadata.get("content_policy", {}))
+                ),
             )
             for index, spec in enumerate(specs)
         ]
@@ -780,6 +796,7 @@ def _maximum_page_size(spec: RetrievalQuerySpec) -> int:
         "EuropePMC": 1000,
         "CrossRef": 1000,
         "arXiv": 2000,
+        "IEEEXplore": 200,
     }[spec.source_database]
 
 
@@ -790,6 +807,19 @@ def _reserved_request_fields(source_database: str) -> set[str]:
         "CrossRef": {"query", "rows", "cursor"},
         "SemanticScholar": {"query", "limit", "offset", "token", "fields", "sort"},
         "arXiv": {"search_query", "start", "max_results", "sortBy", "sortOrder"},
+        "IEEEXplore": {
+            "apikey",
+            "api_key",
+            "format",
+            "max_records",
+            "start_record",
+            "sort_field",
+            "sort_order",
+            "querytext",
+            "meta_data",
+            "article_title",
+            "abstract",
+        },
     }[source_database]
 
 
@@ -893,6 +923,8 @@ def _state_cursor(state: dict[str, Any]) -> str | None:
         return str(state["start"])
     if state.get("index") is not None:
         return str(state["index"])
+    if state.get("start_record") is not None:
+        return str(state["start_record"])
     return None
 
 

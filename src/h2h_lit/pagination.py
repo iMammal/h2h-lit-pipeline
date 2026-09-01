@@ -113,6 +113,7 @@ DEFAULT_MINIMUM_INTERVALS = {
     "CrossRef": 1.0,
     "SemanticScholar": 1.0,
     "arXiv": 3.0,
+    "IEEEXplore": 1.0,
 }
 
 

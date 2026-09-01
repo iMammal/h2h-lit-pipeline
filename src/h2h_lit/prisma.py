@@ -33,6 +33,8 @@ class PrismaReconciliation:
     records_identified: int
     records_by_source: dict[str, int]
     records_by_run: dict[str, int]
+    records_by_identification_route: dict[str, int]
+    records_by_prior_survey_seed_set: dict[str, int]
     duplicate_records_removed: int
     records_after_deduplication: int
     records_screened: int
@@ -74,12 +76,18 @@ def reconcile_prisma(dataset: ReviewDataset) -> PrismaReconciliation:
 
     record_source_counts: dict[str, int] = {}
     record_run_counts: dict[str, int] = {}
+    record_route_counts: dict[str, int] = {}
+    seed_set_counts: dict[str, int] = {}
     record_query_counts = {query_id: 0 for query_id in queries}
     for occurrence in dataset.occurrences:
         query = queries[occurrence.source_query_id]
         record_query_counts[query.query_id] += 1
         _increment(record_source_counts, query.source_database)
         _increment(record_run_counts, query.run_id or "<unassigned>")
+        _increment(record_route_counts, query.identification_route.value)
+        if query.identification_route.value == "prior_survey_seed":
+            seed_set_id = str(query.metadata.get("seed_set_id") or "<unspecified>")
+            _increment(seed_set_counts, seed_set_id)
 
     records_identified = len(dataset.occurrences)
     duplicates = sum(
@@ -172,6 +180,8 @@ def reconcile_prisma(dataset: ReviewDataset) -> PrismaReconciliation:
         records_identified=records_identified,
         records_by_source=_sorted_counts(record_source_counts),
         records_by_run=_sorted_counts(record_run_counts),
+        records_by_identification_route=_sorted_counts(record_route_counts),
+        records_by_prior_survey_seed_set=_sorted_counts(seed_set_counts),
         duplicate_records_removed=duplicates,
         records_after_deduplication=records_after_deduplication,
         records_screened=len(screened_ids),

@@ -151,6 +151,16 @@ class RetrievalAttemptStatus(str, Enum):
     FAILED = "failed"
 
 
+class RetrievalTransportKind(str, Enum):
+    HTTP = "http"
+    ARTIFACT_IMPORT = "artifact_import"
+
+
+class IdentificationRoute(str, Enum):
+    DATABASE = "database"
+    PRIOR_SURVEY_SEED = "prior_survey_seed"
+
+
 class PublicationDatePrecision(str, Enum):
     DAY = "day"
     MONTH = "month"
@@ -237,6 +247,8 @@ class SourceQuery:
     source_reported_total: int | None = None
     total_is_exact: bool = False
     completion_proof: str | None = None
+    identification_route: IdentificationRoute = IdentificationRoute.DATABASE
+    content_policy: dict[str, str] = field(default_factory=dict)
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> SourceQuery:
@@ -249,6 +261,9 @@ class SourceQuery:
         )
         payload["completion_status"] = RetrievalCompletionStatus(
             payload.get("completion_status", inferred_completion.value)
+        )
+        payload["identification_route"] = IdentificationRoute(
+            payload.get("identification_route", IdentificationRoute.DATABASE.value)
         )
         return cls(**payload)
 
@@ -314,11 +329,18 @@ class RetrievalAttempt:
     rate_limit_delay_seconds: float | None = None
     error: str | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
+    transport_kind: RetrievalTransportKind = RetrievalTransportKind.HTTP
+    artifact_path: str | None = None
+    artifact_hash: str | None = None
+    operator_id: str | None = None
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> RetrievalAttempt:
         payload = dict(data)
         payload["status"] = RetrievalAttemptStatus(payload["status"])
+        payload["transport_kind"] = RetrievalTransportKind(
+            payload.get("transport_kind", RetrievalTransportKind.HTTP.value)
+        )
         return cls(**payload)
 
 
@@ -911,13 +933,30 @@ class ReviewDataset:
                 raise ValueError(f"retrieval attempt {attempt.attempt_id} has missing page")
             if attempt.attempt_number < 1:
                 raise ValueError("retrieval attempt numbers must be positive")
-            if attempt.status is RetrievalAttemptStatus.SUCCEEDED and (
-                attempt.response_status is None
-                or not 200 <= attempt.response_status < 300
-                or not attempt.raw_response_hash
-                or not attempt.raw_response_path
-            ):
-                raise ValueError("successful retrieval attempts require a persisted response")
+            if attempt.status is RetrievalAttemptStatus.SUCCEEDED:
+                if attempt.transport_kind is RetrievalTransportKind.HTTP and (
+                    attempt.response_status is None
+                    or not 200 <= attempt.response_status < 300
+                    or not attempt.raw_response_hash
+                    or not attempt.raw_response_path
+                ):
+                    raise ValueError("successful HTTP attempts require a persisted response")
+                if attempt.transport_kind is RetrievalTransportKind.HTTP and (
+                    attempt.artifact_path or attempt.artifact_hash
+                ):
+                    raise ValueError("HTTP attempts cannot claim artifact-import provenance")
+                if attempt.transport_kind is RetrievalTransportKind.ARTIFACT_IMPORT and (
+                    not attempt.artifact_hash
+                    or not attempt.artifact_path
+                    or attempt.response_status is not None
+                    or attempt.actual_request_url is not None
+                    or attempt.response_url is not None
+                    or attempt.raw_response_path is not None
+                    or attempt.raw_response_hash is not None
+                ):
+                    raise ValueError(
+                        "successful artifact imports require a persisted artifact and no HTTP status"
+                    )
             if attempt.status is RetrievalAttemptStatus.FAILED and not attempt.error:
                 raise ValueError("failed retrieval attempts require an error")
 
