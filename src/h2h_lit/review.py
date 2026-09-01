@@ -839,17 +839,21 @@ class ReviewDataset:
                 raise ValueError("full-text proposal does not supersede its prior screening decision")
             if len(attempt.annotation_ids) != len(set(attempt.annotation_ids)):
                 raise ValueError("inference annotation IDs must not contain duplicates")
-            expected_annotations = {
-                *(
-                    (AnnotationDimension.ASSISTANCE_MODE, item.value)
-                    for item in AssistanceMode
-                ),
-                *(
-                    (AnnotationDimension.VISUALIZATION_MODALITY, item.value)
-                    for item in VisualizationModality
-                ),
-                *((AnnotationDimension.TASK, item.value) for item in TaskCategory),
-            }
+            expected_annotations = (
+                set()
+                if run.output_schema_version == "1.3.0"
+                else {
+                    *(
+                        (AnnotationDimension.ASSISTANCE_MODE, item.value)
+                        for item in AssistanceMode
+                    ),
+                    *(
+                        (AnnotationDimension.VISUALIZATION_MODALITY, item.value)
+                        for item in VisualizationModality
+                    ),
+                    *((AnnotationDimension.TASK, item.value) for item in TaskCategory),
+                }
+            )
             actual_annotations: set[tuple[AnnotationDimension, str]] = set()
             for annotation_id in attempt.annotation_ids:
                 annotation = annotations.get(annotation_id)

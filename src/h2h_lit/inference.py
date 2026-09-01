@@ -314,6 +314,10 @@ def run_inference_attempt(
                 from h2h_lit.pilot5c import parse_pilot5c_proposal
 
                 parsed = parse_pilot5c_proposal(loaded, inference_input)
+            elif run.output_schema_version == "1.3.0":
+                from h2h_lit.pilot5d import parse_pilot5d_proposal
+
+                parsed = parse_pilot5d_proposal(loaded, inference_input)
             else:
                 raise ValueError(
                     f"unsupported inference output schema: {run.output_schema_version}"
@@ -681,13 +685,17 @@ def _materialize_proposal(
                         ],
                     },
                     "human_review_audit": {
-                        "actor_id": "software:h2h-lit-pipeline:stage5c-audit",
+                        "actor_id": (
+                            "software:h2h-lit-pipeline:stage5d-eligibility-audit"
+                            if run.output_schema_version == "1.3.0"
+                            else "software:h2h-lit-pipeline:stage5c-audit"
+                        ),
                         "actor_type": ActorType.SOFTWARE.value,
                         "authority": DecisionAuthority.DETERMINISTIC.value,
                         "flags": list(parsed.audit_flags),
                     },
                 }
-                if run.output_schema_version == "1.2.0"
+                if run.output_schema_version in {"1.2.0", "1.3.0"}
                 else {}
             ),
         },
