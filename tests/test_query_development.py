@@ -32,10 +32,15 @@ from h2h_lit.query_development import (
 
 ROOT = Path(__file__).resolve().parents[1]
 CANDIDATE_CONFIG = ROOT / "config" / "star_query_candidates_v0_1.json"
+SENTINEL_CONFIG = ROOT / "config" / "star_query_sentinels_v0_1.json"
 
 
 def _candidate_set() -> CandidateSet:
     return load_candidate_set(CANDIDATE_CONFIG)
+
+
+def _sentinel_set() -> SentinelPaperSet:
+    return load_sentinel_set(SENTINEL_CONFIG)
 
 
 def _observation(candidate_query_id: str, *, count: int = 17) -> SizingObservation:
@@ -182,9 +187,13 @@ def test_sizing_run_round_trip_is_isolated_and_deterministic(tmp_path: Path) -> 
         candidate_set_id="h2h-star-five-family-query-candidates",
         candidate_set_version="0.1.0-preproduction",
         candidate_set_hash=_candidate_set().candidate_set_hash(),
+        sentinel_set_id=_sentinel_set().sentinel_set_id,
+        sentinel_set_version=_sentinel_set().sentinel_set_version,
+        sentinel_set_hash=_sentinel_set().sentinel_set_hash(),
         status=SizingRunStatus.COMPLETED,
         planned_candidate_query_ids=[candidate_id],
         created_at="2026-09-01T12:00:00Z",
+        started_at="2026-09-01T12:00:00Z",
         observations=[observation],
         completed_at="2026-09-01T12:01:00Z",
     )
@@ -215,9 +224,13 @@ def test_sizing_rejects_production_effects_and_incomplete_completion() -> None:
             candidate_set_id="set-1",
             candidate_set_version="v1",
             candidate_set_hash="a" * 64,
+            sentinel_set_id="sentinels",
+            sentinel_set_version="v1",
+            sentinel_set_hash="b" * 64,
             status=SizingRunStatus.COMPLETED,
             planned_candidate_query_ids=["candidate-1", "candidate-2"],
             created_at="2026-09-01T12:00:00Z",
+            started_at="2026-09-01T12:00:00Z",
             observations=[observation],
             completed_at="2026-09-01T12:01:00Z",
         ).validate()
@@ -229,6 +242,9 @@ def test_sizing_rejects_production_effects_and_incomplete_completion() -> None:
             candidate_set_id="set-1",
             candidate_set_version="v1",
             candidate_set_hash="a" * 64,
+            sentinel_set_id="sentinels",
+            sentinel_set_version="v1",
+            sentinel_set_hash="b" * 64,
             status=SizingRunStatus.PLANNED,
             planned_candidate_query_ids=["candidate-1"],
             created_at="2026-09-01T12:00:00Z",
@@ -286,6 +302,11 @@ def test_sentinel_set_is_frozen_and_has_no_gold_semantics(tmp_path: Path) -> Non
                 doi="10.1234/example",
                 source_identifier="neutral-sentinel-001",
                 diagnostic_family_ids=["STAR-QF01-RELATIONAL-VIS"],
+                provenance={
+                    "source_artifact": "examples/source.json",
+                    "source_artifact_hash": "c" * 64,
+                    "source_paper_id": "paper-001",
+                },
             )
         ],
         purpose=SENTINEL_PURPOSE,
@@ -317,6 +338,11 @@ def test_sentinel_set_rejects_unfrozen_or_unknown_family() -> None:
                     sentinel_id="sentinel-1",
                     title="Title",
                     diagnostic_family_ids=["STAR-QF01-RELATIONAL-VIS"],
+                    provenance={
+                        "source_artifact": "examples/source.json",
+                        "source_artifact_hash": "c" * 64,
+                        "source_paper_id": "paper-001",
+                    },
                 )
             ],
         ).validate()
@@ -333,6 +359,11 @@ def test_sentinel_set_rejects_unfrozen_or_unknown_family() -> None:
                     sentinel_id="sentinel-1",
                     title="Title",
                     diagnostic_family_ids=["UNKNOWN"],
+                    provenance={
+                        "source_artifact": "examples/source.json",
+                        "source_artifact_hash": "c" * 64,
+                        "source_paper_id": "paper-001",
+                    },
                 )
             ],
         ).validate()

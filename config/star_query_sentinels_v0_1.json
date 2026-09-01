@@ -1,0 +1,112 @@
+{
+  "schema_version": "1.0.0",
+  "sentinel_set_id": "star-query-sentinels-v0-1",
+  "sentinel_set_version": "0.1.0-pre-sizing",
+  "candidate_set_hash": "4c642ff04c84c1e1534566d789278fdab21af9f75a57332fce04fa3751fe01bc",
+  "frozen_at": "2026-09-01T13:18:46Z",
+  "purpose": "syntax_and_recall_diagnostics_only",
+  "accuracy_interpretation": "prohibited",
+  "recall_interpretation": "prohibited",
+  "representative_sample": false,
+  "contributes_prisma_counts": false,
+  "creates_occurrences": false,
+  "creates_corpus_membership": false,
+  "miss_policy": "diagnosis_only",
+  "mutation_policy": "new_version_and_hash_required",
+  "diagnostic_states": [
+    "INDEXED_AND_MATCHED",
+    "INDEXED_BUT_QUERY_MISSED",
+    "SOURCE_NOT_INDEXED",
+    "IDENTITY_UNRESOLVED",
+    "DIAGNOSTIC_UNSUPPORTED"
+  ],
+  "entries": [
+    {
+      "sentinel_id": "sentinel:biowheel-2017",
+      "title": "Biowheel: interactive visualization and exploration of biomedical data",
+      "diagnostic_family_ids": ["STAR-QF03-INTERACTIVE-SYSTEMS"],
+      "doi": "10.1101/099739",
+      "source_identifier": "biowheel-2017",
+      "provenance": {
+        "source_artifact": "examples/cytocave/foundational_agency/source_graph.json",
+        "source_artifact_hash": "8762ef601fc0b87d5fa95d6c42ff8590e4db842363c03a7cc69ea018fbd5d7a4",
+        "source_paper_id": "biowheel-2017"
+      }
+    },
+    {
+      "sentinel_id": "sentinel:icave-2017",
+      "title": "iCAVE: an open source tool for visualizing biomolecular networks in 3D, stereoscopic 3D and immersive 3D",
+      "diagnostic_family_ids": [
+        "STAR-QF01-RELATIONAL-VIS",
+        "STAR-QF02-ASSISTED-VIS",
+        "STAR-QF03-INTERACTIVE-SYSTEMS",
+        "STAR-QF04-NONDESKTOP-ENV"
+      ],
+      "doi": "10.1093/gigascience/gix054",
+      "source_identifier": "icave-2017",
+      "provenance": {
+        "source_artifact": "examples/cytocave/foundational_agency/source_graph.json",
+        "source_artifact_hash": "8762ef601fc0b87d5fa95d6c42ff8590e4db842363c03a7cc69ea018fbd5d7a4",
+        "source_paper_id": "icave-2017"
+      }
+    },
+    {
+      "sentinel_id": "sentinel:aegis-2018",
+      "title": "Exploratory Gene Ontology Analysis with Interactive Visualization",
+      "diagnostic_family_ids": [
+        "STAR-QF01-RELATIONAL-VIS",
+        "STAR-QF03-INTERACTIVE-SYSTEMS"
+      ],
+      "doi": "10.1101/436741",
+      "source_identifier": "aegis-2018",
+      "provenance": {
+        "source_artifact": "examples/cytocave/foundational_agency/source_graph.json",
+        "source_artifact_hash": "8762ef601fc0b87d5fa95d6c42ff8590e4db842363c03a7cc69ea018fbd5d7a4",
+        "source_paper_id": "aegis-2018"
+      }
+    },
+    {
+      "sentinel_id": "sentinel:dtbia-2025",
+      "title": "DTBIA: An Immersive Visual Analytics System for Brain-Inspired Research",
+      "diagnostic_family_ids": ["STAR-QF04-NONDESKTOP-ENV"],
+      "doi": null,
+      "source_identifier": "dtbia-2025",
+      "provenance": {
+        "source_artifact": "examples/cytocave/foundational_agency/source_graph.json",
+        "source_artifact_hash": "8762ef601fc0b87d5fa95d6c42ff8590e4db842363c03a7cc69ea018fbd5d7a4",
+        "source_paper_id": "dtbia-2025"
+      }
+    },
+    {
+      "sentinel_id": "sentinel:wang-et-al-2025",
+      "title": "Can LLMs Bridge Domain and Visualization? A Case Study on High-Dimension Data Visualization in Single-Cell Transcriptomics",
+      "diagnostic_family_ids": [
+        "STAR-QF02-ASSISTED-VIS",
+        "STAR-QF05-CONVERSATIONAL"
+      ],
+      "doi": "10.1109/TVCG.2025.3633869",
+      "source_identifier": "wang-et-al-2025",
+      "provenance": {
+        "source_artifact": "examples/cytocave/foundational_agency/source_graph.json",
+        "source_artifact_hash": "8762ef601fc0b87d5fa95d6c42ff8590e4db842363c03a7cc69ea018fbd5d7a4",
+        "source_paper_id": "wang-et-al-2025"
+      }
+    },
+    {
+      "sentinel_id": "sentinel:phenoflow-2025",
+      "title": "PhenoFlow: A Human-LLM Driven Visual Analytics System for Exploring Large and Complex Stroke Datasets",
+      "diagnostic_family_ids": [
+        "STAR-QF02-ASSISTED-VIS",
+        "STAR-QF03-INTERACTIVE-SYSTEMS",
+        "STAR-QF05-CONVERSATIONAL"
+      ],
+      "doi": "10.1109/TVCG.2024.3456215",
+      "source_identifier": "phenoflow-2025",
+      "provenance": {
+        "source_artifact": "examples/cytocave/foundational_agency/source_graph.json",
+        "source_artifact_hash": "8762ef601fc0b87d5fa95d6c42ff8590e4db842363c03a7cc69ea018fbd5d7a4",
+        "source_paper_id": "phenoflow-2025"
+      }
+    }
+  ]
+}

@@ -7,13 +7,14 @@ import json
 import re
 from dataclasses import asdict, dataclass, field
 from enum import Enum
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 from h2h_lit.checkpoint import atomic_write
 
 CANDIDATE_SCHEMA_VERSION = "0.1.0"
-SIZING_RUN_SCHEMA_VERSION = "1.0.0"
+SIZING_RUN_SCHEMA_VERSION = "1.1.0"
+LEGACY_SIZING_RUN_SCHEMA_VERSION = "1.0.0"
 SENTINEL_SET_SCHEMA_VERSION = "1.0.0"
 EXPECTED_FAMILIES = (
     "STAR-QF01-RELATIONAL-VIS",
@@ -24,6 +25,9 @@ EXPECTED_FAMILIES = (
 )
 SENTINEL_PURPOSE = "syntax_and_recall_diagnostics_only"
 SENTINEL_ACCURACY_INTERPRETATION = "prohibited"
+SENTINEL_RECALL_INTERPRETATION = "prohibited"
+SENTINEL_MISS_POLICY = "diagnosis_only"
+SENTINEL_MUTATION_POLICY = "new_version_and_hash_required"
 
 _FORBIDDEN_SIZING_KEYS = {
     "corpus_membership",
@@ -75,6 +79,39 @@ class SizingRunStatus(str, Enum):
     RUNNING = "running"
     COMPLETED = "completed"
     INVALID = "invalid"
+
+
+class SizingTransportStatus(str, Enum):
+    PLANNED = "planned"
+    SUCCEEDED = "succeeded"
+    FAILED = "failed"
+    NOT_APPLICABLE = "not_applicable"
+
+
+class SentinelDiagnosticOutcome(str, Enum):
+    INDEXED_AND_MATCHED = "INDEXED_AND_MATCHED"
+    INDEXED_BUT_QUERY_MISSED = "INDEXED_BUT_QUERY_MISSED"
+    SOURCE_NOT_INDEXED = "SOURCE_NOT_INDEXED"
+    IDENTITY_UNRESOLVED = "IDENTITY_UNRESOLVED"
+    DIAGNOSTIC_UNSUPPORTED = "DIAGNOSTIC_UNSUPPORTED"
+
+
+class SentinelIdentityState(str, Enum):
+    RESOLVED = "resolved"
+    UNRESOLVED = "unresolved"
+
+
+class SentinelSourceIndexingState(str, Enum):
+    INDEXED = "indexed"
+    NOT_INDEXED = "not_indexed"
+    UNKNOWN = "unknown"
+
+
+class SentinelCandidateMatchState(str, Enum):
+    MATCHED = "matched"
+    MISSED = "missed"
+    UNTESTED = "untested"
+    UNSUPPORTED = "unsupported"
 
 
 @dataclass(frozen=True, slots=True)
@@ -248,6 +285,105 @@ class CandidateSet:
 
 
 @dataclass(frozen=True, slots=True)
+class SizingAttempt:
+    attempt_number: int
+    started_at: str
+    completed_at: str | None
+    request: dict[str, Any]
+    request_hash: str
+    transport_status: SizingTransportStatus
+    response_status: str | int | None = None
+    retry_of_attempt_number: int | None = None
+    retry_reason: str | None = None
+    response_hash: str | None = None
+    credential_reference: str | None = None
+    warnings: list[str] = field(default_factory=list)
+    errors: list[str] = field(default_factory=list)
+
+    def validate(self) -> None:
+        if self.attempt_number < 1:
+            raise ValueError("sizing attempt numbers must be positive")
+        if self.attempt_number == 1 and self.retry_of_attempt_number is not None:
+            raise ValueError("the first sizing attempt cannot retry an earlier attempt")
+        if self.attempt_number > 1:
+            if self.retry_of_attempt_number != self.attempt_number - 1:
+                raise ValueError("sizing retry lineage must reference the preceding attempt")
+            if not self.retry_reason:
+                raise ValueError("retried sizing attempts require a retry reason")
+        if self.transport_status is SizingTransportStatus.PLANNED and self.completed_at:
+            raise ValueError("planned sizing attempts cannot have completed_at")
+        _validate_request(self.request, self.request_hash)
+        _validate_hash(self.response_hash, "response hash")
+        _validate_credential_reference(self.credential_reference)
+
+    def to_dict(self) -> dict[str, Any]:
+        self.validate()
+        return _serialize(self)
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> SizingAttempt:
+        return cls(
+            attempt_number=int(data["attempt_number"]),
+            started_at=str(data["started_at"]),
+            completed_at=data.get("completed_at"),
+            request=dict(data["request"]),
+            request_hash=str(data["request_hash"]),
+            transport_status=SizingTransportStatus(data["transport_status"]),
+            response_status=data.get("response_status"),
+            retry_of_attempt_number=data.get("retry_of_attempt_number"),
+            retry_reason=data.get("retry_reason"),
+            response_hash=data.get("response_hash"),
+            credential_reference=data.get("credential_reference"),
+            warnings=list(data.get("warnings", [])),
+            errors=list(data.get("errors", [])),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class AcmOperatorEvidence:
+    operator_id: str
+    observed_at: str
+    ui_rendered_query: str
+    ui_reported_count: int
+    query_url: str | None = None
+    artifact_path: str | None = None
+    artifact_hash: str | None = None
+    institutional_access_tier: str | None = None
+
+    def validate(self) -> None:
+        if not self.operator_id.strip() or not self.observed_at.strip():
+            raise ValueError("ACM evidence requires operator ID and UTC timestamp")
+        if not self.ui_rendered_query.strip():
+            raise ValueError("ACM evidence requires the UI-rendered query")
+        if self.ui_reported_count < 0:
+            raise ValueError("ACM UI-reported counts cannot be negative")
+        if self.artifact_path is not None:
+            _validate_relative_path(self.artifact_path)
+            if self.artifact_hash is None:
+                raise ValueError("ACM evidence artifacts require a SHA-256 hash")
+        _validate_hash(self.artifact_hash, "ACM artifact hash")
+        if self.query_url:
+            _reject_secrets({"query_url": self.query_url})
+
+    def to_dict(self) -> dict[str, Any]:
+        self.validate()
+        return _serialize(self)
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> AcmOperatorEvidence:
+        return cls(
+            operator_id=str(data["operator_id"]),
+            observed_at=str(data["observed_at"]),
+            ui_rendered_query=str(data["ui_rendered_query"]),
+            ui_reported_count=int(data["ui_reported_count"]),
+            query_url=data.get("query_url"),
+            artifact_path=data.get("artifact_path"),
+            artifact_hash=data.get("artifact_hash"),
+            institutional_access_tier=data.get("institutional_access_tier"),
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class SizingObservation:
     observation_id: str
     candidate_query_id: str
@@ -262,8 +398,13 @@ class SizingObservation:
     hard_window: int | None
     window_status: SizingWindowStatus
     syntax_status: SizingSyntaxStatus
+    transport_status: SizingTransportStatus = SizingTransportStatus.PLANNED
+    response_status: str | int | None = None
+    credential_reference: str | None = None
     source_query_translation: str | None = None
     warnings: list[str] = field(default_factory=list)
+    attempts: list[SizingAttempt] = field(default_factory=list)
+    acm_operator_evidence: AcmOperatorEvidence | None = None
 
     def validate(self) -> None:
         if self.reported_count is not None and self.reported_count < 0:
@@ -281,10 +422,25 @@ class SizingObservation:
             raise ValueError(
                 f"window status {self.window_status.value} does not match count/window evidence"
             )
-        _reject_forbidden_keys(self.request, _FORBIDDEN_SIZING_KEYS)
-        _reject_secrets(self.request)
-        if _sha256(_canonical_json(self.request)) != self.request_hash:
-            raise ValueError("sizing request hash does not match canonical request")
+        _validate_request(self.request, self.request_hash)
+        _validate_hash(self.response_hash, "response hash")
+        _validate_credential_reference(self.credential_reference)
+        for expected, attempt in enumerate(self.attempts, start=1):
+            attempt.validate()
+            if attempt.attempt_number != expected:
+                raise ValueError("sizing attempts must be contiguous and ordered")
+            if attempt.credential_reference != self.credential_reference:
+                raise ValueError("attempt credential reference must match its observation")
+        if self.attempts:
+            final = self.attempts[-1]
+            if final.transport_status is not self.transport_status:
+                raise ValueError("observation transport status must match its final attempt")
+            if final.response_hash != self.response_hash:
+                raise ValueError("observation response hash must match its final attempt")
+        if self.acm_operator_evidence is not None:
+            if self.source != "ACMDigitalLibrary":
+                raise ValueError("ACM operator evidence is only valid for ACM observations")
+            self.acm_operator_evidence.validate()
 
     def to_dict(self) -> dict[str, Any]:
         self.validate()
@@ -306,8 +462,110 @@ class SizingObservation:
             hard_window=data.get("hard_window"),
             window_status=SizingWindowStatus(data["window_status"]),
             syntax_status=SizingSyntaxStatus(data["syntax_status"]),
+            transport_status=SizingTransportStatus(
+                data.get("transport_status", SizingTransportStatus.PLANNED.value)
+            ),
+            response_status=data.get("response_status"),
+            credential_reference=data.get("credential_reference"),
             source_query_translation=data.get("source_query_translation"),
             warnings=list(data.get("warnings", [])),
+            attempts=[SizingAttempt.from_dict(item) for item in data.get("attempts", [])],
+            acm_operator_evidence=(
+                AcmOperatorEvidence.from_dict(data["acm_operator_evidence"])
+                if data.get("acm_operator_evidence") is not None
+                else None
+            ),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class SentinelDiagnostic:
+    sentinel_id: str
+    source: str
+    candidate_query_id: str
+    outcome: SentinelDiagnosticOutcome
+    identity_state: SentinelIdentityState
+    source_indexing_state: SentinelSourceIndexingState
+    candidate_match_state: SentinelCandidateMatchState
+    request: dict[str, Any] | None = None
+    request_hash: str | None = None
+    response_hash: str | None = None
+    identifier_results: list[str] = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)
+    errors: list[str] = field(default_factory=list)
+
+    def validate(self) -> None:
+        expected = {
+            SentinelDiagnosticOutcome.INDEXED_AND_MATCHED: (
+                SentinelIdentityState.RESOLVED,
+                SentinelSourceIndexingState.INDEXED,
+                SentinelCandidateMatchState.MATCHED,
+            ),
+            SentinelDiagnosticOutcome.INDEXED_BUT_QUERY_MISSED: (
+                SentinelIdentityState.RESOLVED,
+                SentinelSourceIndexingState.INDEXED,
+                SentinelCandidateMatchState.MISSED,
+            ),
+            SentinelDiagnosticOutcome.SOURCE_NOT_INDEXED: (
+                SentinelIdentityState.RESOLVED,
+                SentinelSourceIndexingState.NOT_INDEXED,
+                SentinelCandidateMatchState.UNTESTED,
+            ),
+            SentinelDiagnosticOutcome.IDENTITY_UNRESOLVED: (
+                SentinelIdentityState.UNRESOLVED,
+                SentinelSourceIndexingState.UNKNOWN,
+                SentinelCandidateMatchState.UNTESTED,
+            ),
+            SentinelDiagnosticOutcome.DIAGNOSTIC_UNSUPPORTED: (
+                SentinelIdentityState.RESOLVED,
+                SentinelSourceIndexingState.UNKNOWN,
+                SentinelCandidateMatchState.UNSUPPORTED,
+            ),
+        }[self.outcome]
+        actual = (
+            self.identity_state,
+            self.source_indexing_state,
+            self.candidate_match_state,
+        )
+        if actual != expected:
+            raise ValueError(f"sentinel diagnostic states do not match outcome {self.outcome.value}")
+        if self.request is None and self.request_hash is not None:
+            raise ValueError("sentinel request hash requires a request")
+        if self.request is not None:
+            if self.request_hash is None:
+                raise ValueError("sentinel diagnostic requests require a request hash")
+            _validate_request(self.request, self.request_hash)
+        _validate_hash(self.response_hash, "sentinel response hash")
+        if self.outcome is SentinelDiagnosticOutcome.INDEXED_AND_MATCHED:
+            if not self.identifier_results:
+                raise ValueError("matched sentinel diagnostics require identifier-only results")
+        elif self.identifier_results:
+            raise ValueError("unmatched sentinel diagnostics cannot preserve identifier results")
+
+    def to_dict(self) -> dict[str, Any]:
+        self.validate()
+        return _serialize(self)
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> SentinelDiagnostic:
+        return cls(
+            sentinel_id=str(data["sentinel_id"]),
+            source=str(data["source"]),
+            candidate_query_id=str(data["candidate_query_id"]),
+            outcome=SentinelDiagnosticOutcome(data["outcome"]),
+            identity_state=SentinelIdentityState(data["identity_state"]),
+            source_indexing_state=SentinelSourceIndexingState(
+                data["source_indexing_state"]
+            ),
+            candidate_match_state=SentinelCandidateMatchState(
+                data["candidate_match_state"]
+            ),
+            request=dict(data["request"]) if data.get("request") is not None else None,
+            request_hash=data.get("request_hash"),
+            response_hash=data.get("response_hash"),
+            identifier_results=list(data.get("identifier_results", [])),
+            warnings=list(data.get("warnings", [])),
+            errors=list(data.get("errors", [])),
         )
 
 
@@ -321,17 +579,36 @@ class QuerySizingRun:
     status: SizingRunStatus
     planned_candidate_query_ids: list[str]
     created_at: str
+    sentinel_set_id: str | None = None
+    sentinel_set_version: str | None = None
+    sentinel_set_hash: str | None = None
+    started_at: str | None = None
     observations: list[SizingObservation] = field(default_factory=list)
+    sentinel_diagnostics: list[SentinelDiagnostic] = field(default_factory=list)
     completed_at: str | None = None
     purpose: str = "count_and_syntax_sizing_only"
     creates_production_occurrences: bool = False
     contributes_prisma_counts: bool = False
     establishes_retrieval_cutoff: bool = False
     derives_e6: bool = False
+    creates_review_dataset: bool = False
+    creates_retrieval_run: bool = False
+    creates_corpus_membership: bool = False
+    runs_screening: bool = False
+    supports_partitioning: bool = False
 
     def validate(self) -> None:
-        if self.schema_version != SIZING_RUN_SCHEMA_VERSION:
+        if self.schema_version not in {
+            LEGACY_SIZING_RUN_SCHEMA_VERSION,
+            SIZING_RUN_SCHEMA_VERSION,
+        }:
             raise ValueError("unsupported query-sizing schema version")
+        if self.schema_version == SIZING_RUN_SCHEMA_VERSION:
+            if not all(
+                (self.sentinel_set_id, self.sentinel_set_version, self.sentinel_set_hash)
+            ):
+                raise ValueError("current query-sizing runs require sentinel-set provenance")
+            _validate_hash(self.sentinel_set_hash, "sentinel-set hash")
         if self.purpose != "count_and_syntax_sizing_only":
             raise ValueError("query sizing has an invalid purpose")
         if any(
@@ -340,6 +617,11 @@ class QuerySizingRun:
                 self.contributes_prisma_counts,
                 self.establishes_retrieval_cutoff,
                 self.derives_e6,
+                self.creates_review_dataset,
+                self.creates_retrieval_run,
+                self.creates_corpus_membership,
+                self.runs_screening,
+                self.supports_partitioning,
             )
         ):
             raise ValueError("query sizing cannot affect production review state")
@@ -356,6 +638,25 @@ class QuerySizingRun:
             raise ValueError(f"observations reference unplanned candidate queries: {sorted(unknown)}")
         for observation in self.observations:
             observation.validate()
+        known_sentinels = set()
+        diagnostic_keys = []
+        for diagnostic in self.sentinel_diagnostics:
+            diagnostic.validate()
+            diagnostic_keys.append(
+                (diagnostic.sentinel_id, diagnostic.source, diagnostic.candidate_query_id)
+            )
+            known_sentinels.add(diagnostic.sentinel_id)
+            if diagnostic.candidate_query_id not in self.planned_candidate_query_ids:
+                raise ValueError("sentinel diagnostic references an unplanned candidate query")
+        if len(diagnostic_keys) != len(set(diagnostic_keys)):
+            raise ValueError("sentinel diagnostics must be unique per sentinel/source/query")
+        if known_sentinels and not self.sentinel_set_id:
+            raise ValueError("sentinel diagnostics require run-level sentinel-set provenance")
+        if (
+            self.status in {SizingRunStatus.RUNNING, SizingRunStatus.COMPLETED}
+            and not self.started_at
+        ):
+            raise ValueError("running/completed sizing runs require started_at")
         if self.status is SizingRunStatus.COMPLETED:
             if set(by_candidate) != set(self.planned_candidate_query_ids):
                 raise ValueError("completed sizing run does not account for every planned query")
@@ -381,16 +682,29 @@ class QuerySizingRun:
             candidate_set_id=str(data["candidate_set_id"]),
             candidate_set_version=str(data["candidate_set_version"]),
             candidate_set_hash=str(data["candidate_set_hash"]),
+            sentinel_set_id=data.get("sentinel_set_id"),
+            sentinel_set_version=data.get("sentinel_set_version"),
+            sentinel_set_hash=data.get("sentinel_set_hash"),
             status=SizingRunStatus(data["status"]),
             planned_candidate_query_ids=list(data["planned_candidate_query_ids"]),
             created_at=str(data["created_at"]),
+            started_at=data.get("started_at"),
             observations=[SizingObservation.from_dict(item) for item in data["observations"]],
+            sentinel_diagnostics=[
+                SentinelDiagnostic.from_dict(item)
+                for item in data.get("sentinel_diagnostics", [])
+            ],
             completed_at=data.get("completed_at"),
             purpose=str(data.get("purpose", "count_and_syntax_sizing_only")),
             creates_production_occurrences=bool(data.get("creates_production_occurrences", False)),
             contributes_prisma_counts=bool(data.get("contributes_prisma_counts", False)),
             establishes_retrieval_cutoff=bool(data.get("establishes_retrieval_cutoff", False)),
             derives_e6=bool(data.get("derives_e6", False)),
+            creates_review_dataset=bool(data.get("creates_review_dataset", False)),
+            creates_retrieval_run=bool(data.get("creates_retrieval_run", False)),
+            creates_corpus_membership=bool(data.get("creates_corpus_membership", False)),
+            runs_screening=bool(data.get("runs_screening", False)),
+            supports_partitioning=bool(data.get("supports_partitioning", False)),
         )
 
     @classmethod
@@ -405,6 +719,7 @@ class SentinelPaper:
     diagnostic_family_ids: list[str]
     doi: str | None = None
     source_identifier: str | None = None
+    provenance: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(slots=True)
@@ -417,6 +732,16 @@ class SentinelPaperSet:
     entries: list[SentinelPaper]
     purpose: str = SENTINEL_PURPOSE
     accuracy_interpretation: str = SENTINEL_ACCURACY_INTERPRETATION
+    recall_interpretation: str = SENTINEL_RECALL_INTERPRETATION
+    representative_sample: bool = False
+    contributes_prisma_counts: bool = False
+    creates_occurrences: bool = False
+    creates_corpus_membership: bool = False
+    miss_policy: str = SENTINEL_MISS_POLICY
+    mutation_policy: str = SENTINEL_MUTATION_POLICY
+    diagnostic_states: list[str] = field(
+        default_factory=lambda: [item.value for item in SentinelDiagnosticOutcome]
+    )
 
     def validate(self) -> None:
         if self.schema_version != SENTINEL_SET_SCHEMA_VERSION:
@@ -425,6 +750,23 @@ class SentinelPaperSet:
             raise ValueError("sentinels may only support syntax/recall diagnostics")
         if self.accuracy_interpretation != SENTINEL_ACCURACY_INTERPRETATION:
             raise ValueError("sentinel sets must prohibit gold-label/accuracy interpretation")
+        if self.recall_interpretation != SENTINEL_RECALL_INTERPRETATION:
+            raise ValueError("sentinel sets must prohibit recall estimation")
+        if any(
+            (
+                self.representative_sample,
+                self.contributes_prisma_counts,
+                self.creates_occurrences,
+                self.creates_corpus_membership,
+            )
+        ):
+            raise ValueError("sentinel sets cannot affect or represent the review corpus")
+        if self.miss_policy != SENTINEL_MISS_POLICY:
+            raise ValueError("sentinel misses must trigger diagnosis only")
+        if self.mutation_policy != SENTINEL_MUTATION_POLICY:
+            raise ValueError("sentinel mutations require a new version and hash")
+        if self.diagnostic_states != [item.value for item in SentinelDiagnosticOutcome]:
+            raise ValueError("sentinel diagnostic states must use the frozen vocabulary")
         if not self.frozen_at:
             raise ValueError("sentinel set must be frozen prospectively before sizing")
         if not self.entries:
@@ -437,6 +779,11 @@ class SentinelPaperSet:
                 raise ValueError("sentinels require title and diagnostic family IDs")
             if not set(entry.diagnostic_family_ids).issubset(EXPECTED_FAMILIES):
                 raise ValueError("sentinel references an unknown query family")
+            provenance = entry.provenance
+            if not provenance.get("source_artifact") or not provenance.get("source_paper_id"):
+                raise ValueError("sentinels require versioned foundational provenance")
+            _validate_relative_path(str(provenance["source_artifact"]))
+            _validate_hash(provenance.get("source_artifact_hash"), "source artifact hash")
         _reject_forbidden_keys(_serialize(self), _FORBIDDEN_SENTINEL_KEYS)
 
     def to_dict(self) -> dict[str, Any]:
@@ -462,6 +809,21 @@ class SentinelPaperSet:
             purpose=str(data.get("purpose", SENTINEL_PURPOSE)),
             accuracy_interpretation=str(
                 data.get("accuracy_interpretation", SENTINEL_ACCURACY_INTERPRETATION)
+            ),
+            recall_interpretation=str(
+                data.get("recall_interpretation", SENTINEL_RECALL_INTERPRETATION)
+            ),
+            representative_sample=bool(data.get("representative_sample", False)),
+            contributes_prisma_counts=bool(data.get("contributes_prisma_counts", False)),
+            creates_occurrences=bool(data.get("creates_occurrences", False)),
+            creates_corpus_membership=bool(data.get("creates_corpus_membership", False)),
+            miss_policy=str(data.get("miss_policy", SENTINEL_MISS_POLICY)),
+            mutation_policy=str(data.get("mutation_policy", SENTINEL_MUTATION_POLICY)),
+            diagnostic_states=list(
+                data.get(
+                    "diagnostic_states",
+                    [item.value for item in SentinelDiagnosticOutcome],
+                )
             ),
         )
 
@@ -496,10 +858,49 @@ def load_sentinel_set(path: str | Path) -> SentinelPaperSet:
     return sentinel_set
 
 
+def validate_sentinel_revision(
+    previous: SentinelPaperSet,
+    current: SentinelPaperSet,
+) -> None:
+    previous.validate()
+    current.validate()
+    if previous.to_dict()["entries"] != current.to_dict()["entries"]:
+        if previous.sentinel_set_version == current.sentinel_set_version:
+            raise ValueError("sentinel membership/expectation changes require a new version")
+        if previous.sentinel_set_hash() == current.sentinel_set_hash():
+            raise ValueError("sentinel revisions require a new hash")
+
+
 def sizing_request_hash(request: dict[str, Any]) -> str:
+    _validate_request(request)
+    return _sha256(_canonical_json(request))
+
+
+def _validate_request(request: dict[str, Any], expected_hash: str | None = None) -> None:
     _reject_forbidden_keys(request, _FORBIDDEN_SIZING_KEYS)
     _reject_secrets(request)
-    return _sha256(_canonical_json(request))
+    if expected_hash is not None and _sha256(_canonical_json(request)) != expected_hash:
+        raise ValueError("sizing request hash does not match canonical request")
+
+
+def _validate_hash(value: str | None, label: str) -> None:
+    if value is not None and re.fullmatch(r"[0-9a-fA-F]{64}", value) is None:
+        raise ValueError(f"{label} must be a SHA-256 hexadecimal digest")
+
+
+def _validate_credential_reference(value: str | None) -> None:
+    if value is None:
+        return
+    if re.fullmatch(r"[A-Z][A-Z0-9_]*", value) is None:
+        raise ValueError("credential references must be opaque uppercase names")
+
+
+def _validate_relative_path(value: str) -> None:
+    if not value or "\\" in value:
+        raise ValueError("artifact paths must be non-empty POSIX relative paths")
+    path = PurePosixPath(value)
+    if path.is_absolute() or ".." in path.parts or value == ".":
+        raise ValueError("artifact paths must be relative and may not traverse parents")
 
 
 def _expansions(payload: dict[str, Any]) -> dict[str, str]:
@@ -703,3 +1104,9 @@ def _reject_secrets(value: Any) -> None:
     elif isinstance(value, list):
         for item in value:
             _reject_secrets(item)
+    elif isinstance(value, str) and re.search(
+        r"(?:api_?key|apikey|authorization|access_token|token)=[^&\s<]+",
+        value,
+        flags=re.IGNORECASE,
+    ):
+        raise ValueError("sizing provenance contains a credential value")
