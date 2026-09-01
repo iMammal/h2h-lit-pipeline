@@ -18,11 +18,15 @@ from h2h_lit.checkpoint import atomic_write
 from h2h_lit.http import HttpClient, HttpResponse, RequestsHttpClient
 from h2h_lit.pagination import RateLimiter, RetryPolicy
 from h2h_lit.query_development import (
+    CANDIDATE_V2_SCHEMA_VERSION,
     SIZING_RUN_SCHEMA_VERSION,
+    SIZING_RUN_V2_SCHEMA_VERSION,
     QuerySizingRun,
     SentinelCandidateMatchState,
     SentinelDiagnostic,
     SentinelDiagnosticOutcome,
+    SentinelIdentityResolution,
+    SentinelIdentityResolutionStatus,
     SentinelIdentityState,
     SentinelSourceIndexingState,
     SizingAttempt,
@@ -66,6 +70,8 @@ class ValidatedSizingPlan:
     plan_hash: str
     candidate_specs: tuple[dict[str, Any], ...]
     diagnostic_specs: tuple[dict[str, Any], ...]
+    identity_specs: tuple[dict[str, Any], ...] = ()
+    semantic_control_specs: tuple[dict[str, Any], ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -75,6 +81,7 @@ class ParsedEnvelope:
     syntax_status: SizingSyntaxStatus
     translation: str | None = None
     warnings: tuple[str, ...] = ()
+    source_messages: dict[str, dict[str, list[str]]] | None = None
     gate_name: str | None = None
     gate_status: SizingGateStatus = SizingGateStatus.NOT_APPLICABLE
 
@@ -112,12 +119,22 @@ def load_validated_sizing_plan(
     mismatches = [key for key, value in expected.items() if run.get(key) != value]
     if mismatches:
         raise SizingPlanError(f"dry-run plan provenance mismatch: {', '.join(mismatches)}")
+    is_v2 = candidate_set.payload["schema_version"] == CANDIDATE_V2_SCHEMA_VERSION
     if sentinel_set.candidate_set_hash != candidate_set.candidate_set_hash():
-        raise SizingPlanError("sentinel set references a different candidate set")
+        compatibility = candidate_set.payload.get("sentinel_compatibility", {})
+        if not is_v2 or (
+            compatibility.get("sentinel_set_hash") != sentinel_set.sentinel_set_hash()
+            or compatibility.get("original_candidate_set_hash")
+            != sentinel_set.candidate_set_hash
+        ):
+            raise SizingPlanError("sentinel set references a different candidate set")
 
     specs = tuple(payload.get("candidate_specifications", []))
-    if len(specs) != EXPECTED_CANDIDATE_COUNT:
-        raise SizingPlanError("approved dry-run plan must contain exactly 62 candidates")
+    expected_candidate_count = 54 if is_v2 else EXPECTED_CANDIDATE_COUNT
+    if len(specs) != expected_candidate_count:
+        raise SizingPlanError(
+            f"approved dry-run plan must contain exactly {expected_candidate_count} candidates"
+        )
     identifiers = [str(item.get("candidate_query_id")) for item in specs]
     if identifiers != list(run.get("planned_candidate_query_ids", [])):
         raise SizingPlanError("candidate plan order does not match run provenance")
@@ -138,11 +155,34 @@ def load_validated_sizing_plan(
     for item in diagnostics:
         if item.get("candidate_query_id") not in set(identifiers):
             raise SizingPlanError("sentinel diagnostic references an unplanned candidate")
-        for key in ("identity_request", "match_request"):
+        request_keys = ("match_request",) if is_v2 else ("identity_request", "match_request")
+        for key in request_keys:
             request = item[key]
             if sizing_request_hash(request) != item.get(f"{key}_hash"):
                 raise SizingPlanError(f"sentinel {key} hash mismatch")
-    return ValidatedSizingPlan(payload, actual, specs, diagnostics)
+    identity_specs = tuple(payload.get("sentinel_identity_specifications", []))
+    semantic_control_specs = tuple(payload.get("semantic_control_specifications", []))
+    if is_v2:
+        if len(identity_specs) != 42:
+            raise SizingPlanError("v0.2 requires 42 source-by-sentinel identity specifications")
+        identity_ids = {item["identity_resolution_id"] for item in identity_specs}
+        for item in identity_specs:
+            if sizing_request_hash(item["request"]) != item.get("request_hash"):
+                raise SizingPlanError("sentinel identity request hash mismatch")
+        if any(item.get("identity_resolution_id") not in identity_ids for item in diagnostics):
+            raise SizingPlanError("candidate diagnostic lacks a frozen identity resolution")
+        if len(semantic_control_specs) != 6:
+            raise SizingPlanError("v0.2 requires six Semantic Scholar semantic controls")
+        if any(item.get("mode") != "bulk" for item in semantic_control_specs):
+            raise SizingPlanError("Semantic Scholar controls cannot switch modes")
+    return ValidatedSizingPlan(
+        payload,
+        actual,
+        specs,
+        diagnostics,
+        identity_specs,
+        semantic_control_specs,
+    )
 
 
 class LiveSizingExecutor:
@@ -246,7 +286,11 @@ class LiveSizingExecutor:
 
         observations = [_fresh_observation(spec, self.timestamp()) for spec in plan.candidate_specs]
         run = QuerySizingRun(
-            schema_version=SIZING_RUN_SCHEMA_VERSION,
+            schema_version=(
+                SIZING_RUN_V2_SCHEMA_VERSION
+                if plan.identity_specs
+                else SIZING_RUN_SCHEMA_VERSION
+            ),
             sizing_run_id=plan_run["sizing_run_id"],
             candidate_set_id=plan_run["candidate_set_id"],
             candidate_set_version=plan_run["candidate_set_version"],
@@ -361,7 +405,11 @@ class LiveSizingExecutor:
                 )
 
             try:
-                envelope = _parse_envelope(observation.source, response)
+                envelope = _parse_envelope(
+                    observation.source,
+                    response,
+                    parser_contract=str(spec.get("parser_contract", "legacy_v0_1")),
+                )
                 if observation.source == "CrossRef" and envelope.count is None:
                     fallback = request.get("fallback")
                     if fallback is not None:
@@ -394,7 +442,11 @@ class LiveSizingExecutor:
                                 response_hash,
                                 attempt_request=fallback,
                             )
-                        envelope = _parse_envelope(observation.source, fallback_response)
+                        envelope = _parse_envelope(
+                            observation.source,
+                            fallback_response,
+                            parser_contract=str(spec.get("parser_contract", "legacy_v0_1")),
+                        )
                         status = int(fallback_response.status_code)
             except Exception as exc:  # noqa: BLE001 - malformed source envelopes are terminal
                 return _parse_failure(
@@ -459,6 +511,11 @@ class LiveSizingExecutor:
         credentials: Mapping[str, str],
         output: Path,
     ) -> list[SentinelDiagnostic]:
+        identity_by_id: dict[str, SentinelIdentityResolution] = {}
+        if plan.identity_specs:
+            identity_by_id = self._execute_identity_resolutions(
+                plan, run, credentials, output
+            )
         completed = {
             (item.sentinel_id, item.source, item.candidate_query_id): item
             for item in run.sentinel_diagnostics
@@ -467,11 +524,284 @@ class LiveSizingExecutor:
             key = (spec["sentinel_id"], spec["source"], spec["candidate_query_id"])
             if key in completed:
                 continue
-            diagnostic = self._execute_diagnostic(spec, credentials)
+            if plan.identity_specs:
+                resolution = identity_by_id[spec["identity_resolution_id"]]
+                diagnostic = self._execute_match_diagnostic(
+                    spec, resolution, credentials
+                )
+            else:
+                diagnostic = self._execute_diagnostic(spec, credentials)
             completed[key] = diagnostic
             run.sentinel_diagnostics = list(completed.values())
             save_sizing_run(output, run)
         return list(completed.values())
+
+    def _execute_identity_resolutions(
+        self,
+        plan: ValidatedSizingPlan,
+        run: QuerySizingRun,
+        credentials: Mapping[str, str],
+        output: Path,
+    ) -> dict[str, SentinelIdentityResolution]:
+        completed = {
+            item.resolution_id: item for item in run.sentinel_identity_resolutions
+        }
+        for spec in plan.identity_specs:
+            resolution_id = spec["identity_resolution_id"]
+            if resolution_id in completed:
+                continue
+            resolution = self._execute_identity_resolution(spec, credentials)
+            completed[resolution_id] = resolution
+            run.sentinel_identity_resolutions = list(completed.values())
+            save_sizing_run(output, run)
+        return completed
+
+    def _execute_identity_resolution(
+        self,
+        spec: dict[str, Any],
+        credentials: Mapping[str, str],
+    ) -> SentinelIdentityResolution:
+        common = {
+            "resolution_id": spec["identity_resolution_id"],
+            "sentinel_id": spec["sentinel_id"],
+            "source": spec["source"],
+            "request": spec["request"],
+            "request_hash": spec["request_hash"],
+        }
+        if spec.get("execution_status") == "identity_unresolved":
+            return SentinelIdentityResolution(
+                **common,
+                status=SentinelIdentityResolutionStatus.IDENTITY_UNRESOLVED,
+                warnings=["no stable DOI/native identifier was frozen for this sentinel"],
+            )
+        if spec["source"] == MANUAL_SOURCE:
+            return SentinelIdentityResolution(
+                **common,
+                status=SentinelIdentityResolutionStatus.DIAGNOSTIC_UNSUPPORTED,
+                warnings=["ACM identity diagnostics require human execution"],
+            )
+        credential_reference = spec["request"].get("credential_reference")
+        if credential_reference and not credentials.get(credential_reference):
+            return SentinelIdentityResolution(
+                **common,
+                status=SentinelIdentityResolutionStatus.BLOCKED_CREDENTIAL,
+                warnings=[f"credential required: {credential_reference}"],
+            )
+
+        attempts: list[SizingAttempt] = []
+        for attempt_number in range(1, self.retry_policy.max_attempts + 1):
+            started = self.timestamp()
+            retry_reason = (
+                attempts[-1].errors[-1] if attempts and attempts[-1].errors else None
+            )
+            try:
+                self.rate_limiter.wait(spec["source"])
+                response = self._send(spec["request"], spec["source"], credentials)
+            except Exception as exc:  # noqa: BLE001
+                error = f"transport_error:{type(exc).__name__}"
+                attempts.append(
+                    SizingAttempt(
+                        attempt_number=attempt_number,
+                        started_at=started,
+                        completed_at=self.timestamp(),
+                        request=spec["request"],
+                        request_hash=spec["request_hash"],
+                        transport_status=SizingTransportStatus.FAILED,
+                        retry_of_attempt_number=(attempt_number - 1 if attempt_number > 1 else None),
+                        retry_reason=retry_reason,
+                        credential_reference=credential_reference,
+                        errors=[error],
+                    )
+                )
+                if attempt_number < self.retry_policy.max_attempts:
+                    self.sleep(self.retry_policy.delay(attempt_number))
+                    continue
+                return SentinelIdentityResolution(
+                    **common,
+                    status=SentinelIdentityResolutionStatus.TRANSPORT_FAILURE,
+                    attempts=attempts,
+                    errors=[error],
+                )
+            response_hash = hashlib.sha256(bytes(response.content)).hexdigest()
+            status_code = int(response.status_code)
+            if status_code in self.retry_policy.retry_statuses:
+                error = f"retryable_http_status:{status_code}"
+                attempts.append(
+                    SizingAttempt(
+                        attempt_number=attempt_number,
+                        started_at=started,
+                        completed_at=self.timestamp(),
+                        request=spec["request"],
+                        request_hash=spec["request_hash"],
+                        transport_status=SizingTransportStatus.FAILED,
+                        response_status=status_code,
+                        retry_of_attempt_number=(attempt_number - 1 if attempt_number > 1 else None),
+                        retry_reason=retry_reason,
+                        response_hash=response_hash,
+                        credential_reference=credential_reference,
+                        errors=[error],
+                    )
+                )
+                if attempt_number < self.retry_policy.max_attempts:
+                    self.sleep(
+                        self.retry_policy.delay(
+                            attempt_number, response.headers.get("Retry-After")
+                        )
+                    )
+                    continue
+                return SentinelIdentityResolution(
+                    **common,
+                    status=SentinelIdentityResolutionStatus.TRANSPORT_FAILURE,
+                    response_hash=response_hash,
+                    attempts=attempts,
+                    errors=[error],
+                )
+            if not 200 <= status_code < 300:
+                error = f"terminal_http_status:{status_code}"
+                attempts.append(
+                    SizingAttempt(
+                        attempt_number=attempt_number,
+                        started_at=started,
+                        completed_at=self.timestamp(),
+                        request=spec["request"],
+                        request_hash=spec["request_hash"],
+                        transport_status=SizingTransportStatus.FAILED,
+                        response_status=status_code,
+                        retry_of_attempt_number=(attempt_number - 1 if attempt_number > 1 else None),
+                        retry_reason=retry_reason,
+                        response_hash=response_hash,
+                        credential_reference=credential_reference,
+                        errors=[error],
+                    )
+                )
+                return SentinelIdentityResolution(
+                    **common,
+                    status=SentinelIdentityResolutionStatus.TRANSPORT_FAILURE,
+                    response_hash=response_hash,
+                    attempts=attempts,
+                    errors=[error],
+                )
+            try:
+                identifiers = sorted(set(_parse_identifiers(spec["source"], response)))
+            except Exception as exc:  # noqa: BLE001
+                error = f"identity_parser_error:{type(exc).__name__}"
+                attempts.append(
+                    SizingAttempt(
+                        attempt_number=attempt_number,
+                        started_at=started,
+                        completed_at=self.timestamp(),
+                        request=spec["request"],
+                        request_hash=spec["request_hash"],
+                        transport_status=SizingTransportStatus.FAILED,
+                        response_status=status_code,
+                        retry_of_attempt_number=(attempt_number - 1 if attempt_number > 1 else None),
+                        retry_reason=retry_reason,
+                        response_hash=response_hash,
+                        credential_reference=credential_reference,
+                        errors=[error],
+                    )
+                )
+                return SentinelIdentityResolution(
+                    **common,
+                    status=SentinelIdentityResolutionStatus.PARSER_FAILURE,
+                    response_hash=response_hash,
+                    attempts=attempts,
+                    errors=[error],
+                )
+            attempts.append(
+                SizingAttempt(
+                    attempt_number=attempt_number,
+                    started_at=started,
+                    completed_at=self.timestamp(),
+                    request=spec["request"],
+                    request_hash=spec["request_hash"],
+                    transport_status=SizingTransportStatus.SUCCEEDED,
+                    response_status=status_code,
+                    retry_of_attempt_number=(attempt_number - 1 if attempt_number > 1 else None),
+                    retry_reason=retry_reason,
+                    response_hash=response_hash,
+                    credential_reference=credential_reference,
+                )
+            )
+            return SentinelIdentityResolution(
+                **common,
+                status=(
+                    SentinelIdentityResolutionStatus.RESOLVED_INDEXED
+                    if identifiers
+                    else SentinelIdentityResolutionStatus.CONCLUSIVELY_NOT_INDEXED
+                ),
+                response_hash=response_hash,
+                identifier_results=identifiers,
+                attempts=attempts,
+            )
+        raise AssertionError("identity retry loop exhausted without a terminal result")
+
+    def _execute_match_diagnostic(
+        self,
+        spec: dict[str, Any],
+        resolution: SentinelIdentityResolution,
+        credentials: Mapping[str, str],
+    ) -> SentinelDiagnostic:
+        if resolution.status is SentinelIdentityResolutionStatus.CONCLUSIVELY_NOT_INDEXED:
+            return SentinelDiagnostic(
+                sentinel_id=spec["sentinel_id"],
+                source=spec["source"],
+                candidate_query_id=spec["candidate_query_id"],
+                outcome=SentinelDiagnosticOutcome.SOURCE_NOT_INDEXED,
+                identity_state=SentinelIdentityState.RESOLVED,
+                source_indexing_state=SentinelSourceIndexingState.NOT_INDEXED,
+                candidate_match_state=SentinelCandidateMatchState.UNTESTED,
+            )
+        if resolution.status is SentinelIdentityResolutionStatus.IDENTITY_UNRESOLVED:
+            return SentinelDiagnostic(
+                sentinel_id=spec["sentinel_id"],
+                source=spec["source"],
+                candidate_query_id=spec["candidate_query_id"],
+                outcome=SentinelDiagnosticOutcome.IDENTITY_UNRESOLVED,
+                identity_state=SentinelIdentityState.UNRESOLVED,
+                source_indexing_state=SentinelSourceIndexingState.UNKNOWN,
+                candidate_match_state=SentinelCandidateMatchState.UNTESTED,
+                warnings=list(resolution.warnings),
+            )
+        if resolution.status is not SentinelIdentityResolutionStatus.RESOLVED_INDEXED:
+            return _unsupported_diagnostic(
+                spec, f"identity_resolution:{resolution.status.value}"
+            )
+        request = spec["match_request"]
+        try:
+            response = self._send(request, spec["source"], credentials)
+            response_hash = hashlib.sha256(bytes(response.content)).hexdigest()
+            identifiers = sorted(set(_parse_identifiers(spec["source"], response)))
+        except Exception as exc:  # noqa: BLE001
+            return _unsupported_diagnostic(
+                spec, f"match_probe_failed:{type(exc).__name__}"
+            )
+        if identifiers:
+            return SentinelDiagnostic(
+                sentinel_id=spec["sentinel_id"],
+                source=spec["source"],
+                candidate_query_id=spec["candidate_query_id"],
+                outcome=SentinelDiagnosticOutcome.INDEXED_AND_MATCHED,
+                identity_state=SentinelIdentityState.RESOLVED,
+                source_indexing_state=SentinelSourceIndexingState.INDEXED,
+                candidate_match_state=SentinelCandidateMatchState.MATCHED,
+                request=request,
+                request_hash=spec["match_request_hash"],
+                response_hash=response_hash,
+                identifier_results=identifiers,
+            )
+        return SentinelDiagnostic(
+            sentinel_id=spec["sentinel_id"],
+            source=spec["source"],
+            candidate_query_id=spec["candidate_query_id"],
+            outcome=SentinelDiagnosticOutcome.INDEXED_BUT_QUERY_MISSED,
+            identity_state=SentinelIdentityState.RESOLVED,
+            source_indexing_state=SentinelSourceIndexingState.INDEXED,
+            candidate_match_state=SentinelCandidateMatchState.MISSED,
+            request=request,
+            request_hash=spec["match_request_hash"],
+            response_hash=response_hash,
+        )
 
     def _execute_diagnostic(
         self, spec: dict[str, Any], credentials: Mapping[str, str]
@@ -557,15 +887,54 @@ def _fresh_observation(spec: dict[str, Any], timestamp: str) -> SizingObservatio
     )
 
 
-def _parse_envelope(source: str, response: HttpResponse) -> ParsedEnvelope:
+def _parse_envelope(
+    source: str,
+    response: HttpResponse,
+    *,
+    parser_contract: str = "legacy_v0_1",
+) -> ParsedEnvelope:
     if source == "PubMed":
         root = ET.fromstring(response.content)
-        errors = [node.text or "" for node in root.findall(".//ErrorList/*")]
-        warnings = [node.text or "" for node in root.findall(".//WarningList/*")]
+        error_categories = _xml_message_categories(root, ".//ErrorList/*")
+        warning_categories = _xml_message_categories(root, ".//WarningList/*")
         translation = root.findtext(".//QueryTranslation")
         count = int(root.findtext(".//Count", "-1"))
         if count < 0:
             raise ValueError("PubMed response omitted Count")
+        if parser_contract == "pubmed_esearch_structured_messages_v0_2":
+            direct_errors = [
+                (node.text or "").strip()
+                for node in root.findall("./ERROR")
+                if (node.text or "").strip()
+            ]
+            status = (
+                SizingSyntaxStatus.REJECTED
+                if direct_errors
+                else SizingSyntaxStatus.WARNING
+                if error_categories or warning_categories
+                else SizingSyntaxStatus.ACCEPTED
+            )
+            messages = {
+                "errors": error_categories,
+                "warnings": warning_categories,
+            }
+            if direct_errors:
+                messages["structural_errors"] = {"ERROR": direct_errors}
+            categories = [
+                *[f"PubMed ErrorList:{key}" for key in sorted(error_categories)],
+                *[f"PubMed WarningList:{key}" for key in sorted(warning_categories)],
+                *("PubMed structural ERROR" for _ in direct_errors),
+            ]
+            return ParsedEnvelope(
+                count,
+                SizingCountKind.EXACT,
+                status,
+                translation,
+                tuple(categories),
+                messages,
+            )
+        errors = [value for values in error_categories.values() for value in values]
+        warnings = [value for values in warning_categories.values() for value in values]
         status = (
             SizingSyntaxStatus.REJECTED
             if errors
@@ -598,6 +967,32 @@ def _parse_envelope(source: str, response: HttpResponse) -> ParsedEnvelope:
                               warnings=tuple(warnings), gate_name="bulk_boolean_semantics", gate_status=gate)
     if source == "arXiv":
         root = ET.fromstring(response.content)
+        if parser_contract == "arxiv_structural_error_feed_v0_2":
+            total = root.findtext("{http://a9.com/-/spec/opensearch/1.1/}totalResults")
+            if total is None:
+                raise ValueError("arXiv feed omitted totalResults")
+            count = int(total)
+            if count < 0:
+                raise ValueError("arXiv totalResults cannot be negative")
+            atom = "{http://www.w3.org/2005/Atom}"
+            titles = [
+                (item.text or "").strip().casefold()
+                for item in root.findall(f"{atom}entry/{atom}title")
+            ]
+            feed_title = (root.findtext(f"{atom}title") or "").strip().casefold()
+            structural_error = feed_title in {"error", "query error"} or any(
+                title in {"error", "query error"} for title in titles
+            )
+            return ParsedEnvelope(
+                count,
+                SizingCountKind.EXACT,
+                (
+                    SizingSyntaxStatus.REJECTED
+                    if structural_error
+                    else SizingSyntaxStatus.ACCEPTED
+                ),
+                warnings=("arxiv_error_feed",) if structural_error else (),
+            )
         error_entries = [
             item.text or ""
             for item in root.findall(
@@ -639,6 +1034,15 @@ def _parse_envelope(source: str, response: HttpResponse) -> ParsedEnvelope:
                               SizingSyntaxStatus.ACCEPTED, gate_name="identification_semantics",
                               gate_status=gate_status, warnings=(warning,))
     raise ValueError(f"unsupported sizing source: {source}")
+
+
+def _xml_message_categories(root: ET.Element, path: str) -> dict[str, list[str]]:
+    categories: dict[str, list[str]] = {}
+    for node in root.findall(path):
+        value = (node.text or "").strip()
+        if value:
+            categories.setdefault(str(node.tag), []).append(value)
+    return categories
 
 
 def _parse_identifiers(source: str, response: HttpResponse) -> list[str]:
@@ -691,6 +1095,7 @@ def _successful_observation(
                    window_status=window, syntax_status=envelope.syntax_status,
                    transport_status=transport, response_status=status,
                    source_query_translation=envelope.translation,
+                   source_messages=envelope.source_messages or {},
                    warnings=[*observation.warnings, *envelope.warnings],
                    gate_name=envelope.gate_name or observation.gate_name,
                    gate_status=envelope.gate_status, attempts=[*observation.attempts, attempt])
@@ -897,6 +1302,7 @@ def _save_pending_envelope(
             "syntax_status": envelope.syntax_status.value,
             "translation": envelope.translation,
             "warnings": list(envelope.warnings),
+            "source_messages": envelope.source_messages or {},
             "gate_name": envelope.gate_name,
             "gate_status": envelope.gate_status.value,
         },
@@ -929,6 +1335,13 @@ def _envelope_from_dict(data: Mapping[str, Any]) -> ParsedEnvelope:
         syntax_status=SizingSyntaxStatus(data["syntax_status"]),
         translation=data.get("translation"),
         warnings=tuple(data.get("warnings", [])),
+        source_messages={
+            str(kind): {
+                str(category): [str(item) for item in values]
+                for category, values in categories.items()
+            }
+            for kind, categories in data.get("source_messages", {}).items()
+        },
         gate_name=data.get("gate_name"),
         gate_status=SizingGateStatus(data.get("gate_status", "not_applicable")),
     )

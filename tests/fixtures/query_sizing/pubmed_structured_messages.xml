@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<eSearchResult>
+  <Count>37</Count>
+  <ErrorList>
+    <PhraseNotFound>"unmatched historical phrase"</PhraseNotFound>
+  </ErrorList>
+  <WarningList>
+    <QuotedPhraseNotFound>"another unmatched phrase"</QuotedPhraseNotFound>
+    <OutputMessage>No items found for one leaf term.</OutputMessage>
+  </WarningList>
+  <QueryTranslation>(biology[Title/Abstract]) AND (visualization[Title/Abstract])</QueryTranslation>
+</eSearchResult>

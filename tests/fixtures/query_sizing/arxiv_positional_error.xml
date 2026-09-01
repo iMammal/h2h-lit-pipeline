@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom"
+      xmlns:opensearch="http://a9.com/-/spec/opensearch/1.1/">
+  <title>arXiv Query: search_query=all:test</title>
+  <opensearch:totalResults>1350</opensearch:totalResults>
+  <entry>
+    <id>http://arxiv.org/abs/1234.5678</id>
+    <title>A valid bibliographic result</title>
+    <summary>Measurements include positional error estimates for each observation.</summary>
+  </entry>
+</feed>

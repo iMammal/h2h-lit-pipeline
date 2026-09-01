@@ -1,0 +1,56 @@
+{
+  "schema_version": "1.0.0",
+  "manifest_id": "star-query-sizing-v0-1-checksums",
+  "experiment_status": "completed_immutable_historical_evidence",
+  "executor_git_commit": "1b75090de2097c8c910dc28ad57c6178313adc3f",
+  "run_id": "star-query-sizing-v0-1-run-001",
+  "candidate_version": "0.1.0-preproduction",
+  "candidate_canonical_hash": "4c642ff04c84c1e1534566d789278fdab21af9f75a57332fce04fa3751fe01bc",
+  "sentinel_version": "0.1.0-pre-sizing",
+  "sentinel_canonical_hash": "1acc34ae05f0637bdfb5d3feebe2044197164ae4b6d6ffd0e043daa63bfd46a3",
+  "execution_started_at": "2026-09-01T15:40:41.856688Z",
+  "execution_completed_at": "2026-09-01T15:46:11.197266Z",
+  "immutable_artifact_storage": {
+    "status": "unresolved",
+    "locator": null,
+    "repository_policy": "completed run artifacts are under the ignored outputs directory",
+    "limitation": "Checksums detect mutation but do not preserve ignored artifact bytes."
+  },
+  "artifacts": [
+    {
+      "role": "candidate_config",
+      "path": "config/star_query_candidates_v0_1.json",
+      "byte_size": 15799,
+      "raw_sha256": "3de17186d0c1fc50b5379819370cb4fefea699c6b9b7c6223cb3d8abe4cdfb02",
+      "canonical_hash": "4c642ff04c84c1e1534566d789278fdab21af9f75a57332fce04fa3751fe01bc"
+    },
+    {
+      "role": "sentinel_config",
+      "path": "config/star_query_sentinels_v0_1.json",
+      "byte_size": 4526,
+      "raw_sha256": "ed05a667edf282588548a63d0e637efc2849d1980e2ecb7ff4cef80056ecaecf",
+      "canonical_hash": "1acc34ae05f0637bdfb5d3feebe2044197164ae4b6d6ffd0e043daa63bfd46a3"
+    },
+    {
+      "role": "dry_run_plan",
+      "path": "outputs/query_sizing/star-query-sizing-v0-1-run-001/dry_run.json",
+      "byte_size": 1148646,
+      "raw_sha256": "fb75b77ab7e208882a85bbd52476e859261bac02763b04d6e77c6c9292e31d07",
+      "canonical_hash": "884574804292074908fead87f651ff24d0c7e18a7ecd1ea9dec0f06fb28ffb74"
+    },
+    {
+      "role": "completed_run",
+      "path": "outputs/query_sizing/star-query-sizing-v0-1-run-001/query_sizing_run.json",
+      "byte_size": 744668,
+      "raw_sha256": "2780f459fbab1d5446cb5ac2aa74a6da5b92a367dfdfd664d7fdfb6598cba80c",
+      "canonical_hash": "3eda47fd7e8b230066d231d1b0c673d3897a3b5b0f6453491f38335c85331b6c"
+    },
+    {
+      "role": "completed_report",
+      "path": "outputs/query_sizing/star-query-sizing-v0-1-run-001/query_sizing_report.json",
+      "byte_size": 9250,
+      "raw_sha256": "91a545312f230eaa7e00f6052d275025bf44335c39352a2b1db39c97f48273a1",
+      "canonical_hash": null
+    }
+  ]
+}

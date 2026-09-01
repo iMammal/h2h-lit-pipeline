@@ -9,7 +9,9 @@ from typing import Any
 
 from h2h_lit.checkpoint import atomic_write
 from h2h_lit.query_development import (
+    CANDIDATE_V2_SCHEMA_VERSION,
     SIZING_RUN_SCHEMA_VERSION,
+    SIZING_RUN_V2_SCHEMA_VERSION,
     QuerySizingRun,
     SentinelPaper,
     SizingAttempt,
@@ -19,11 +21,13 @@ from h2h_lit.query_development import (
     SizingTransportStatus,
     SizingWindowStatus,
     load_candidate_set,
+    load_semantic_control_set,
     load_sentinel_set,
     sizing_request_hash,
 )
 
 DRY_RUN_SCHEMA_VERSION = "1.0.0"
+DRY_RUN_V2_SCHEMA_VERSION = "1.1.0"
 DEFAULT_RUN_ID = "star-query-sizing-v0-1-run-001"
 
 SOURCE_URLS = {
@@ -67,20 +71,32 @@ def build_sizing_dry_run(
     *,
     run_id: str = DEFAULT_RUN_ID,
     created_at: str | None = None,
+    semantic_control_config: str | Path | None = None,
 ) -> dict[str, Any]:
     candidate_set = load_candidate_set(candidate_config)
     sentinel_set = load_sentinel_set(sentinel_config)
+    is_v2 = candidate_set.payload["schema_version"] == CANDIDATE_V2_SCHEMA_VERSION
     if sentinel_set.candidate_set_hash != candidate_set.candidate_set_hash():
-        raise ValueError("sentinel set does not reference the loaded candidate-set hash")
+        compatibility = candidate_set.payload.get("sentinel_compatibility", {})
+        if not is_v2 or (
+            compatibility.get("sentinel_set_hash") != sentinel_set.sentinel_set_hash()
+            or compatibility.get("original_candidate_set_hash")
+            != sentinel_set.candidate_set_hash
+            or compatibility.get("membership_and_expectations_unchanged") is not True
+        ):
+            raise ValueError("sentinel set does not reference a compatible candidate set")
 
     timestamp = created_at or sentinel_set.frozen_at
     candidates = candidate_set.render_all()
-    if len(candidates) != 62:
-        raise ValueError("the frozen candidate configuration must render exactly 62 queries")
+    expected_candidates = 54 if is_v2 else 62
+    if len(candidates) != expected_candidates:
+        raise ValueError(
+            f"the candidate configuration must render exactly {expected_candidates} queries"
+        )
 
     observations = [_planned_observation(item, timestamp) for item in candidates]
     run = QuerySizingRun(
-        schema_version=SIZING_RUN_SCHEMA_VERSION,
+        schema_version=(SIZING_RUN_V2_SCHEMA_VERSION if is_v2 else SIZING_RUN_SCHEMA_VERSION),
         sizing_run_id=run_id,
         candidate_set_id=candidate_set.candidate_set_id,
         candidate_set_version=candidate_set.candidate_set_version,
@@ -110,22 +126,63 @@ def build_sizing_dry_run(
             "request": observations[index].request,
             "request_hash": observations[index].request_hash,
             "credential_reference": observations[index].credential_reference,
+            "parser_contract": item.parser_contract,
         }
         for index, item in enumerate(candidates)
     ]
-    diagnostics = [
-        _sentinel_diagnostic_spec(item, sentinel)
-        for item in candidates
-        for sentinel in sentinel_set.entries
-        if item.family_id in sentinel.diagnostic_family_ids
-    ]
+    identity_specs: list[dict[str, Any]] = []
+    if is_v2:
+        identity_specs = [
+            _sentinel_identity_spec(source, sentinel)
+            for source in candidate_set.payload["sources"]
+            for sentinel in sentinel_set.entries
+        ]
+        identity_by_key = {
+            (item["source"], item["sentinel_id"]): item["identity_resolution_id"]
+            for item in identity_specs
+        }
+        diagnostics = [
+            _sentinel_match_spec(
+                item,
+                sentinel,
+                identity_by_key[(item.source, sentinel.sentinel_id)],
+            )
+            for item in candidates
+            for sentinel in sentinel_set.entries
+            if item.family_id in sentinel.diagnostic_family_ids
+        ]
+    else:
+        diagnostics = [
+            _sentinel_diagnostic_spec(item, sentinel)
+            for item in candidates
+            for sentinel in sentinel_set.entries
+            if item.family_id in sentinel.diagnostic_family_ids
+        ]
+    semantic_controls: list[dict[str, Any]] = []
+    semantic_control_provenance: dict[str, Any] | None = None
+    if is_v2:
+        if semantic_control_config is None:
+            raise ValueError("v0.2 dry runs require the frozen semantic-control config")
+        controls = load_semantic_control_set(semantic_control_config)
+        semantic_controls = [_semantic_control_spec(item) for item in controls.probes]
+        semantic_control_provenance = {
+            "control_set_id": controls.control_set_id,
+            "control_set_version": controls.control_set_version,
+            "control_set_hash": controls.control_set_hash(),
+            "assertions": [item.to_dict() for item in controls.assertions],
+            "gate": controls.production_identification_gate,
+            "automatic_mode_switching": controls.automatic_mode_switching,
+        }
     report = {
-        "schema_version": DRY_RUN_SCHEMA_VERSION,
+        "schema_version": DRY_RUN_V2_SCHEMA_VERSION if is_v2 else DRY_RUN_SCHEMA_VERSION,
         "report_kind": "non_production_query_sizing_dry_run",
         "run": run.to_dict(),
         "candidate_specifications": candidate_specs,
+        "sentinel_identity_specifications": identity_specs,
         "sentinel_diagnostic_specifications": diagnostics,
-        "source_requirements": _source_requirements(),
+        "semantic_control_specifications": semantic_controls,
+        "semantic_control_provenance": semantic_control_provenance,
+        "source_requirements": _source_requirements(is_v2=is_v2),
         "interpretation_rules": list(INTERPRETATION_RULES),
         "non_production_invariants": dict(NON_PRODUCTION_INVARIANTS),
     }
@@ -232,6 +289,171 @@ def _sentinel_diagnostic_spec(candidate: Any, sentinel: SentinelPaper) -> dict[s
             "IDENTITY_UNRESOLVED",
             "DIAGNOSTIC_UNSUPPORTED",
         ],
+    }
+
+
+def _sentinel_identity_spec(source: str, sentinel: SentinelPaper) -> dict[str, Any]:
+    request, support = _identity_request(source, sentinel)
+    resolution_id = _stable_id("sentinel-identity", source, sentinel.sentinel_id)
+    unresolved = sentinel.doi is None
+    return {
+        "identity_resolution_id": resolution_id,
+        "sentinel_id": sentinel.sentinel_id,
+        "source_identifier": sentinel.source_identifier,
+        "doi": sentinel.doi,
+        "source": source,
+        "support_status": support,
+        "identity_basis": "stable_doi" if not unresolved else "identity_unresolved",
+        "execution_status": "identity_unresolved" if unresolved else "planned",
+        "request": request,
+        "request_hash": sizing_request_hash(request),
+        "allowed_persisted_result": "identifier_only",
+        "resolve_once_per_source_and_sentinel": True,
+    }
+
+
+def _sentinel_match_spec(
+    candidate: Any,
+    sentinel: SentinelPaper,
+    identity_resolution_id: str,
+) -> dict[str, Any]:
+    _, match_request, support = _diagnostic_requests(candidate, sentinel)
+    return {
+        "diagnostic_plan_id": _stable_id(
+            "sentinel-diagnostic", sentinel.sentinel_id, candidate.candidate_query_id
+        ),
+        "sentinel_id": sentinel.sentinel_id,
+        "source": candidate.source,
+        "candidate_query_id": candidate.candidate_query_id,
+        "query_hash": candidate.query_hash,
+        "support_status": support,
+        "identity_resolution_id": identity_resolution_id,
+        "execution_condition": "consume_frozen_source_sentinel_identity_resolution",
+        "match_request": match_request,
+        "match_request_hash": sizing_request_hash(match_request),
+        "allowed_persisted_result": "identifier_only",
+        "possible_outcomes": [
+            "INDEXED_AND_MATCHED",
+            "INDEXED_BUT_QUERY_MISSED",
+            "SOURCE_NOT_INDEXED",
+            "IDENTITY_UNRESOLVED",
+            "DIAGNOSTIC_UNSUPPORTED",
+        ],
+    }
+
+
+def _identity_request(
+    source: str,
+    sentinel: SentinelPaper,
+) -> tuple[dict[str, Any], str]:
+    doi = sentinel.doi
+    title = sentinel.title
+    if source == "PubMed":
+        identity = f'"{doi}"[DOI]' if doi else f'"{title}"[Title]'
+        return (
+            _http(
+                SOURCE_URLS[source],
+                {"db": "pubmed", "term": identity, "retmax": 1, "retmode": "xml"},
+            ),
+            "identifier_constrained",
+        )
+    if source == "EuropePMC":
+        identity = f'DOI:"{doi}"' if doi else f'TITLE:"{title}"'
+        return (
+            _http(
+                SOURCE_URLS[source],
+                {"format": "json", "pageSize": 1, "resultType": "lite", "query": identity},
+            ),
+            "identifier_constrained",
+        )
+    if source == "SemanticScholar":
+        return (
+            _http(
+                SOURCE_URLS[source],
+                {"limit": 1, "fields": "paperId", "sort": "paperId:asc", "query": f'"{title}"'},
+            ),
+            "bulk_boolean_semantics_gate_required",
+        )
+    if source == "arXiv":
+        identity = f'all:"{doi}"' if doi else f'ti:"{title}"'
+        return (
+            _http(
+                SOURCE_URLS[source],
+                {
+                    "start": 0,
+                    "max_results": 1,
+                    "sortBy": "submittedDate",
+                    "sortOrder": "ascending",
+                    "search_query": identity,
+                },
+            ),
+            "identifier_constrained_after_identity_resolution",
+        )
+    if source == "IEEEXplore":
+        identity_key = "doi" if doi else "article_title"
+        return (
+            _http(
+                SOURCE_URLS[source],
+                {
+                    "format": "json",
+                    "max_records": 1,
+                    "start_record": 1,
+                    "sort_field": "article_number",
+                    "sort_order": "asc",
+                    identity_key: doi or title,
+                },
+                credential_reference="IEEE_XPLORE_API_KEY",
+            ),
+            "identifier_constrained_count_only_no_abstract_use",
+        )
+    if source == "CrossRef":
+        return (
+            _http(
+                f"{SOURCE_URLS[source]}/{doi}", {}
+            )
+            if doi
+            else _http(SOURCE_URLS[source], {"query.title": title, "rows": 1}),
+            "exact_identity_resolution_only",
+        )
+    if source == "ACMDigitalLibrary":
+        identity = f'DOI "{doi}"' if doi else f'Title "{title}"'
+        return (
+            {
+                "transport": "human_ui",
+                "workflow": "advanced_search",
+                "scope": "ACM Publications",
+                "fields": ["Title", "Abstract", "Author Keywords"],
+                "filters": {},
+                "sort": "publicationDate asc",
+                "citation_export": False,
+                "query": identity,
+            },
+            "human_operator_required",
+        )
+    raise ValueError(f"unsupported identity source: {source}")
+
+
+def _semantic_control_spec(probe: Any) -> dict[str, Any]:
+    request = _http(
+        SOURCE_URLS["SemanticScholar"],
+        {
+            "query": probe.expression,
+            "limit": 1,
+            "fields": "paperId",
+            "sort": "paperId:asc",
+        },
+    )
+    return {
+        "control_query_id": f"semantic-control:{probe.probe_id}",
+        "probe_id": probe.probe_id,
+        "role": probe.role,
+        "expression": probe.expression,
+        "expression_hash": hashlib.sha256(probe.expression.encode("utf-8")).hexdigest(),
+        "source": "SemanticScholar",
+        "mode": "bulk",
+        "request": request,
+        "request_hash": sizing_request_hash(request),
+        "creates_production_occurrences": False,
     }
 
 
@@ -360,8 +582,8 @@ def _http(
     return request
 
 
-def _source_requirements() -> list[dict[str, Any]]:
-    return [
+def _source_requirements(*, is_v2: bool = False) -> list[dict[str, Any]]:
+    requirements = [
         {
             "source": "IEEEXplore",
             "kind": "credential",
@@ -382,14 +604,26 @@ def _source_requirements() -> list[dict[str, Any]]:
             "required_for_live_execution": True,
             "requirements": ["institutional_access", "UTC_timestamp", "query_evidence"],
         },
+    ]
+    requirements.append(
         {
             "source": "CrossRef",
-            "kind": "semantics_gate",
+            "kind": "non_identification_role" if is_v2 else "semantics_gate",
             "reference": None,
-            "required_for_live_execution": True,
-            "gate": "identification_semantics",
-        },
-    ]
+            "required_for_live_execution": not is_v2,
+            "gate": None if is_v2 else "identification_semantics",
+            "capabilities": (
+                [
+                    "doi_metadata_enrichment",
+                    "exact_identity_resolution",
+                    "deduplication_support",
+                ]
+                if is_v2
+                else []
+            ),
+        }
+    )
+    return requirements
 
 
 def _stable_id(prefix: str, *values: str) -> str:

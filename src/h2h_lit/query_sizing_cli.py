@@ -23,6 +23,10 @@ def main(argv: list[str] | None = None) -> int:
         "--sentinel-config",
         default="config/star_query_sentinels_v0_1.json",
     )
+    parser.add_argument(
+        "--semantic-control-config",
+        help="Required only for a v0.2 candidate configuration.",
+    )
     parser.add_argument("--run-id", default=DEFAULT_RUN_ID)
     parser.add_argument(
         "--created-at",
@@ -37,6 +41,7 @@ def main(argv: list[str] | None = None) -> int:
         args.sentinel_config,
         run_id=args.run_id,
         created_at=args.created_at,
+        semantic_control_config=args.semantic_control_config,
     )
     if args.output:
         save_sizing_dry_run(report, args.output)

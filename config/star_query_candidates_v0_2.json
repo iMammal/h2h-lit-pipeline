@@ -1,0 +1,38 @@
+{
+  "schema_version": "0.2.0",
+  "candidate_set_id": "h2h-star-five-family-query-candidates",
+  "candidate_set_version": "0.2.0-preproduction",
+  "methodological_status": "candidate_not_production_frozen",
+  "inherits": {
+    "relative_path": "star_query_candidates_v0_1.json",
+    "candidate_set_hash": "4c642ff04c84c1e1534566d789278fdab21af9f75a57332fce04fa3751fe01bc"
+  },
+  "sentinel_compatibility": {
+    "sentinel_set_id": "star-query-sentinels-v0-1",
+    "sentinel_set_version": "0.1.0-pre-sizing",
+    "sentinel_set_hash": "1acc34ae05f0637bdfb5d3feebe2044197164ae4b6d6ffd0e043daa63bfd46a3",
+    "original_candidate_set_hash": "4c642ff04c84c1e1534566d789278fdab21af9f75a57332fce04fa3751fe01bc",
+    "membership_and_expectations_unchanged": true
+  },
+  "source_overrides": {
+    "PubMed": {
+      "syntax": "pubmed_title_abstract_leaf_scoped",
+      "parser_contract": "pubmed_esearch_structured_messages_v0_2"
+    },
+    "arXiv": {
+      "parser_contract": "arxiv_structural_error_feed_v0_2"
+    },
+    "CrossRef": {
+      "families": [],
+      "role": "enrichment_identity_and_deduplication_support",
+      "syntax": "exact_identity_and_metadata_only",
+      "validation_gate": null,
+      "identification_sizing_enabled": false,
+      "capabilities": [
+        "doi_metadata_enrichment",
+        "exact_identity_resolution",
+        "deduplication_support"
+      ]
+    }
+  }
+}

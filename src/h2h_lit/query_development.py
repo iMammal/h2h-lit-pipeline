@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+from copy import deepcopy
 from dataclasses import asdict, dataclass, field
 from enum import Enum
 from pathlib import Path, PurePosixPath
@@ -13,7 +14,9 @@ from typing import Any
 from h2h_lit.checkpoint import atomic_write
 
 CANDIDATE_SCHEMA_VERSION = "0.1.0"
+CANDIDATE_V2_SCHEMA_VERSION = "0.2.0"
 SIZING_RUN_SCHEMA_VERSION = "1.1.0"
+SIZING_RUN_V2_SCHEMA_VERSION = "1.2.0"
 LEGACY_SIZING_RUN_SCHEMA_VERSION = "1.0.0"
 SENTINEL_SET_SCHEMA_VERSION = "1.0.0"
 EXPECTED_FAMILIES = (
@@ -89,6 +92,7 @@ class SizingTransportStatus(str, Enum):
     BLOCKED_CREDENTIAL = "blocked_credential"
     PENDING_MANUAL = "pending_manual"
     GATE_FAILED = "gate_failed"
+    BLOCKED_GATE = "blocked_gate"
 
 
 class SizingGateStatus(str, Enum):
@@ -125,6 +129,16 @@ class SentinelCandidateMatchState(str, Enum):
     UNSUPPORTED = "unsupported"
 
 
+class SentinelIdentityResolutionStatus(str, Enum):
+    RESOLVED_INDEXED = "resolved_indexed"
+    CONCLUSIVELY_NOT_INDEXED = "conclusively_not_indexed"
+    IDENTITY_UNRESOLVED = "identity_unresolved"
+    TRANSPORT_FAILURE = "transport_failure"
+    PARSER_FAILURE = "parser_failure"
+    DIAGNOSTIC_UNSUPPORTED = "diagnostic_unsupported"
+    BLOCKED_CREDENTIAL = "blocked_credential"
+
+
 @dataclass(frozen=True, slots=True)
 class CandidateQuery:
     candidate_query_id: str
@@ -144,6 +158,7 @@ class CandidateQuery:
     syntax_uncertainties: list[str]
     hard_window: int | None
     count_kind: SizingCountKind
+    parser_contract: str = "legacy_v0_1"
     methodological_status: str = "candidate_not_production_frozen"
     creates_production_occurrences: bool = False
     establishes_retrieval_cutoff: bool = False
@@ -158,7 +173,10 @@ class CandidateSet:
 
     def validate(self) -> None:
         data = self.payload
-        if data.get("schema_version") != CANDIDATE_SCHEMA_VERSION:
+        if data.get("schema_version") not in {
+            CANDIDATE_SCHEMA_VERSION,
+            CANDIDATE_V2_SCHEMA_VERSION,
+        }:
             raise CandidateConfigurationError("unsupported candidate-query schema version")
         if data.get("methodological_status") != "candidate_not_production_frozen":
             raise CandidateConfigurationError("candidate queries cannot be production-frozen")
@@ -247,10 +265,25 @@ class CandidateSet:
         if sources["SemanticScholar"].get("validation_gate") != "bulk_boolean_semantics":
             raise CandidateConfigurationError("Semantic Scholar Boolean validation gate is required")
         crossref = sources["CrossRef"]
-        if "provisional" not in crossref.get("role", ""):
-            raise CandidateConfigurationError("Crossref identification must remain provisional")
-        if EXPECTED_FAMILIES[2] in crossref.get("families", []):
-            raise CandidateConfigurationError("Crossref cannot execute QF03")
+        if self.payload["schema_version"] == CANDIDATE_SCHEMA_VERSION:
+            if "provisional" not in crossref.get("role", ""):
+                raise CandidateConfigurationError("Crossref identification must remain provisional")
+            if EXPECTED_FAMILIES[2] in crossref.get("families", []):
+                raise CandidateConfigurationError("Crossref cannot execute QF03")
+        else:
+            if crossref.get("families"):
+                raise CandidateConfigurationError(
+                    "Crossref cannot execute identification candidates in v0.2"
+                )
+            if crossref.get("role") != "enrichment_identity_and_deduplication_support":
+                raise CandidateConfigurationError("Crossref v0.2 role is not explicit")
+            capabilities = set(crossref.get("capabilities", []))
+            if capabilities != {
+                "doi_metadata_enrichment",
+                "exact_identity_resolution",
+                "deduplication_support",
+            }:
+                raise CandidateConfigurationError("Crossref v0.2 capabilities are incomplete")
         for source, spec in sources.items():
             if not set(spec.get("families", [])).issubset(EXPECTED_FAMILIES):
                 raise CandidateConfigurationError(f"source {source} references an unknown family")
@@ -308,6 +341,7 @@ class SizingAttempt:
     retry_reason: str | None = None
     response_hash: str | None = None
     credential_reference: str | None = None
+    retry_after: str | None = None
     warnings: list[str] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
 
@@ -345,6 +379,7 @@ class SizingAttempt:
             retry_reason=data.get("retry_reason"),
             response_hash=data.get("response_hash"),
             credential_reference=data.get("credential_reference"),
+            retry_after=data.get("retry_after"),
             warnings=list(data.get("warnings", [])),
             errors=list(data.get("errors", [])),
         )
@@ -414,7 +449,9 @@ class SizingObservation:
     credential_reference: str | None = None
     gate_name: str | None = None
     gate_status: SizingGateStatus = SizingGateStatus.NOT_APPLICABLE
+    gate_evaluation_id: str | None = None
     source_query_translation: str | None = None
+    source_messages: dict[str, dict[str, list[str]]] = field(default_factory=dict)
     warnings: list[str] = field(default_factory=list)
     attempts: list[SizingAttempt] = field(default_factory=list)
     acm_operator_evidence: AcmOperatorEvidence | None = None
@@ -486,7 +523,15 @@ class SizingObservation:
             gate_status=SizingGateStatus(
                 data.get("gate_status", SizingGateStatus.NOT_APPLICABLE.value)
             ),
+            gate_evaluation_id=data.get("gate_evaluation_id"),
             source_query_translation=data.get("source_query_translation"),
+            source_messages={
+                str(kind): {
+                    str(category): [str(item) for item in values]
+                    for category, values in categories.items()
+                }
+                for kind, categories in data.get("source_messages", {}).items()
+            },
             warnings=list(data.get("warnings", [])),
             attempts=[SizingAttempt.from_dict(item) for item in data.get("attempts", [])],
             acm_operator_evidence=(
@@ -588,6 +633,164 @@ class SentinelDiagnostic:
         )
 
 
+@dataclass(frozen=True, slots=True)
+class SentinelIdentityResolution:
+    resolution_id: str
+    sentinel_id: str
+    source: str
+    status: SentinelIdentityResolutionStatus
+    request: dict[str, Any] | None = None
+    request_hash: str | None = None
+    response_hash: str | None = None
+    identifier_results: list[str] = field(default_factory=list)
+    attempts: list[SizingAttempt] = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)
+    errors: list[str] = field(default_factory=list)
+
+    def validate(self) -> None:
+        if self.request is None and self.request_hash is not None:
+            raise ValueError("sentinel identity request hash requires a request")
+        if self.request is not None:
+            if self.request_hash is None:
+                raise ValueError("sentinel identity requests require a request hash")
+            _validate_request(self.request, self.request_hash)
+        _validate_hash(self.response_hash, "sentinel identity response hash")
+        for expected, attempt in enumerate(self.attempts, start=1):
+            attempt.validate()
+            if attempt.attempt_number != expected:
+                raise ValueError("sentinel identity attempts must be contiguous and ordered")
+        if self.status is SentinelIdentityResolutionStatus.RESOLVED_INDEXED:
+            if not self.identifier_results:
+                raise ValueError("indexed sentinel identity requires identifier results")
+        elif self.identifier_results:
+            raise ValueError("unresolved/not-indexed identity cannot retain identifiers")
+        if self.status is SentinelIdentityResolutionStatus.CONCLUSIVELY_NOT_INDEXED:
+            if self.response_hash is None or not self.attempts:
+                raise ValueError("not-indexed identity requires a successful response proof")
+            if self.attempts[-1].transport_status is not SizingTransportStatus.SUCCEEDED:
+                raise ValueError("failed identity lookup cannot mean source not indexed")
+        if self.status in {
+            SentinelIdentityResolutionStatus.TRANSPORT_FAILURE,
+            SentinelIdentityResolutionStatus.PARSER_FAILURE,
+        } and not self.errors:
+            raise ValueError("identity failures require an explicit error")
+
+    def to_dict(self) -> dict[str, Any]:
+        self.validate()
+        return _serialize(self)
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> SentinelIdentityResolution:
+        return cls(
+            resolution_id=str(data["resolution_id"]),
+            sentinel_id=str(data["sentinel_id"]),
+            source=str(data["source"]),
+            status=SentinelIdentityResolutionStatus(data["status"]),
+            request=dict(data["request"]) if data.get("request") is not None else None,
+            request_hash=data.get("request_hash"),
+            response_hash=data.get("response_hash"),
+            identifier_results=list(data.get("identifier_results", [])),
+            attempts=[SizingAttempt.from_dict(item) for item in data.get("attempts", [])],
+            warnings=list(data.get("warnings", [])),
+            errors=list(data.get("errors", [])),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class SemanticControlProbe:
+    probe_id: str
+    expression: str
+    role: str
+
+
+@dataclass(frozen=True, slots=True)
+class SemanticControlAssertion:
+    assertion_id: str
+    left_probe_id: str
+    relation: str
+    right_probe_id: str
+
+    def validate(self) -> None:
+        if self.relation not in {"less_than_or_equal", "greater_than_or_equal", "equal"}:
+            raise ValueError("unsupported semantic-control relation")
+
+    def to_dict(self) -> dict[str, Any]:
+        self.validate()
+        return _serialize(self)
+
+
+@dataclass(slots=True)
+class SemanticControlSet:
+    schema_version: str
+    control_set_id: str
+    control_set_version: str
+    target_source: str
+    endpoint_mode: str
+    purpose: str
+    term_rationale: str
+    probes: list[SemanticControlProbe]
+    assertions: list[SemanticControlAssertion]
+    production_identification_gate: str
+    automatic_mode_switching: bool = False
+    creates_production_occurrences: bool = False
+    contributes_prisma_counts: bool = False
+
+    def validate(self) -> None:
+        if self.schema_version != "1.0.0":
+            raise ValueError("unsupported semantic-control schema version")
+        if self.target_source != "SemanticScholar" or self.endpoint_mode != "bulk":
+            raise ValueError("semantic controls are frozen for Semantic Scholar bulk only")
+        if self.purpose != "endpoint_boolean_semantics_only":
+            raise ValueError("semantic controls cannot carry review methodology semantics")
+        if not self.term_rationale.strip():
+            raise ValueError("semantic controls require a prospective term rationale")
+        if self.production_identification_gate != "bulk_boolean_semantics":
+            raise ValueError("semantic controls must govern the bulk Boolean gate")
+        if any(
+            (
+                self.automatic_mode_switching,
+                self.creates_production_occurrences,
+                self.contributes_prisma_counts,
+            )
+        ):
+            raise ValueError("semantic controls cannot switch modes or affect production")
+        probe_ids = [probe.probe_id for probe in self.probes]
+        if len(probe_ids) != 6 or len(probe_ids) != len(set(probe_ids)):
+            raise ValueError("semantic controls require six unique predeclared probes")
+        known = set(probe_ids)
+        for assertion in self.assertions:
+            assertion.validate()
+            if {assertion.left_probe_id, assertion.right_probe_id} - known:
+                raise ValueError("semantic-control assertion references an unknown probe")
+
+    def to_dict(self) -> dict[str, Any]:
+        self.validate()
+        return _serialize(self)
+
+    def control_set_hash(self) -> str:
+        return _sha256(_canonical_json(self.to_dict()))
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> SemanticControlSet:
+        return cls(
+            schema_version=str(data["schema_version"]),
+            control_set_id=str(data["control_set_id"]),
+            control_set_version=str(data["control_set_version"]),
+            target_source=str(data["target_source"]),
+            endpoint_mode=str(data["endpoint_mode"]),
+            purpose=str(data["purpose"]),
+            term_rationale=str(data["term_rationale"]),
+            probes=[SemanticControlProbe(**item) for item in data["probes"]],
+            assertions=[SemanticControlAssertion(**item) for item in data["assertions"]],
+            production_identification_gate=str(data["production_identification_gate"]),
+            automatic_mode_switching=bool(data.get("automatic_mode_switching", False)),
+            creates_production_occurrences=bool(
+                data.get("creates_production_occurrences", False)
+            ),
+            contributes_prisma_counts=bool(data.get("contributes_prisma_counts", False)),
+        )
+
+
 @dataclass(slots=True)
 class QuerySizingRun:
     schema_version: str
@@ -604,6 +807,9 @@ class QuerySizingRun:
     dry_run_plan_hash: str | None = None
     started_at: str | None = None
     observations: list[SizingObservation] = field(default_factory=list)
+    sentinel_identity_resolutions: list[SentinelIdentityResolution] = field(
+        default_factory=list
+    )
     sentinel_diagnostics: list[SentinelDiagnostic] = field(default_factory=list)
     completed_at: str | None = None
     purpose: str = "count_and_syntax_sizing_only"
@@ -621,9 +827,10 @@ class QuerySizingRun:
         if self.schema_version not in {
             LEGACY_SIZING_RUN_SCHEMA_VERSION,
             SIZING_RUN_SCHEMA_VERSION,
+            SIZING_RUN_V2_SCHEMA_VERSION,
         }:
             raise ValueError("unsupported query-sizing schema version")
-        if self.schema_version == SIZING_RUN_SCHEMA_VERSION:
+        if self.schema_version in {SIZING_RUN_SCHEMA_VERSION, SIZING_RUN_V2_SCHEMA_VERSION}:
             if not all(
                 (self.sentinel_set_id, self.sentinel_set_version, self.sentinel_set_hash)
             ):
@@ -659,6 +866,14 @@ class QuerySizingRun:
             raise ValueError(f"observations reference unplanned candidate queries: {sorted(unknown)}")
         for observation in self.observations:
             observation.validate()
+        identity_keys = []
+        for resolution in self.sentinel_identity_resolutions:
+            resolution.validate()
+            identity_keys.append((resolution.source, resolution.sentinel_id))
+        if len(identity_keys) != len(set(identity_keys)):
+            raise ValueError("sentinel identity is resolved once per source and sentinel")
+        if self.schema_version != SIZING_RUN_V2_SCHEMA_VERSION and identity_keys:
+            raise ValueError("source-level sentinel identity provenance requires sizing v1.2")
         known_sentinels = set()
         diagnostic_keys = []
         for diagnostic in self.sentinel_diagnostics:
@@ -712,6 +927,10 @@ class QuerySizingRun:
             created_at=str(data["created_at"]),
             started_at=data.get("started_at"),
             observations=[SizingObservation.from_dict(item) for item in data["observations"]],
+            sentinel_identity_resolutions=[
+                SentinelIdentityResolution.from_dict(item)
+                for item in data.get("sentinel_identity_resolutions", [])
+            ],
             sentinel_diagnostics=[
                 SentinelDiagnostic.from_dict(item)
                 for item in data.get("sentinel_diagnostics", [])
@@ -851,7 +1070,10 @@ class SentinelPaperSet:
 
 
 def load_candidate_set(path: str | Path) -> CandidateSet:
-    candidate_set = CandidateSet(json.loads(Path(path).read_text(encoding="utf-8")))
+    config_path = Path(path)
+    raw = json.loads(config_path.read_text(encoding="utf-8"))
+    payload = _resolve_candidate_payload(raw, config_path.parent)
+    candidate_set = CandidateSet(payload)
     candidate_set.validate()
     return candidate_set
 
@@ -880,6 +1102,40 @@ def load_sentinel_set(path: str | Path) -> SentinelPaperSet:
     return sentinel_set
 
 
+def load_semantic_control_set(path: str | Path) -> SemanticControlSet:
+    controls = SemanticControlSet.from_dict(
+        json.loads(Path(path).read_text(encoding="utf-8"))
+    )
+    controls.validate()
+    return controls
+
+
+def evaluate_semantic_control_counts(
+    controls: SemanticControlSet,
+    counts: dict[str, int],
+) -> tuple[SizingGateStatus, list[str]]:
+    controls.validate()
+    expected = {probe.probe_id for probe in controls.probes}
+    if set(counts) != expected or any(value < 0 for value in counts.values()):
+        return SizingGateStatus.PENDING, ["semantic_control_counts_incomplete"]
+    failures: list[str] = []
+    for assertion in controls.assertions:
+        left = counts[assertion.left_probe_id]
+        right = counts[assertion.right_probe_id]
+        passed = {
+            "less_than_or_equal": left <= right,
+            "greater_than_or_equal": left >= right,
+            "equal": left == right,
+        }[assertion.relation]
+        if not passed:
+            failures.append(assertion.assertion_id)
+    return (
+        (SizingGateStatus.FAILED, failures)
+        if failures
+        else (SizingGateStatus.PASSED, [])
+    )
+
+
 def validate_sentinel_revision(
     previous: SentinelPaperSet,
     current: SentinelPaperSet,
@@ -896,6 +1152,33 @@ def validate_sentinel_revision(
 def sizing_request_hash(request: dict[str, Any]) -> str:
     _validate_request(request)
     return _sha256(_canonical_json(request))
+
+
+def _resolve_candidate_payload(raw: dict[str, Any], directory: Path) -> dict[str, Any]:
+    if raw.get("schema_version") != CANDIDATE_V2_SCHEMA_VERSION:
+        return raw
+    inheritance = raw.get("inherits")
+    if not isinstance(inheritance, dict):
+        raise CandidateConfigurationError("v0.2 candidate config requires frozen inheritance")
+    relative = str(inheritance.get("relative_path", ""))
+    _validate_relative_path(relative)
+    base_path = directory / relative
+    base_raw = json.loads(base_path.read_text(encoding="utf-8"))
+    base = CandidateSet(base_raw)
+    base.validate()
+    expected_hash = inheritance.get("candidate_set_hash")
+    if base.candidate_set_hash() != expected_hash:
+        raise CandidateConfigurationError("v0.2 inherited candidate-set hash mismatch")
+    payload = deepcopy(base.payload)
+    payload["schema_version"] = CANDIDATE_V2_SCHEMA_VERSION
+    payload["candidate_set_version"] = str(raw["candidate_set_version"])
+    payload["base_candidate_set_hash"] = str(expected_hash)
+    payload["sentinel_compatibility"] = deepcopy(raw["sentinel_compatibility"])
+    for source, overrides in raw.get("source_overrides", {}).items():
+        if source not in payload["sources"]:
+            raise CandidateConfigurationError(f"unknown source override: {source}")
+        payload["sources"][source].update(deepcopy(overrides))
+    return payload
 
 
 def _validate_request(request: dict[str, Any], expected_hash: str | None = None) -> None:
@@ -974,6 +1257,14 @@ def _render_source_query(
     request: dict[str, Any]
     if syntax == "pubmed_title_abstract":
         query_text = f"({expression})[Title/Abstract]"
+        fields = ["Title", "Abstract"]
+        request = {
+            "method": "GET",
+            "endpoint": "esearch.fcgi",
+            "params": {"db": "pubmed", "term": query_text, "retmax": 0, "retmode": "xml"},
+        }
+    elif syntax == "pubmed_title_abstract_leaf_scoped":
+        query_text = _render_pubmed_title_abstract(expression)
         fields = ["Title", "Abstract"]
         request = {
             "method": "GET",
@@ -1067,6 +1358,7 @@ def _render_source_query(
         syntax_uncertainties=uncertainties,
         hard_window=source_spec["sizing"].get("hard_window"),
         count_kind=SizingCountKind(source_spec["sizing"]["count_kind"]),
+        parser_contract=str(source_spec.get("parser_contract", "legacy_v0_1")),
     )
 
 
@@ -1074,6 +1366,18 @@ def _disjunction(terms: list[str]) -> str:
     if not terms:
         raise CandidateConfigurationError("query term group cannot be empty")
     return "(" + " OR ".join(terms) + ")"
+
+
+def _render_pubmed_title_abstract(expression: str) -> str:
+    tokens = re.findall(r'"[^"\n]+"|\(|\)|\bAND\b|\bOR\b|[^\s()]+', expression)
+    if not tokens or "".join(tokens).replace(" ", "") != expression.replace(" ", ""):
+        raise CandidateConfigurationError("PubMed expression contains an unsupported token")
+    output = [
+        token if token in {"(", ")", "AND", "OR"} else f"{token}[Title/Abstract]"
+        for token in tokens
+    ]
+    rendered = " ".join(output)
+    return rendered.replace("( ", "(").replace(" )", ")")
 
 
 def _or(left: str, right: str) -> str:
