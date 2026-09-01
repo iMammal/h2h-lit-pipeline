@@ -92,6 +92,16 @@ def test_crossref_search_parses_authors_year_and_pdf_link():
     assert records[0].pdf_url == "https://x.test/a.pdf"
 
 
+def test_crossref_preserves_raw_item_without_a_title():
+    payload = {"message": {"items": [{"DOI": "10.1000/no-title"}]}}
+
+    records = search_crossref("query", http=FakeHttp([FakeResponse(payload=payload)]))
+
+    assert len(records) == 1
+    assert records[0].title == ""
+    assert records[0].doi == "10.1000/no-title"
+
+
 def test_semantic_scholar_search_passes_api_key_header_and_parses_open_access_pdf():
     payload = {
         "data": [
@@ -146,4 +156,3 @@ def test_rate_limited_response_is_visible_to_adapter_caller():
     records = search_europe_pmc("query", http=http)
     assert records == []
     assert http.calls[0]["url"].startswith("https://www.ebi.ac.uk")
-

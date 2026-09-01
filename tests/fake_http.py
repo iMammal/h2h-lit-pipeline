@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Any
+from urllib.parse import urlencode
 
 
 @dataclass
@@ -12,6 +13,7 @@ class FakeResponse:
     payload: Any = None
     text: str = ""
     url: str = "https://example.test/response"
+    request_url: str | None = None
 
     def __post_init__(self):
         self.headers = self.headers or {}
@@ -40,5 +42,7 @@ class FakeHttp:
         response = self.responses.pop(0)
         if isinstance(response, Exception):
             raise response
+        if response.request_url is None:
+            params = kwargs.get("params") or {}
+            response.request_url = f"{url}?{urlencode(params, doseq=True)}" if params else url
         return response
-

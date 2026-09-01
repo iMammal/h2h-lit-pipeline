@@ -18,12 +18,18 @@ from h2h_lit.review import (
 @dataclass(frozen=True, slots=True)
 class PrismaReconciliation:
     run_ids: list[str]
+    retrieval_runs_by_completion: dict[str, int]
     source_query_count: int
     source_queries_by_status: dict[str, int]
+    source_queries_by_completion: dict[str, int]
     source_queries_by_source: dict[str, int]
     source_queries_by_run: dict[str, int]
     empty_result_query_count: int
     failed_query_count: int
+    truncated_query_count: int
+    retrieval_page_count: int
+    retrieval_attempt_count: int
+    failed_retrieval_attempt_count: int
     records_identified: int
     records_by_source: dict[str, int]
     records_by_run: dict[str, int]
@@ -57,10 +63,12 @@ def reconcile_prisma(dataset: ReviewDataset) -> PrismaReconciliation:
     decisions = dataset.effective_duplicate_decisions()
 
     status_counts = {status.value: 0 for status in ProcessingStatus}
+    completion_counts: dict[str, int] = {}
     query_source_counts: dict[str, int] = {}
     query_run_counts: dict[str, int] = {}
     for query in dataset.source_queries:
         status_counts[query.status.value] += 1
+        _increment(completion_counts, query.completion_status.value)
         _increment(query_source_counts, query.source_database)
         _increment(query_run_counts, query.run_id or "<unassigned>")
 
@@ -139,10 +147,15 @@ def reconcile_prisma(dataset: ReviewDataset) -> PrismaReconciliation:
         raise ValueError("excluded reasons do not reconcile to excluded records")
 
     run_ids = sorted({query.run_id for query in dataset.source_queries if query.run_id})
+    run_completion_counts: dict[str, int] = {}
+    for run in dataset.retrieval_runs:
+        _increment(run_completion_counts, run.completion_status.value)
     return PrismaReconciliation(
         run_ids=run_ids,
+        retrieval_runs_by_completion=_sorted_counts(run_completion_counts),
         source_query_count=len(dataset.source_queries),
         source_queries_by_status=_sorted_counts(status_counts),
+        source_queries_by_completion=_sorted_counts(completion_counts),
         source_queries_by_source=_sorted_counts(query_source_counts),
         source_queries_by_run=_sorted_counts(query_run_counts),
         empty_result_query_count=sum(
@@ -150,6 +163,12 @@ def reconcile_prisma(dataset: ReviewDataset) -> PrismaReconciliation:
             for query in dataset.source_queries
         ),
         failed_query_count=status_counts[ProcessingStatus.FAILED.value],
+        truncated_query_count=completion_counts.get("truncated", 0),
+        retrieval_page_count=len(dataset.retrieval_pages),
+        retrieval_attempt_count=len(dataset.retrieval_attempts),
+        failed_retrieval_attempt_count=sum(
+            attempt.status.value == "failed" for attempt in dataset.retrieval_attempts
+        ),
         records_identified=records_identified,
         records_by_source=_sorted_counts(record_source_counts),
         records_by_run=_sorted_counts(record_run_counts),

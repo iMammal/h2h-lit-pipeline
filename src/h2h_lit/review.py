@@ -137,6 +137,20 @@ class RetrievalRunKind(str, Enum):
     SUPPLEMENTAL = "supplemental"
 
 
+class RetrievalCompletionStatus(str, Enum):
+    PLANNED = "planned"
+    RUNNING = "running"
+    COMPLETE = "complete"
+    FAILED = "failed"
+    TRUNCATED = "truncated"
+
+
+class RetrievalAttemptStatus(str, Enum):
+    STARTED = "started"
+    SUCCEEDED = "succeeded"
+    FAILED = "failed"
+
+
 class PublicationDatePrecision(str, Enum):
     DAY = "day"
     MONTH = "month"
@@ -218,11 +232,24 @@ class SourceQuery:
     software_version: str | None = None
     errors: list[str] = field(default_factory=list)
     metadata: dict[str, Any] = field(default_factory=dict)
+    completion_status: RetrievalCompletionStatus = RetrievalCompletionStatus.COMPLETE
+    page_ids: list[str] = field(default_factory=list)
+    source_reported_total: int | None = None
+    total_is_exact: bool = False
+    completion_proof: str | None = None
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> SourceQuery:
         payload = dict(data)
         payload["status"] = ProcessingStatus(payload.get("status", ProcessingStatus.OK.value))
+        inferred_completion = (
+            RetrievalCompletionStatus.COMPLETE
+            if payload["status"] is ProcessingStatus.OK
+            else RetrievalCompletionStatus.FAILED
+        )
+        payload["completion_status"] = RetrievalCompletionStatus(
+            payload.get("completion_status", inferred_completion.value)
+        )
         return cls(**payload)
 
 
@@ -245,12 +272,82 @@ class RetrievalRun:
     parent_run_id: str | None = None
     errors: list[str] = field(default_factory=list)
     metadata: dict[str, Any] = field(default_factory=dict)
+    completion_status: RetrievalCompletionStatus = RetrievalCompletionStatus.COMPLETE
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> RetrievalRun:
         payload = dict(data)
         payload["kind"] = RetrievalRunKind(payload["kind"])
         payload["status"] = ProcessingStatus(payload["status"])
+        inferred_completion = (
+            RetrievalCompletionStatus.COMPLETE
+            if payload["status"] is ProcessingStatus.OK
+            else RetrievalCompletionStatus.FAILED
+        )
+        payload["completion_status"] = RetrievalCompletionStatus(
+            payload.get("completion_status", inferred_completion.value)
+        )
+        return cls(**payload)
+
+
+@dataclass(slots=True)
+class RetrievalAttempt:
+    attempt_id: str
+    page_id: str
+    attempt_number: int
+    started_at: str
+    status: RetrievalAttemptStatus
+    request_method: str
+    request_url: str
+    request_params: dict[str, Any]
+    request_headers: dict[str, str]
+    request_hash: str
+    ended_at: str | None = None
+    response_status: int | None = None
+    actual_request_url: str | None = None
+    response_url: str | None = None
+    response_headers: dict[str, str] = field(default_factory=dict)
+    raw_response_path: str | None = None
+    raw_response_hash: str | None = None
+    retry_of_attempt_id: str | None = None
+    retry_delay_seconds: float | None = None
+    rate_limit_delay_seconds: float | None = None
+    error: str | None = None
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> RetrievalAttempt:
+        payload = dict(data)
+        payload["status"] = RetrievalAttemptStatus(payload["status"])
+        return cls(**payload)
+
+
+@dataclass(slots=True)
+class RetrievalPage:
+    page_id: str
+    source_query_id: str
+    ordinal: int
+    strategy: str
+    adapter_version: str
+    request_state: dict[str, Any]
+    status: RetrievalCompletionStatus
+    attempt_ids: list[str] = field(default_factory=list)
+    next_state: dict[str, Any] | None = None
+    returned_item_count: int = 0
+    occurrence_ids: list[str] = field(default_factory=list)
+    source_reported_total: int | None = None
+    total_is_exact: bool = False
+    terminal: bool = False
+    completion_proof: str | None = None
+    truncated: bool = False
+    truncation_reason: str | None = None
+    native_identifiers: list[str] = field(default_factory=list)
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> RetrievalPage:
+        payload = dict(data)
+        payload["status"] = RetrievalCompletionStatus(payload["status"])
         return cls(**payload)
 
 
@@ -266,6 +363,7 @@ class RecordOccurrence:
     cursor: str | None = None
     raw_payload_hash: str | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
+    retrieval_page_id: str | None = None
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> RecordOccurrence:
@@ -575,6 +673,8 @@ class ReviewDataset:
     schema_version: str = "1.0.0"
     retrieval_runs: list[RetrievalRun] = field(default_factory=list)
     source_queries: list[SourceQuery] = field(default_factory=list)
+    retrieval_pages: list[RetrievalPage] = field(default_factory=list)
+    retrieval_attempts: list[RetrievalAttempt] = field(default_factory=list)
     occurrences: list[RecordOccurrence] = field(default_factory=list)
     canonical_records: list[CanonicalRecord] = field(default_factory=list)
     duplicate_decisions: list[DuplicateDecision] = field(default_factory=list)
@@ -604,6 +704,13 @@ class ReviewDataset:
                 RetrievalRun.from_dict(item) for item in data.get("retrieval_runs", [])
             ],
             source_queries=[SourceQuery.from_dict(item) for item in data.get("source_queries", [])],
+            retrieval_pages=[
+                RetrievalPage.from_dict(item) for item in data.get("retrieval_pages", [])
+            ],
+            retrieval_attempts=[
+                RetrievalAttempt.from_dict(item)
+                for item in data.get("retrieval_attempts", [])
+            ],
             occurrences=[RecordOccurrence.from_dict(item) for item in data.get("occurrences", [])],
             canonical_records=[
                 CanonicalRecord.from_dict(item) for item in data.get("canonical_records", [])
@@ -659,11 +766,13 @@ class ReviewDataset:
     def validate(self) -> None:
         retrieval_runs = _unique_by_id(self.retrieval_runs, "run_id", "retrieval run")
         queries = _unique_by_id(self.source_queries, "query_id", "source query")
+        pages = _unique_by_id(self.retrieval_pages, "page_id", "retrieval page")
+        attempts = _unique_by_id(self.retrieval_attempts, "attempt_id", "retrieval attempt")
         occurrences = _unique_by_id(self.occurrences, "occurrence_id", "occurrence")
         canonical = _unique_by_id(self.canonical_records, "canonical_id", "canonical record")
         evidence = _unique_by_id(self.evidence, "evidence_id", "evidence reference")
 
-        self._validate_retrieval_runs(retrieval_runs, queries)
+        self._validate_retrieval_runs(retrieval_runs, queries, pages, attempts)
 
         occurrence_counts = {query_id: 0 for query_id in queries}
         for occurrence in self.occurrences:
@@ -674,10 +783,18 @@ class ReviewDataset:
                 )
             query = queries[occurrence.source_query_id]
             occurrence_counts[occurrence.source_query_id] += 1
-            if occurrence.page != query.page or occurrence.cursor != query.cursor:
+            if occurrence.retrieval_page_id is None and (
+                occurrence.page != query.page or occurrence.cursor != query.cursor
+            ):
                 raise ValueError(
                     f"occurrence {occurrence.occurrence_id} page/cursor disagrees with its query"
                 )
+            if occurrence.retrieval_page_id is not None:
+                page = pages.get(occurrence.retrieval_page_id)
+                if page is None or page.source_query_id != occurrence.source_query_id:
+                    raise ValueError(
+                        f"occurrence {occurrence.occurrence_id} references an invalid retrieval page"
+                    )
 
         for query in self.source_queries:
             actual_count = occurrence_counts[query.query_id]
@@ -686,11 +803,8 @@ class ReviewDataset:
                     f"source query {query.query_id} result_count={query.result_count} "
                     f"but has {actual_count} occurrences"
                 )
-            if query.status is ProcessingStatus.FAILED:
-                if actual_count:
-                    raise ValueError("failed source queries cannot contain occurrences")
-                if not query.errors:
-                    raise ValueError("failed source queries must preserve at least one error")
+            if query.status is ProcessingStatus.FAILED and not query.errors:
+                raise ValueError("failed source queries must preserve at least one error")
 
         for item in self.evidence:
             if item.canonical_record_id not in canonical:
@@ -740,8 +854,12 @@ class ReviewDataset:
         self,
         runs: dict[str, RetrievalRun],
         queries: dict[str, SourceQuery],
+        pages: dict[str, RetrievalPage],
+        attempts: dict[str, RetrievalAttempt],
     ) -> None:
         if not runs:
+            if pages or attempts:
+                raise ValueError("retrieval pages and attempts require a retrieval run")
             return
         queries_by_run: dict[str, list[str]] = {run_id: [] for run_id in runs}
         for query in self.source_queries:
@@ -750,6 +868,103 @@ class ReviewDataset:
                     f"source query {query.query_id} references missing retrieval run {query.run_id}"
                 )
             queries_by_run[query.run_id].append(query.query_id)
+
+        pages_by_query: dict[str, list[RetrievalPage]] = {query_id: [] for query_id in queries}
+        for page in self.retrieval_pages:
+            if page.source_query_id not in queries:
+                raise ValueError(f"retrieval page {page.page_id} references a missing source query")
+            pages_by_query[page.source_query_id].append(page)
+            if page.ordinal < 0:
+                raise ValueError("retrieval page ordinals cannot be negative")
+            if len(page.attempt_ids) != len(set(page.attempt_ids)):
+                raise ValueError("retrieval page attempt IDs must be unique")
+            page_attempts: list[RetrievalAttempt] = []
+            for attempt_id in page.attempt_ids:
+                attempt = attempts.get(attempt_id)
+                if attempt is None or attempt.page_id != page.page_id:
+                    raise ValueError(f"retrieval page {page.page_id} has invalid attempt lineage")
+                page_attempts.append(attempt)
+            if [item.attempt_number for item in page_attempts] != list(
+                range(1, len(page_attempts) + 1)
+            ):
+                raise ValueError(f"retrieval page {page.page_id} attempt chain is not contiguous")
+            for index, attempt in enumerate(page_attempts):
+                expected_retry = page_attempts[index - 1].attempt_id if index else None
+                if attempt.retry_of_attempt_id != expected_retry:
+                    raise ValueError(f"retrieval page {page.page_id} retry lineage disagrees")
+            if len({item.request_hash for item in page_attempts}) > 1:
+                raise ValueError("all retries for a retrieval page must use the same request")
+            if page.returned_item_count != len(page.occurrence_ids):
+                raise ValueError(
+                    f"retrieval page {page.page_id} returned count does not match occurrences"
+                )
+            if page.truncated and page.status is not RetrievalCompletionStatus.TRUNCATED:
+                raise ValueError("truncated retrieval pages require truncated status")
+            if page.status in {
+                RetrievalCompletionStatus.COMPLETE,
+                RetrievalCompletionStatus.TRUNCATED,
+            } and (not page_attempts or page_attempts[-1].status is not RetrievalAttemptStatus.SUCCEEDED):
+                raise ValueError("completed retrieval pages require a successful final attempt")
+
+        for attempt in self.retrieval_attempts:
+            if attempt.page_id not in pages:
+                raise ValueError(f"retrieval attempt {attempt.attempt_id} has missing page")
+            if attempt.attempt_number < 1:
+                raise ValueError("retrieval attempt numbers must be positive")
+            if attempt.status is RetrievalAttemptStatus.SUCCEEDED and (
+                attempt.response_status is None
+                or not 200 <= attempt.response_status < 300
+                or not attempt.raw_response_hash
+                or not attempt.raw_response_path
+            ):
+                raise ValueError("successful retrieval attempts require a persisted response")
+            if attempt.status is RetrievalAttemptStatus.FAILED and not attempt.error:
+                raise ValueError("failed retrieval attempts require an error")
+
+        occurrence_ids = {item.occurrence_id for item in self.occurrences}
+        occurrences_by_page: dict[str, list[str]] = {page_id: [] for page_id in pages}
+        for occurrence in self.occurrences:
+            if occurrence.retrieval_page_id is not None:
+                occurrences_by_page[occurrence.retrieval_page_id].append(occurrence.occurrence_id)
+        for page in self.retrieval_pages:
+            if page.occurrence_ids != occurrences_by_page[page.page_id]:
+                raise ValueError(
+                    f"retrieval page {page.page_id} occurrence manifest disagrees with dataset"
+                )
+        for query in self.source_queries:
+            query_pages = sorted(pages_by_query[query.query_id], key=lambda item: item.ordinal)
+            if query.page_ids != [item.page_id for item in query_pages] and (
+                query.page_ids or query_pages
+            ):
+                raise ValueError(f"source query {query.query_id} page manifest disagrees")
+            if query_pages and [item.ordinal for item in query_pages] != list(range(len(query_pages))):
+                raise ValueError(f"source query {query.query_id} page chain is not contiguous")
+            for index, page in enumerate(query_pages):
+                if index and page.request_state != query_pages[index - 1].next_state:
+                    raise ValueError(f"source query {query.query_id} pagination state chain disagrees")
+                if index < len(query_pages) - 1 and page.terminal:
+                    raise ValueError(f"source query {query.query_id} continued after a terminal page")
+            page_occurrences = [item for page in query_pages for item in page.occurrence_ids]
+            if len(page_occurrences) != len(set(page_occurrences)):
+                raise ValueError(f"source query {query.query_id} repeats occurrence page links")
+            if any(item not in occurrence_ids for item in page_occurrences):
+                raise ValueError(f"source query {query.query_id} page references missing occurrence")
+            query_occurrence_count = sum(
+                occurrence.source_query_id == query.query_id for occurrence in self.occurrences
+            )
+            if query_pages and sum(item.returned_item_count for item in query_pages) != query_occurrence_count:
+                raise ValueError(
+                    f"source query {query.query_id} page counts do not account for occurrences"
+                )
+            if query.completion_status is RetrievalCompletionStatus.COMPLETE and query_pages:
+                if not query_pages[-1].terminal or not query.completion_proof:
+                    raise ValueError(f"complete source query {query.query_id} lacks completion proof")
+                if any(page.status is not RetrievalCompletionStatus.COMPLETE for page in query_pages):
+                    raise ValueError(f"complete source query {query.query_id} has incomplete pages")
+            if query.completion_status is RetrievalCompletionStatus.TRUNCATED and (
+                not query.errors or not any(page.truncated for page in query_pages)
+            ):
+                raise ValueError("truncated source queries require page evidence and an error")
 
         for run in self.retrieval_runs:
             if not run.planned_query_ids:
@@ -774,6 +989,8 @@ class ReviewDataset:
                 if query_started < started_at or query_ended > completed_at:
                     raise ValueError("source query timestamps must fall within their retrieval run")
             if run.status is ProcessingStatus.OK:
+                if run.completion_status is not RetrievalCompletionStatus.COMPLETE:
+                    raise ValueError("successful retrieval runs must be complete")
                 if run.planned_query_ids != run.source_query_ids:
                     raise ValueError(
                         f"successful retrieval run {run.run_id} must execute its exact frozen plan"
@@ -782,6 +999,11 @@ class ReviewDataset:
                     raise ValueError(
                         f"successful retrieval run {run.run_id} cannot contain failed requests"
                     )
+                if any(
+                    queries[item].completion_status is not RetrievalCompletionStatus.COMPLETE
+                    for item in run.source_query_ids
+                ):
+                    raise ValueError("successful retrieval runs require complete source queries")
                 if run.errors:
                     raise ValueError("successful retrieval runs cannot contain errors")
                 if not run.retrieval_cutoff_date:
@@ -791,6 +1013,8 @@ class ReviewDataset:
                         "retrieval cutoff must equal the UTC completion date of the successful wave"
                     )
             else:
+                if run.completion_status is RetrievalCompletionStatus.COMPLETE:
+                    raise ValueError("incomplete retrieval runs cannot have complete status")
                 if run.retrieval_cutoff_date is not None:
                     raise ValueError("incomplete retrieval runs cannot establish a retrieval cutoff")
                 if not run.errors:

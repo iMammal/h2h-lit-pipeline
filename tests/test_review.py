@@ -1,6 +1,6 @@
 import pytest
 
-from h2h_lit.models import LiteratureRecord, ProvenanceEvent, ProvenanceKind
+from h2h_lit.models import LiteratureRecord, ProcessingStatus, ProvenanceEvent, ProvenanceKind
 from h2h_lit.review import (
     ActorType,
     AnnotationDimension,
@@ -21,6 +21,7 @@ from h2h_lit.review import (
     EvidenceSource,
     ExclusionReason,
     RecordOccurrence,
+    RetrievalCompletionStatus,
     ReviewDataset,
     ScreeningDecision,
     ScreeningStage,
@@ -34,6 +35,22 @@ from h2h_lit.review import (
 )
 
 NOW = "2026-08-30T12:00:00+00:00"
+
+
+def test_legacy_failed_source_query_infers_failed_completion_status():
+    query = SourceQuery.from_dict(
+        {
+            "query_id": "query:legacy:failed",
+            "source_database": "PubMed",
+            "query_text": "legacy",
+            "retrieval_started_at": NOW,
+            "retrieval_ended_at": NOW,
+            "status": ProcessingStatus.FAILED.value,
+            "errors": ["historical failure"],
+        }
+    )
+
+    assert query.completion_status is RetrievalCompletionStatus.FAILED
 
 
 def _actor(actor_type: ActorType) -> DecisionActor:

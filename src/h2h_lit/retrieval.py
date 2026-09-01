@@ -4,14 +4,24 @@ from __future__ import annotations
 
 import hashlib
 import json
+import time
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from h2h_lit.http import HttpClient, HttpResponse
+from h2h_lit.checkpoint import CheckpointStore, atomic_write
+from h2h_lit.http import HttpClient, HttpResponse, RequestsHttpClient
 from h2h_lit.models import LiteratureRecord, ProcessingStatus
+from h2h_lit.pagination import (
+    PaginatedSourceAdapter,
+    PaginationError,
+    RateLimiter,
+    RetryPolicy,
+    native_identifier,
+    redact_url,
+)
 from h2h_lit.review import (
     ActorType,
     DecisionActor,
@@ -19,23 +29,62 @@ from h2h_lit.review import (
     DecisionProvenance,
     DecisionScope,
     RecordOccurrence,
+    RetrievalAttempt,
+    RetrievalAttemptStatus,
+    RetrievalCompletionStatus,
+    RetrievalPage,
     RetrievalRun,
     RetrievalRunKind,
     ReviewDataset,
     SourceQuery,
     canonicalize_occurrences,
 )
-from h2h_lit.sources.arxiv import API_URL as ARXIV_API_URL
-from h2h_lit.sources.arxiv import search_arxiv
+from h2h_lit.sources.arxiv import (
+    API_URL as ARXIV_API_URL,
+)
+from h2h_lit.sources.arxiv import (
+    PAGINATOR as ARXIV_PAGINATOR,
+)
+from h2h_lit.sources.arxiv import (
+    search_arxiv,
+)
 from h2h_lit.sources.common import retrieval_timestamp
-from h2h_lit.sources.crossref import SEARCH_URL as CROSSREF_SEARCH_URL
-from h2h_lit.sources.crossref import search_crossref
-from h2h_lit.sources.europe_pmc import SEARCH_URL as EUROPE_PMC_SEARCH_URL
-from h2h_lit.sources.europe_pmc import search_europe_pmc
-from h2h_lit.sources.pubmed import EUTILS as PUBMED_EUTILS
-from h2h_lit.sources.pubmed import search_pubmed
-from h2h_lit.sources.semantic_scholar import SEARCH_URL as SEMANTIC_SCHOLAR_SEARCH_URL
-from h2h_lit.sources.semantic_scholar import search_semantic_scholar
+from h2h_lit.sources.crossref import (
+    PAGINATOR as CROSSREF_PAGINATOR,
+)
+from h2h_lit.sources.crossref import (
+    SEARCH_URL as CROSSREF_SEARCH_URL,
+)
+from h2h_lit.sources.crossref import (
+    search_crossref,
+)
+from h2h_lit.sources.europe_pmc import (
+    PAGINATOR as EUROPE_PMC_PAGINATOR,
+)
+from h2h_lit.sources.europe_pmc import (
+    SEARCH_URL as EUROPE_PMC_SEARCH_URL,
+)
+from h2h_lit.sources.europe_pmc import (
+    search_europe_pmc,
+)
+from h2h_lit.sources.pubmed import (
+    EUTILS as PUBMED_EUTILS,
+)
+from h2h_lit.sources.pubmed import (
+    PAGINATOR as PUBMED_PAGINATOR,
+)
+from h2h_lit.sources.pubmed import (
+    search_pubmed,
+)
+from h2h_lit.sources.semantic_scholar import (
+    PAGINATOR as SEMANTIC_SCHOLAR_PAGINATOR,
+)
+from h2h_lit.sources.semantic_scholar import (
+    SEARCH_URL as SEMANTIC_SCHOLAR_SEARCH_URL,
+)
+from h2h_lit.sources.semantic_scholar import (
+    search_semantic_scholar,
+)
 
 SourceAdapter = Callable[..., list[LiteratureRecord]]
 TimestampFactory = Callable[[], str]
@@ -57,6 +106,14 @@ SOURCE_ENDPOINTS = {
     "arXiv": ARXIV_API_URL,
 }
 
+PAGINATED_SOURCE_ADAPTERS: dict[str, PaginatedSourceAdapter] = {
+    "PubMed": PUBMED_PAGINATOR,
+    "EuropePMC": EUROPE_PMC_PAGINATOR,
+    "CrossRef": CROSSREF_PAGINATOR,
+    "SemanticScholar": SEMANTIC_SCHOLAR_PAGINATOR,
+    "arXiv": ARXIV_PAGINATOR,
+}
+
 
 @dataclass(slots=True)
 class RetrievalQuerySpec:
@@ -72,6 +129,8 @@ class RetrievalQuerySpec:
     fields: list[str] = field(default_factory=list)
     filters: dict[str, Any] = field(default_factory=dict)
     metadata: dict[str, Any] = field(default_factory=dict)
+    pagination_mode: str | None = None
+    credentials: dict[str, str] = field(default_factory=dict, repr=False)
 
 
 class SourceRequestError(RuntimeError):
@@ -183,6 +242,14 @@ def execute_retrieval_run(
             software_version=software_version,
             errors=errors,
             metadata=query_metadata,
+            completion_status=(
+                RetrievalCompletionStatus.FAILED
+                if status is ProcessingStatus.FAILED
+                else RetrievalCompletionStatus.COMPLETE
+            ),
+            completion_proof="legacy_single_request_completed"
+            if status is ProcessingStatus.OK
+            else None,
         )
         source_queries.append(source_query)
 
@@ -253,6 +320,11 @@ def execute_retrieval_run(
             for error in query.errors
         ],
         metadata={"rubric_version": rubric_version},
+        completion_status=(
+            RetrievalCompletionStatus.COMPLETE
+            if run_status is ProcessingStatus.OK
+            else RetrievalCompletionStatus.FAILED
+        ),
     )
     dataset = ReviewDataset(
         schema_version="1.1.0",
@@ -266,13 +338,585 @@ def execute_retrieval_run(
     return dataset
 
 
+def execute_paginated_retrieval_run(
+    *,
+    run_id: str,
+    queries: Iterable[RetrievalQuerySpec],
+    http_clients: Mapping[str, HttpClient],
+    checkpoint_dir: str | Path,
+    resume: bool = False,
+    timestamp: TimestampFactory = retrieval_timestamp,
+    software_version: str | None = None,
+    protocol_version: str = "1.0.0",
+    rubric_version: str = "1.0.0",
+    query_plan_version: str = "retrieval-query-plan-v2",
+    adapters: Mapping[str, PaginatedSourceAdapter] = PAGINATED_SOURCE_ADAPTERS,
+    retry_policy: RetryPolicy | None = None,
+    rate_limiter: RateLimiter | None = None,
+    retry_sleep: Callable[[float], None] = time.sleep,
+) -> ReviewDataset:
+    """Execute a complete, checkpointed retrieval wave without scientific filtering."""
+
+    if not run_id.strip():
+        raise ValueError("run_id must not be empty")
+    specs = list(queries)
+    if not specs:
+        raise ValueError("retrieval runs require at least one planned source query")
+    if any(spec.limit < 1 for spec in specs):
+        raise ValueError("retrieval page sizes must be positive")
+    if not query_plan_version.strip():
+        raise ValueError("query_plan_version must not be empty")
+    retry_policy = retry_policy or RetryPolicy()
+    for spec in specs:
+        if spec.source_database not in adapters:
+            raise ValueError(f"unsupported paginated source: {spec.source_database}")
+        if spec.source_database not in http_clients:
+            raise ValueError(f"missing HTTP client for {spec.source_database}")
+        if spec.page is not None or spec.cursor is not None:
+            raise ValueError(
+                "paginated runs must start from adapter initial state or a persisted checkpoint"
+            )
+        if spec.source_database == "SemanticScholar" and spec.pagination_mode not in {
+            "relevance",
+            "bulk",
+        }:
+            raise ValueError("Semantic Scholar mode must be explicitly frozen per query")
+        page_limit = _maximum_page_size(spec)
+        if spec.limit > page_limit:
+            raise ValueError(
+                f"{spec.source_database} page size {spec.limit} exceeds supported maximum "
+                f"{page_limit}"
+            )
+        reserved = _reserved_request_fields(spec.source_database)
+        conflicts = reserved.intersection(spec.filters)
+        if conflicts:
+            raise ValueError(
+                f"{spec.source_database} filters cannot override orchestrated request fields: "
+                f"{sorted(conflicts)!r}"
+            )
+
+    store = CheckpointStore(checkpoint_dir)
+    plan_hash = _query_plan_hash(specs)
+    query_ids = [_query_id(run_id, index, spec) for index, spec in enumerate(specs)]
+    if resume:
+        if not store.dataset_path.exists():
+            raise FileNotFoundError("resume requested but no retrieval checkpoint exists")
+        dataset = load_review_dataset(store.dataset_path)
+        if len(dataset.retrieval_runs) != 1 or dataset.retrieval_runs[0].run_id != run_id:
+            raise ValueError("checkpoint retrieval run ID does not match")
+        run = dataset.retrieval_runs[0]
+        if run.query_plan_hash != plan_hash or run.query_plan_version != query_plan_version:
+            raise ValueError("checkpoint query plan/version does not match the requested run")
+        if run.planned_query_ids != query_ids:
+            raise ValueError("checkpoint planned query manifest does not match")
+        if run.completion_status is RetrievalCompletionStatus.COMPLETE:
+            return dataset
+        if run.completion_status in {
+            RetrievalCompletionStatus.FAILED,
+            RetrievalCompletionStatus.TRUNCATED,
+        }:
+            return dataset
+    else:
+        if store.dataset_path.exists():
+            raise FileExistsError("checkpoint already exists; use resume=True or a new run path")
+        started_at = timestamp()
+        source_queries = [
+            SourceQuery(
+                query_id=query_ids[index],
+                source_database=spec.source_database,
+                query_text=spec.query_text,
+                retrieval_started_at=started_at,
+                retrieval_ended_at=started_at,
+                status=ProcessingStatus.PARTIAL,
+                run_id=run_id,
+                endpoint=spec.endpoint or SOURCE_ENDPOINTS.get(spec.source_database),
+                query_version=spec.query_version,
+                result_count=0,
+                fields=list(spec.fields),
+                filters={**spec.filters, "page_size": spec.limit},
+                software_version=software_version,
+                metadata={
+                    **spec.metadata,
+                    "request_index": index,
+                    "pagination_mode": spec.pagination_mode,
+                    "credential_names": sorted(spec.credentials),
+                },
+                completion_status=RetrievalCompletionStatus.PLANNED,
+            )
+            for index, spec in enumerate(specs)
+        ]
+        retrieval_run = RetrievalRun(
+            run_id=run_id,
+            kind=RetrievalRunKind.PRIMARY,
+            query_plan_version=query_plan_version,
+            query_plan_hash=plan_hash,
+            planned_query_ids=query_ids,
+            source_query_ids=query_ids,
+            retrieval_started_at=started_at,
+            retrieval_completed_at=started_at,
+            status=ProcessingStatus.PARTIAL,
+            protocol_version=protocol_version,
+            software_version=software_version,
+            errors=["retrieval wave incomplete"],
+            metadata={"rubric_version": rubric_version},
+            completion_status=RetrievalCompletionStatus.RUNNING,
+        )
+        dataset = ReviewDataset(
+            schema_version="1.2.0",
+            retrieval_runs=[retrieval_run],
+            source_queries=source_queries,
+        )
+        store.save_dataset(dataset)
+
+    run = dataset.retrieval_runs[0]
+    limiter = rate_limiter
+    if limiter is None:
+        live = any(
+            isinstance(http_clients[spec.source_database], RequestsHttpClient)
+            for spec in specs
+        )
+        limiter = RateLimiter() if live else RateLimiter({})
+
+    for spec, query_id in zip(specs, query_ids, strict=True):
+        query = next(item for item in dataset.source_queries if item.query_id == query_id)
+        if query.completion_status is RetrievalCompletionStatus.COMPLETE:
+            continue
+        if query.completion_status in {
+            RetrievalCompletionStatus.FAILED,
+            RetrievalCompletionStatus.TRUNCATED,
+        }:
+            continue
+        query.completion_status = RetrievalCompletionStatus.RUNNING
+        adapter = adapters[spec.source_database]
+        existing_query_pages = [
+            item for item in dataset.retrieval_pages if item.source_query_id == query_id
+        ]
+        if any(
+            item.adapter_version != adapter.version or item.strategy != adapter.strategy
+            for item in existing_query_pages
+        ):
+            raise ValueError("checkpoint adapter version/strategy does not match")
+
+        while query.completion_status is RetrievalCompletionStatus.RUNNING:
+            query_pages = sorted(
+                (item for item in dataset.retrieval_pages if item.source_query_id == query_id),
+                key=lambda item: item.ordinal,
+            )
+            if query_pages and query_pages[-1].status is RetrievalCompletionStatus.RUNNING:
+                page = query_pages[-1]
+                state = dict(page.request_state)
+            else:
+                state = (
+                    adapter.initial_state(spec)
+                    if not query_pages
+                    else dict(query_pages[-1].next_state or {})
+                )
+                if not state:
+                    _fail_query(query, "non-terminal page omitted its next pagination state")
+                    break
+                state_fingerprint = _payload_hash(state)
+                if any(_payload_hash(item.request_state) == state_fingerprint for item in query_pages):
+                    _fail_query(query, "pagination state repeated before completion")
+                    break
+                ordinal = len(query_pages)
+                page = RetrievalPage(
+                    page_id=_stable_id("page", query_id, str(ordinal), state_fingerprint),
+                    source_query_id=query_id,
+                    ordinal=ordinal,
+                    strategy=adapter.strategy,
+                    adapter_version=adapter.version,
+                    request_state=state,
+                    status=RetrievalCompletionStatus.RUNNING,
+                )
+                dataset.retrieval_pages.append(page)
+                query.page_ids.append(page.page_id)
+                _touch(dataset, query, timestamp())
+                _save_checkpoint(store, dataset, protocol_version, rubric_version, software_version)
+
+            request = adapter.build_request(spec, state)
+            existing_attempts = [
+                item for item in dataset.retrieval_attempts if item.page_id == page.page_id
+            ]
+            response: HttpResponse | None = None
+            if existing_attempts and existing_attempts[-1].status is RetrievalAttemptStatus.STARTED:
+                interrupted = existing_attempts[-1]
+                if interrupted.request_hash != request.request_hash():
+                    _fail_page(page, query, "resumed page request hash changed")
+                    break
+                if interrupted.raw_response_path and interrupted.raw_response_hash:
+                    response = store.load_response(
+                        interrupted.raw_response_path, interrupted.raw_response_hash
+                    )
+                else:
+                    interrupted.status = RetrievalAttemptStatus.FAILED
+                    interrupted.ended_at = timestamp()
+                    interrupted.error = "interrupted before response persistence"
+
+            while response is None and len(existing_attempts) < retry_policy.max_attempts:
+                attempt_number = len(existing_attempts) + 1
+                attempt_id = _stable_id("attempt", page.page_id, str(attempt_number))
+                rate_delay = limiter.wait(spec.source_database)
+                attempt = RetrievalAttempt(
+                    attempt_id=attempt_id,
+                    page_id=page.page_id,
+                    attempt_number=attempt_number,
+                    started_at=timestamp(),
+                    status=RetrievalAttemptStatus.STARTED,
+                    request_method=request.method,
+                    request_url=request.url,
+                    request_params=request.sanitized_params(),
+                    request_headers=request.sanitized_headers(),
+                    request_hash=request.request_hash(),
+                    retry_of_attempt_id=existing_attempts[-1].attempt_id
+                    if existing_attempts
+                    else None,
+                    rate_limit_delay_seconds=rate_delay,
+                )
+                dataset.retrieval_attempts.append(attempt)
+                page.attempt_ids.append(attempt_id)
+                existing_attempts.append(attempt)
+                _touch(dataset, query, attempt.started_at)
+                _save_checkpoint(store, dataset, protocol_version, rubric_version, software_version)
+                try:
+                    raw_response = http_clients[spec.source_database].get(
+                        request.url,
+                        params=request.params,
+                        headers=request.headers or None,
+                        timeout=request.timeout,
+                    )
+                    relative_path, response_hash = store.save_response(attempt_id, raw_response)
+                    attempt.raw_response_path = relative_path
+                    attempt.raw_response_hash = response_hash
+                    attempt.response_status = raw_response.status_code
+                    attempt.actual_request_url = redact_url(
+                        getattr(raw_response, "request_url", raw_response.url)
+                    )
+                    attempt.response_url = redact_url(raw_response.url)
+                    attempt.response_headers = _sanitized_response_headers(raw_response.headers)
+                    _touch(dataset, query, timestamp())
+                    _save_checkpoint(
+                        store, dataset, protocol_version, rubric_version, software_version
+                    )
+                    response = store.load_response(relative_path, response_hash)
+                except Exception as exc:  # noqa: BLE001 - every transport failure is provenance
+                    attempt.status = RetrievalAttemptStatus.FAILED
+                    attempt.ended_at = timestamp()
+                    attempt.error = f"{type(exc).__name__}: {exc}"
+                    if attempt_number < retry_policy.max_attempts:
+                        delay = retry_policy.delay(attempt_number)
+                        attempt.retry_delay_seconds = delay
+                        retry_sleep(delay)
+                    _touch(dataset, query, attempt.ended_at)
+                    _save_checkpoint(
+                        store, dataset, protocol_version, rubric_version, software_version
+                    )
+
+            if response is None:
+                _fail_page(page, query, "retrieval attempts exhausted before a response")
+                break
+
+            attempt = existing_attempts[-1]
+            if not 200 <= response.status_code < 300:
+                attempt.status = RetrievalAttemptStatus.FAILED
+                attempt.ended_at = timestamp()
+                attempt.error = f"HTTP {response.status_code} from {response.url}"
+                retryable = response.status_code in retry_policy.retry_statuses
+                if retryable and len(existing_attempts) < retry_policy.max_attempts:
+                    retry_after = _header(response.headers, "retry-after")
+                    delay = retry_policy.delay(attempt.attempt_number, retry_after)
+                    attempt.retry_delay_seconds = delay
+                    retry_sleep(delay)
+                    response = None
+                    _touch(dataset, query, attempt.ended_at)
+                    _save_checkpoint(
+                        store, dataset, protocol_version, rubric_version, software_version
+                    )
+                    continue
+                _fail_page(page, query, attempt.error)
+                break
+
+            try:
+                parsed = adapter.parse_response(spec, request.state, response)
+                if parsed.raw_item_count != len(parsed.records):
+                    raise PaginationError(
+                        "parsed record count does not account for every raw returned item"
+                    )
+            except Exception as exc:  # noqa: BLE001 - invalid pages may be retried verbatim
+                attempt.status = RetrievalAttemptStatus.FAILED
+                attempt.ended_at = timestamp()
+                attempt.error = f"{type(exc).__name__}: {exc}"
+                if len(existing_attempts) < retry_policy.max_attempts:
+                    delay = retry_policy.delay(attempt.attempt_number)
+                    attempt.retry_delay_seconds = delay
+                    retry_sleep(delay)
+                    response = None
+                    _touch(dataset, query, attempt.ended_at)
+                    _save_checkpoint(
+                        store, dataset, protocol_version, rubric_version, software_version
+                    )
+                    continue
+                _fail_page(page, query, attempt.error)
+                break
+
+            previous_query_occurrences = [
+                item for item in dataset.occurrences if item.source_query_id == query_id
+            ]
+            for rank, record in enumerate(parsed.records, start=1):
+                source_rank = len(previous_query_occurrences) + rank
+                source_identifier = native_identifier(record, source_rank)
+                occurrence = RecordOccurrence(
+                    occurrence_id=_stable_id(
+                        "occurrence", page.page_id, str(rank), source_identifier
+                    ),
+                    source_query_id=query_id,
+                    source_identifier=source_identifier,
+                    retrieved_at=attempt.ended_at or timestamp(),
+                    record=record,
+                    source_rank=source_rank,
+                    page=page.ordinal,
+                    cursor=_state_cursor(state),
+                    raw_payload_hash=_payload_hash(record.original_metadata),
+                    metadata={
+                        "source_identifier_missing": record.source_identifier is None,
+                        "parser_incomplete": bool(
+                            record.original_metadata.get("parser_incomplete")
+                        ),
+                    },
+                    retrieval_page_id=page.page_id,
+                )
+                dataset.occurrences.append(occurrence)
+                page.occurrence_ids.append(occurrence.occurrence_id)
+
+            page.returned_item_count = parsed.raw_item_count
+            page.native_identifiers = list(parsed.native_identifiers)
+            page.next_state = parsed.next_state
+            page.source_reported_total = parsed.source_reported_total
+            page.total_is_exact = parsed.total_is_exact
+            page.terminal = parsed.terminal
+            page.completion_proof = parsed.completion_proof
+            page.truncated = parsed.truncated
+            page.truncation_reason = parsed.truncation_reason
+            page.metadata = dict(parsed.metadata)
+            page.status = (
+                RetrievalCompletionStatus.TRUNCATED
+                if parsed.truncated
+                else RetrievalCompletionStatus.COMPLETE
+            )
+            attempt.status = RetrievalAttemptStatus.SUCCEEDED
+            attempt.ended_at = timestamp()
+
+            consistency_error = _pagination_consistency_error(dataset, query, page)
+            consistency_error = parsed.incomplete_reason or consistency_error
+            query.result_count = sum(
+                item.returned_item_count
+                for item in dataset.retrieval_pages
+                if item.source_query_id == query_id
+            )
+            if parsed.source_reported_total is not None:
+                query.source_reported_total = parsed.source_reported_total
+                query.total_is_exact = parsed.total_is_exact
+            if consistency_error:
+                _fail_page(page, query, consistency_error, preserve_page_status=True)
+            elif parsed.truncated:
+                query.status = ProcessingStatus.PARTIAL
+                query.completion_status = RetrievalCompletionStatus.TRUNCATED
+                query.errors.append(parsed.truncation_reason or "source result window truncated")
+            elif parsed.terminal:
+                query.status = ProcessingStatus.OK
+                query.completion_status = RetrievalCompletionStatus.COMPLETE
+                query.completion_proof = parsed.completion_proof
+                query.retrieval_ended_at = attempt.ended_at
+
+            _touch(dataset, query, attempt.ended_at)
+            _save_checkpoint(store, dataset, protocol_version, rubric_version, software_version)
+
+    completed_at = timestamp()
+    run.retrieval_completed_at = completed_at
+    incomplete = [
+        item
+        for item in dataset.source_queries
+        if item.completion_status is not RetrievalCompletionStatus.COMPLETE
+    ]
+    if not incomplete:
+        run.status = ProcessingStatus.OK
+        run.completion_status = RetrievalCompletionStatus.COMPLETE
+        run.retrieval_cutoff_date = _utc_date(completed_at)
+        run.errors = []
+    else:
+        run.status = (
+            ProcessingStatus.FAILED
+            if len(incomplete) == len(dataset.source_queries)
+            else ProcessingStatus.PARTIAL
+        )
+        run.completion_status = (
+            RetrievalCompletionStatus.TRUNCATED
+            if any(
+                item.completion_status is RetrievalCompletionStatus.TRUNCATED
+                for item in incomplete
+            )
+            else RetrievalCompletionStatus.FAILED
+        )
+        run.retrieval_cutoff_date = None
+        run.errors = [
+            f"{item.query_id}: {error}" for item in incomplete for error in item.errors
+        ] or ["retrieval wave incomplete"]
+    _save_checkpoint(store, dataset, protocol_version, rubric_version, software_version)
+    dataset.validate()
+    return dataset
+
+
+def _touch(dataset: ReviewDataset, query: SourceQuery, value: str | None) -> None:
+    if value is None:
+        return
+    query.retrieval_ended_at = value
+    dataset.retrieval_runs[0].retrieval_completed_at = value
+
+
+def _maximum_page_size(spec: RetrievalQuerySpec) -> int:
+    if spec.source_database == "SemanticScholar":
+        return 100 if spec.pagination_mode == "relevance" else 1000
+    return {
+        "PubMed": 10_000,
+        "EuropePMC": 1000,
+        "CrossRef": 1000,
+        "arXiv": 2000,
+    }[spec.source_database]
+
+
+def _reserved_request_fields(source_database: str) -> set[str]:
+    return {
+        "PubMed": {"db", "term", "retmax", "retstart", "retmode", "usehistory", "api_key"},
+        "EuropePMC": {"query", "format", "pageSize", "cursorMark", "resultType"},
+        "CrossRef": {"query", "rows", "cursor"},
+        "SemanticScholar": {"query", "limit", "offset", "token", "fields", "sort"},
+        "arXiv": {"search_query", "start", "max_results", "sortBy", "sortOrder"},
+    }[source_database]
+
+
+def _save_checkpoint(
+    store: CheckpointStore,
+    dataset: ReviewDataset,
+    protocol_version: str,
+    rubric_version: str,
+    software_version: str | None,
+) -> None:
+    provenance = DecisionProvenance(
+        actor=DecisionActor(
+            actor_id="h2h_lit.retrieval",
+            actor_type=ActorType.SOFTWARE,
+            metadata={"software_version": software_version},
+        ),
+        authority=DecisionAuthority.DETERMINISTIC,
+        scope=DecisionScope.PROSPECTIVE,
+        protocol_version=protocol_version,
+        rubric_version=rubric_version,
+        created_at=dataset.retrieval_runs[0].retrieval_started_at,
+        metadata={
+            "run_id": dataset.retrieval_runs[0].run_id,
+            "rule": "doi_first_title_fallback",
+        },
+    )
+    dataset.canonical_records, dataset.duplicate_decisions = canonicalize_occurrences(
+        dataset.occurrences, provenance=provenance
+    )
+    store.save_dataset(dataset)
+
+
+def _fail_query(query: SourceQuery, error: str) -> None:
+    query.status = ProcessingStatus.FAILED
+    query.completion_status = RetrievalCompletionStatus.FAILED
+    if error not in query.errors:
+        query.errors.append(error)
+
+
+def _fail_page(
+    page: RetrievalPage,
+    query: SourceQuery,
+    error: str,
+    *,
+    preserve_page_status: bool = False,
+) -> None:
+    if not preserve_page_status:
+        page.status = RetrievalCompletionStatus.FAILED
+    page.metadata["completion_error"] = error
+    _fail_query(query, error)
+
+
+def _pagination_consistency_error(
+    dataset: ReviewDataset,
+    query: SourceQuery,
+    page: RetrievalPage,
+) -> str | None:
+    prior_pages = [
+        item
+        for item in dataset.retrieval_pages
+        if item.source_query_id == query.query_id and item.page_id != page.page_id
+    ]
+    prior_ids = {identifier for item in prior_pages for identifier in item.native_identifiers}
+    overlap = prior_ids.intersection(page.native_identifiers)
+    if overlap:
+        return f"source repeated native identifiers across pages: {sorted(overlap)!r}"
+    exact_totals = {
+        item.source_reported_total
+        for item in [*prior_pages, page]
+        if item.total_is_exact and item.source_reported_total is not None
+    }
+    if len(exact_totals) > 1:
+        return f"source exact total changed during pagination: {sorted(exact_totals)!r}"
+    arxiv_updates = {
+        item.metadata.get("feed_updated")
+        for item in [*prior_pages, page]
+        if item.metadata.get("feed_updated")
+    }
+    if len(arxiv_updates) > 1:
+        return "arXiv feed snapshot changed during pagination"
+    if page.terminal and not page.truncated and page.total_is_exact:
+        occurrence_count = sum(
+            item.returned_item_count
+            for item in [*prior_pages, page]
+        )
+        if occurrence_count != page.source_reported_total:
+            return (
+                f"terminal occurrence count {occurrence_count} does not match exact source total "
+                f"{page.source_reported_total}"
+            )
+    if not page.terminal and page.next_state is None:
+        return "non-terminal page did not provide next pagination state"
+    return None
+
+
+def _state_cursor(state: dict[str, Any]) -> str | None:
+    for key in ("cursor", "cursor_mark", "token"):
+        if state.get(key) is not None:
+            return str(state[key])
+    if state.get("start") is not None:
+        return str(state["start"])
+    if state.get("index") is not None:
+        return str(state["index"])
+    return None
+
+
+def _sanitized_response_headers(headers: Mapping[str, Any]) -> dict[str, str]:
+    sensitive = {"authorization", "proxy-authorization", "set-cookie", "cookie"}
+    return {
+        str(key): "<redacted>" if str(key).lower() in sensitive else str(value)
+        for key, value in headers.items()
+    }
+
+
+def _header(headers: Mapping[str, Any], name: str) -> str | None:
+    for key, value in headers.items():
+        if str(key).lower() == name.lower():
+            return str(value)
+    return None
+
+
 def save_review_dataset(path: str | Path, dataset: ReviewDataset) -> str:
     """Persist canonical JSON and return its SHA-256 content digest."""
 
     destination = Path(path)
-    destination.parent.mkdir(parents=True, exist_ok=True)
     content = dataset.to_json() + "\n"
-    destination.write_text(content, encoding="utf-8", newline="\n")
+    atomic_write(destination, content.encode("utf-8"))
     return hashlib.sha256(content.encode("utf-8")).hexdigest()
 
 
@@ -321,6 +965,8 @@ def _query_plan_hash(specs: list[RetrievalQuerySpec]) -> str:
             "fields": list(spec.fields),
             "filters": dict(spec.filters),
             "metadata": dict(spec.metadata),
+            "pagination_mode": spec.pagination_mode,
+            "credential_names": sorted(spec.credentials),
         }
         for spec in specs
     ]

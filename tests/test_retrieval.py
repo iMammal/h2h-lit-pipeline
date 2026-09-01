@@ -12,7 +12,7 @@ from h2h_lit.retrieval import (
     load_review_dataset,
     save_review_dataset,
 )
-from h2h_lit.review import DedupeOutcome, RetrievalRunKind
+from h2h_lit.review import DedupeOutcome, RetrievalCompletionStatus, RetrievalRunKind
 from tests.fake_http import FakeHttp, FakeResponse
 
 PUBMED_SEARCH = b"<eSearchResult><IdList><Id>123</Id></IdList></eSearchResult>"
@@ -109,6 +109,11 @@ def test_multi_source_records_preserve_occurrences_and_deduplicate_by_doi():
     run = dataset.retrieval_runs[0]
     assert run.kind is RetrievalRunKind.PRIMARY
     assert run.status is ProcessingStatus.OK
+    assert run.completion_status is RetrievalCompletionStatus.COMPLETE
+    assert all(
+        query.completion_status is RetrievalCompletionStatus.COMPLETE
+        for query in dataset.source_queries
+    )
     assert run.retrieval_cutoff_date == "2026-08-30"
     assert run.planned_query_ids == run.source_query_ids
     assert run.source_query_ids == [query.query_id for query in dataset.source_queries]
