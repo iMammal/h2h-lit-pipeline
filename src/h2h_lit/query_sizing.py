@@ -11,8 +11,10 @@ from h2h_lit.checkpoint import atomic_write
 from h2h_lit.query_development import (
     CANDIDATE_V2_SCHEMA_VERSION,
     CANDIDATE_V3_SCHEMA_VERSION,
+    CANDIDATE_V4_SCHEMA_VERSION,
     SIZING_RUN_SCHEMA_VERSION,
     SIZING_RUN_V2_SCHEMA_VERSION,
+    SIZING_RUN_V4_SCHEMA_VERSION,
     QuerySizingRun,
     SentinelPaper,
     SizingAttempt,
@@ -29,6 +31,7 @@ from h2h_lit.query_development import (
 
 DRY_RUN_SCHEMA_VERSION = "1.0.0"
 DRY_RUN_V2_SCHEMA_VERSION = "1.1.0"
+DRY_RUN_V4_SCHEMA_VERSION = "1.2.0"
 DEFAULT_RUN_ID = "star-query-sizing-v0-1-run-001"
 
 SOURCE_URLS = {
@@ -76,9 +79,11 @@ def build_sizing_dry_run(
 ) -> dict[str, Any]:
     candidate_set = load_candidate_set(candidate_config)
     sentinel_set = load_sentinel_set(sentinel_config)
+    is_v4 = candidate_set.payload["schema_version"] == CANDIDATE_V4_SCHEMA_VERSION
     is_versioned = candidate_set.payload["schema_version"] in {
         CANDIDATE_V2_SCHEMA_VERSION,
         CANDIDATE_V3_SCHEMA_VERSION,
+        CANDIDATE_V4_SCHEMA_VERSION,
     }
     if sentinel_set.candidate_set_hash != candidate_set.candidate_set_hash():
         compatibility = candidate_set.payload.get("sentinel_compatibility", {})
@@ -92,7 +97,7 @@ def build_sizing_dry_run(
 
     timestamp = created_at or sentinel_set.frozen_at
     candidates = candidate_set.render_all()
-    expected_candidates = 54 if is_versioned else 62
+    expected_candidates = 10 if is_v4 else 54 if is_versioned else 62
     if len(candidates) != expected_candidates:
         raise ValueError(
             f"the candidate configuration must render exactly {expected_candidates} queries"
@@ -101,7 +106,11 @@ def build_sizing_dry_run(
     observations = [_planned_observation(item, timestamp) for item in candidates]
     run = QuerySizingRun(
         schema_version=(
-            SIZING_RUN_V2_SCHEMA_VERSION if is_versioned else SIZING_RUN_SCHEMA_VERSION
+            SIZING_RUN_V4_SCHEMA_VERSION
+            if is_v4
+            else SIZING_RUN_V2_SCHEMA_VERSION
+            if is_versioned
+            else SIZING_RUN_SCHEMA_VERSION
         ),
         sizing_run_id=run_id,
         candidate_set_id=candidate_set.candidate_set_id,
@@ -138,11 +147,28 @@ def build_sizing_dry_run(
     ]
     identity_specs: list[dict[str, Any]] = []
     if is_versioned:
-        identity_specs = [
-            _sentinel_identity_spec(source, sentinel)
-            for source in candidate_set.payload["sources"]
-            for sentinel in sentinel_set.entries
-        ]
+        if is_v4:
+            identity_pairs: list[tuple[str, SentinelPaper]] = []
+            seen_identity_pairs: set[tuple[str, str]] = set()
+            for item in candidates:
+                for sentinel in sentinel_set.entries:
+                    key = (item.source, sentinel.sentinel_id)
+                    if (
+                        item.family_id in sentinel.diagnostic_family_ids
+                        and key not in seen_identity_pairs
+                    ):
+                        seen_identity_pairs.add(key)
+                        identity_pairs.append((item.source, sentinel))
+            identity_specs = [
+                _sentinel_identity_spec(source, sentinel)
+                for source, sentinel in identity_pairs
+            ]
+        else:
+            identity_specs = [
+                _sentinel_identity_spec(source, sentinel)
+                for source in candidate_set.payload["sources"]
+                for sentinel in sentinel_set.entries
+            ]
         identity_by_key = {
             (item["source"], item["sentinel_id"]): item["identity_resolution_id"]
             for item in identity_specs
@@ -179,9 +205,18 @@ def build_sizing_dry_run(
             "gate": controls.production_identification_gate,
             "automatic_mode_switching": controls.automatic_mode_switching,
         }
+    containment_assertions = (
+        [_containment_assertion_spec(item) for item in candidate_set.payload["containment_assertions"]]
+        if is_v4
+        else []
+    )
     report = {
         "schema_version": (
-            DRY_RUN_V2_SCHEMA_VERSION if is_versioned else DRY_RUN_SCHEMA_VERSION
+            DRY_RUN_V4_SCHEMA_VERSION
+            if is_v4
+            else DRY_RUN_V2_SCHEMA_VERSION
+            if is_versioned
+            else DRY_RUN_SCHEMA_VERSION
         ),
         "report_kind": "non_production_query_sizing_dry_run",
         "run": run.to_dict(),
@@ -190,12 +225,40 @@ def build_sizing_dry_run(
         "sentinel_diagnostic_specifications": diagnostics,
         "semantic_control_specifications": semantic_controls,
         "semantic_control_provenance": semantic_control_provenance,
-        "source_requirements": _source_requirements(is_v2=is_versioned),
+        "containment_assertion_specifications": containment_assertions,
+        "source_requirements": _source_requirements(
+            is_v2=is_versioned, bounded_v4=is_v4
+        ),
         "interpretation_rules": list(INTERPRETATION_RULES),
         "non_production_invariants": dict(NON_PRODUCTION_INVARIANTS),
     }
     report["report_hash"] = _hash_without_report_hash(report)
     return report
+
+
+def _containment_assertion_spec(assertion: dict[str, Any]) -> dict[str, Any]:
+    source = str(assertion["source"])
+    subset = assertion["subset"]
+    superset = assertion["superset"]
+    payload = {
+        "assertion_id": assertion["assertion_id"],
+        "kind": assertion["kind"],
+        "source": source,
+        "subset_candidate_query_id": (
+            f"candidate:{subset['family_id']}:{subset['variant_id']}:{source}"
+        ),
+        "superset_candidate_query_id": (
+            f"candidate:{superset['family_id']}:{superset['variant_id']}:{source}"
+        ),
+        "sentinel_ids": list(assertion.get("sentinel_ids", [])),
+        "failure_effect": assertion["failure_effect"],
+        "automatic_query_rewrite": False,
+        "automatic_variant_selection": False,
+    }
+    payload["assertion_hash"] = hashlib.sha256(
+        canonical_json(payload).encode("utf-8")
+    ).hexdigest()
+    return payload
 
 
 def save_sizing_dry_run(report: dict[str, Any], path: str | Path) -> str:
@@ -617,13 +680,20 @@ def _http(
     return request
 
 
-def _source_requirements(*, is_v2: bool = False) -> list[dict[str, Any]]:
+def _source_requirements(
+    *, is_v2: bool = False, bounded_v4: bool = False
+) -> list[dict[str, Any]]:
     requirements = [
         {
             "source": "IEEEXplore",
             "kind": "credential",
             "reference": "IEEE_XPLORE_API_KEY",
-            "required_for_live_execution": True,
+            "required_for_live_execution": not bounded_v4,
+            "status": (
+                "orthogonal_pending_not_part_of_bounded_matrix"
+                if bounded_v4
+                else "required"
+            ),
         },
         {
             "source": "SemanticScholar",
@@ -636,7 +706,12 @@ def _source_requirements(*, is_v2: bool = False) -> list[dict[str, Any]]:
             "source": "ACMDigitalLibrary",
             "kind": "human_operator",
             "reference": "ACM_OPERATOR_ID",
-            "required_for_live_execution": True,
+            "required_for_live_execution": not bounded_v4,
+            "status": (
+                "orthogonal_pending_not_part_of_bounded_matrix"
+                if bounded_v4
+                else "required"
+            ),
             "requirements": ["institutional_access", "UTC_timestamp", "query_evidence"],
         },
     ]

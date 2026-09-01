@@ -16,8 +16,10 @@ from h2h_lit.checkpoint import atomic_write
 CANDIDATE_SCHEMA_VERSION = "0.1.0"
 CANDIDATE_V2_SCHEMA_VERSION = "0.2.0"
 CANDIDATE_V3_SCHEMA_VERSION = "0.3.0"
+CANDIDATE_V4_SCHEMA_VERSION = "0.4.0"
 SIZING_RUN_SCHEMA_VERSION = "1.1.0"
 SIZING_RUN_V2_SCHEMA_VERSION = "1.2.0"
+SIZING_RUN_V4_SCHEMA_VERSION = "1.3.0"
 LEGACY_SIZING_RUN_SCHEMA_VERSION = "1.0.0"
 SENTINEL_SET_SCHEMA_VERSION = "1.0.0"
 EXPECTED_FAMILIES = (
@@ -178,6 +180,7 @@ class CandidateSet:
             CANDIDATE_SCHEMA_VERSION,
             CANDIDATE_V2_SCHEMA_VERSION,
             CANDIDATE_V3_SCHEMA_VERSION,
+            CANDIDATE_V4_SCHEMA_VERSION,
         }:
             raise CandidateConfigurationError("unsupported candidate-query schema version")
         if data.get("methodological_status") != "candidate_not_production_frozen":
@@ -237,10 +240,22 @@ class CandidateSet:
         if set(families[EXPECTED_FAMILIES[0]]["variants"]) != {"anchored", "unanchored"}:
             raise CandidateConfigurationError("QF01 requires anchored/unanchored comparators")
         qf02 = families[EXPECTED_FAMILIES[1]]
-        if set(qf02["variants"]) != {"A", "B", "C", "D"}:
-            raise CandidateConfigurationError("QF02 requires A/B/C/D sizing comparators")
-        if qf02.get("leading_candidate") != "D":
-            raise CandidateConfigurationError("QF02-D must remain the leading candidate")
+        if self.payload["schema_version"] == CANDIDATE_V4_SCHEMA_VERSION:
+            if set(qf02["variants"]) != {"A", "B", "C", "D", "E"}:
+                raise CandidateConfigurationError("v0.4 QF02 requires A/B/C/D/E definitions")
+            if qf02.get("leading_candidate") is not None:
+                raise CandidateConfigurationError("v0.4 cannot automatically select QF02-E")
+            qf03 = families[EXPECTED_FAMILIES[2]]
+            if set(qf03["variants"]) != {"default", "revised"}:
+                raise CandidateConfigurationError(
+                    "v0.4 QF03 requires historical and revised definitions"
+                )
+            self._validate_bounded_v4()
+        else:
+            if set(qf02["variants"]) != {"A", "B", "C", "D"}:
+                raise CandidateConfigurationError("QF02 requires A/B/C/D sizing comparators")
+            if qf02.get("leading_candidate") != "D":
+                raise CandidateConfigurationError("QF02-D must remain the leading candidate")
         templates = " ".join(
             template
             for family in families.values()
@@ -248,6 +263,41 @@ class CandidateSet:
         )
         if "{X}" in templates:
             raise CandidateConfigurationError("family templates cannot use the retired X name")
+
+    def _validate_bounded_v4(self) -> None:
+        approved = [
+            (item.get("family_id"), item.get("variant_id"))
+            for item in self.payload.get("approved_production_freeze", [])
+        ]
+        if approved != [
+            (EXPECTED_FAMILIES[0], "unanchored"),
+            (EXPECTED_FAMILIES[3], "default"),
+            (EXPECTED_FAMILIES[4], "default"),
+        ]:
+            raise CandidateConfigurationError("v0.4 production-freeze declarations changed")
+        matrix = self.payload.get("bounded_matrix", [])
+        expanded = [
+            (item.get("family_id"), item.get("variant_id"), source)
+            for item in matrix
+            for source in item.get("sources", [])
+        ]
+        expected_sources = ["PubMed", "EuropePMC", "SemanticScholar", "arXiv"]
+        expected = [
+            (EXPECTED_FAMILIES[1], "E", source) for source in expected_sources
+        ] + [
+            (EXPECTED_FAMILIES[2], "revised", source) for source in expected_sources
+        ] + [
+            (EXPECTED_FAMILIES[1], variant, "SemanticScholar")
+            for variant in ("C", "D")
+        ]
+        if expanded != expected:
+            raise CandidateConfigurationError("v0.4 bounded sizing matrix changed")
+        assertions = self.payload.get("containment_assertions", [])
+        if [item.get("kind") for item in assertions] != [
+            "candidate_count_less_than_or_equal",
+            "sentinel_match_implication",
+        ]:
+            raise CandidateConfigurationError("v0.4 containment assertions changed")
 
     def _validate_sources(self) -> None:
         sources = self.payload.get("sources", {})
@@ -310,6 +360,25 @@ class CandidateSet:
         expansions = _expansions(self.payload)
         output: list[CandidateQuery] = []
         families = self.payload["families"]
+        if self.payload["schema_version"] == CANDIDATE_V4_SCHEMA_VERSION:
+            for matrix_item in self.payload["bounded_matrix"]:
+                family_id = matrix_item["family_id"]
+                variant_id = matrix_item["variant_id"]
+                family = families[family_id]
+                expression = _expand_template(family["variants"][variant_id], expansions)
+                for source in matrix_item["sources"]:
+                    output.append(
+                        _render_source_query(
+                            self,
+                            source,
+                            self.payload["sources"][source],
+                            family_id,
+                            family,
+                            variant_id,
+                            expression,
+                        )
+                    )
+            return output
         for source, source_spec in self.payload["sources"].items():
             for family_id, family in families.items():
                 if family_id not in source_spec["families"]:
@@ -951,6 +1020,118 @@ class SemanticControlGateEvaluation:
         )
 
 
+@dataclass(frozen=True, slots=True)
+class ContainmentAssertionResult:
+    assertion_id: str
+    kind: str
+    state: SizingGateStatus
+    source: str
+    subset_candidate_query_id: str
+    superset_candidate_query_id: str
+    subset_count: int | None = None
+    superset_count: int | None = None
+    evaluated_sentinel_ids: list[str] = field(default_factory=list)
+    failed_sentinel_ids: list[str] = field(default_factory=list)
+    reasons: list[str] = field(default_factory=list)
+
+    def validate(self) -> None:
+        if self.kind not in {
+            "candidate_count_less_than_or_equal",
+            "sentinel_match_implication",
+        }:
+            raise ValueError("unsupported containment assertion kind")
+        if self.source != "SemanticScholar":
+            raise ValueError("v0.4 containment assertions are Semantic Scholar-only")
+        if self.state not in {
+            SizingGateStatus.PASSED,
+            SizingGateStatus.FAILED,
+            SizingGateStatus.UNRESOLVED,
+        }:
+            raise ValueError("containment assertion must be passed, failed, or unresolved")
+        if self.kind == "candidate_count_less_than_or_equal":
+            if self.subset_count is None or self.superset_count is None:
+                if self.state is not SizingGateStatus.UNRESOLVED:
+                    raise ValueError("resolved count containment requires both counts")
+            elif (self.subset_count <= self.superset_count) != (
+                self.state is SizingGateStatus.PASSED
+            ):
+                raise ValueError("count containment result is inconsistent")
+        if self.state is SizingGateStatus.PASSED and (
+            self.failed_sentinel_ids or self.reasons
+        ):
+            raise ValueError("passing containment assertions cannot have failures")
+        if self.state is not SizingGateStatus.PASSED and not self.reasons:
+            raise ValueError("failed/unresolved containment assertions require reasons")
+
+    def to_dict(self) -> dict[str, Any]:
+        self.validate()
+        return _serialize(self)
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> ContainmentAssertionResult:
+        return cls(
+            assertion_id=str(data["assertion_id"]),
+            kind=str(data["kind"]),
+            state=SizingGateStatus(data["state"]),
+            source=str(data["source"]),
+            subset_candidate_query_id=str(data["subset_candidate_query_id"]),
+            superset_candidate_query_id=str(data["superset_candidate_query_id"]),
+            subset_count=data.get("subset_count"),
+            superset_count=data.get("superset_count"),
+            evaluated_sentinel_ids=list(data.get("evaluated_sentinel_ids", [])),
+            failed_sentinel_ids=list(data.get("failed_sentinel_ids", [])),
+            reasons=list(data.get("reasons", [])),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class ContainmentEvaluation:
+    evaluation_id: str
+    state: SizingGateStatus
+    selection_status: str
+    evaluated_at: str
+    dry_run_plan_hash: str
+    assertion_results: list[ContainmentAssertionResult]
+    reasons: list[str] = field(default_factory=list)
+
+    def validate(self) -> None:
+        if self.state not in {
+            SizingGateStatus.PASSED,
+            SizingGateStatus.FAILED,
+            SizingGateStatus.UNRESOLVED,
+        }:
+            raise ValueError("containment evaluation has an invalid state")
+        if self.selection_status not in {"containment_supported", "unresolved"}:
+            raise ValueError("containment selection status is invalid")
+        _validate_hash(self.dry_run_plan_hash, "containment dry-run plan hash")
+        for result in self.assertion_results:
+            result.validate()
+        if self.state is SizingGateStatus.PASSED:
+            if self.selection_status != "containment_supported" or self.reasons:
+                raise ValueError("passing containment must support containment semantics")
+        elif self.selection_status != "unresolved" or not self.reasons:
+            raise ValueError("failed containment must leave selection semantics unresolved")
+
+    def to_dict(self) -> dict[str, Any]:
+        self.validate()
+        return _serialize(self)
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> ContainmentEvaluation:
+        return cls(
+            evaluation_id=str(data["evaluation_id"]),
+            state=SizingGateStatus(data["state"]),
+            selection_status=str(data["selection_status"]),
+            evaluated_at=str(data["evaluated_at"]),
+            dry_run_plan_hash=str(data["dry_run_plan_hash"]),
+            assertion_results=[
+                ContainmentAssertionResult.from_dict(item)
+                for item in data.get("assertion_results", [])
+            ],
+            reasons=list(data.get("reasons", [])),
+        )
+
+
 @dataclass(slots=True)
 class QuerySizingRun:
     schema_version: str
@@ -971,6 +1152,7 @@ class QuerySizingRun:
         default_factory=list
     )
     semantic_control_gate: SemanticControlGateEvaluation | None = None
+    containment_evaluation: ContainmentEvaluation | None = None
     sentinel_identity_resolutions: list[SentinelIdentityResolution] = field(
         default_factory=list
     )
@@ -992,9 +1174,14 @@ class QuerySizingRun:
             LEGACY_SIZING_RUN_SCHEMA_VERSION,
             SIZING_RUN_SCHEMA_VERSION,
             SIZING_RUN_V2_SCHEMA_VERSION,
+            SIZING_RUN_V4_SCHEMA_VERSION,
         }:
             raise ValueError("unsupported query-sizing schema version")
-        if self.schema_version in {SIZING_RUN_SCHEMA_VERSION, SIZING_RUN_V2_SCHEMA_VERSION}:
+        if self.schema_version in {
+            SIZING_RUN_SCHEMA_VERSION,
+            SIZING_RUN_V2_SCHEMA_VERSION,
+            SIZING_RUN_V4_SCHEMA_VERSION,
+        }:
             if not all(
                 (self.sentinel_set_id, self.sentinel_set_version, self.sentinel_set_hash)
             ):
@@ -1042,7 +1229,10 @@ class QuerySizingRun:
                 raise ValueError("semantic-control gate does not cover committed controls")
             if self.semantic_control_gate.dry_run_plan_hash != self.dry_run_plan_hash:
                 raise ValueError("semantic-control gate references another dry-run plan")
-        if self.schema_version != SIZING_RUN_V2_SCHEMA_VERSION and (
+        if self.schema_version not in {
+            SIZING_RUN_V2_SCHEMA_VERSION,
+            SIZING_RUN_V4_SCHEMA_VERSION,
+        } and (
             control_ids or self.semantic_control_gate is not None
         ):
             raise ValueError("semantic-control execution provenance requires sizing v1.2")
@@ -1058,7 +1248,10 @@ class QuerySizingRun:
             identity_keys.append((resolution.source, resolution.sentinel_id))
         if len(identity_keys) != len(set(identity_keys)):
             raise ValueError("sentinel identity is resolved once per source and sentinel")
-        if self.schema_version != SIZING_RUN_V2_SCHEMA_VERSION and identity_keys:
+        if self.schema_version not in {
+            SIZING_RUN_V2_SCHEMA_VERSION,
+            SIZING_RUN_V4_SCHEMA_VERSION,
+        } and identity_keys:
             raise ValueError("source-level sentinel identity provenance requires sizing v1.2")
         known_sentinels = set()
         diagnostic_keys = []
@@ -1074,6 +1267,12 @@ class QuerySizingRun:
             raise ValueError("sentinel diagnostics must be unique per sentinel/source/query")
         if known_sentinels and not self.sentinel_set_id:
             raise ValueError("sentinel diagnostics require run-level sentinel-set provenance")
+        if self.containment_evaluation is not None:
+            if self.schema_version != SIZING_RUN_V4_SCHEMA_VERSION:
+                raise ValueError("containment evaluation requires sizing v1.3")
+            self.containment_evaluation.validate()
+            if self.containment_evaluation.dry_run_plan_hash != self.dry_run_plan_hash:
+                raise ValueError("containment evaluation references another dry-run plan")
         if (
             self.status in {SizingRunStatus.RUNNING, SizingRunStatus.COMPLETED}
             and not self.started_at
@@ -1120,6 +1319,11 @@ class QuerySizingRun:
             semantic_control_gate=(
                 SemanticControlGateEvaluation.from_dict(data["semantic_control_gate"])
                 if data.get("semantic_control_gate") is not None
+                else None
+            ),
+            containment_evaluation=(
+                ContainmentEvaluation.from_dict(data["containment_evaluation"])
+                if data.get("containment_evaluation") is not None
                 else None
             ),
             sentinel_identity_resolutions=[
@@ -1354,6 +1558,7 @@ def _resolve_candidate_payload(raw: dict[str, Any], directory: Path) -> dict[str
     if schema_version not in {
         CANDIDATE_V2_SCHEMA_VERSION,
         CANDIDATE_V3_SCHEMA_VERSION,
+        CANDIDATE_V4_SCHEMA_VERSION,
     }:
         return raw
     inheritance = raw.get("inherits")
@@ -1375,6 +1580,30 @@ def _resolve_candidate_payload(raw: dict[str, Any], directory: Path) -> dict[str
         if source not in payload["sources"]:
             raise CandidateConfigurationError(f"unknown source override: {source}")
         payload["sources"][source].update(deepcopy(overrides))
+    for family_id, overrides in raw.get("family_overrides", {}).items():
+        if family_id not in payload["families"]:
+            raise CandidateConfigurationError(f"unknown family override: {family_id}")
+        family = payload["families"][family_id]
+        additions = deepcopy(overrides.get("additional_variants", {}))
+        overlap = set(additions) & set(family["variants"])
+        if overlap:
+            raise CandidateConfigurationError(
+                f"family override replaces historical variants: {sorted(overlap)}"
+            )
+        family["variants"].update(additions)
+        for key, value in overrides.items():
+            if key != "additional_variants":
+                family[key] = deepcopy(value)
+    for key in (
+        "approved_production_freeze",
+        "bounded_matrix",
+        "containment_assertions",
+        "historical_evidence",
+    ):
+        if key in raw:
+            payload[key] = deepcopy(raw[key])
+    if "no_partitioning_authorized" in raw:
+        payload["no_partitioning_authorized"] = raw["no_partitioning_authorized"]
     return payload
 
 
@@ -1428,6 +1657,7 @@ def _expansions(payload: dict[str, Any]) -> dict[str, str]:
         "L": _or(high["L"], broad["L"]),
         "R_HIGH": high["R"],
         "R_BROAD": broad["R"],
+        "V_HIGH": high["V"],
         "V": _or(high["V"], _and(broad["V"], interaction)),
         "A_HIGH": high["A"],
         "A_GENERIC": broad["A"],

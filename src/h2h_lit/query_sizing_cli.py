@@ -25,7 +25,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument(
         "--semantic-control-config",
-        help="Required only for a v0.2 candidate configuration.",
+        help="Required for versioned candidate configurations with semantic controls.",
     )
     parser.add_argument("--run-id", default=DEFAULT_RUN_ID)
     parser.add_argument(

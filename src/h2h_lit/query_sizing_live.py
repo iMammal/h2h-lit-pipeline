@@ -20,7 +20,9 @@ from h2h_lit.pagination import RateLimiter, RetryPolicy
 from h2h_lit.query_development import (
     CANDIDATE_V2_SCHEMA_VERSION,
     CANDIDATE_V3_SCHEMA_VERSION,
-    SIZING_RUN_V2_SCHEMA_VERSION,
+    CANDIDATE_V4_SCHEMA_VERSION,
+    ContainmentAssertionResult,
+    ContainmentEvaluation,
     QuerySizingRun,
     SemanticAssertionResult,
     SemanticControlGateEvaluation,
@@ -75,6 +77,7 @@ class ValidatedSizingPlan:
     diagnostic_specs: tuple[dict[str, Any], ...]
     identity_specs: tuple[dict[str, Any], ...] = ()
     semantic_control_specs: tuple[dict[str, Any], ...] = ()
+    containment_specs: tuple[dict[str, Any], ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -122,9 +125,11 @@ def load_validated_sizing_plan(
     mismatches = [key for key, value in expected.items() if run.get(key) != value]
     if mismatches:
         raise SizingPlanError(f"dry-run plan provenance mismatch: {', '.join(mismatches)}")
+    is_v4 = candidate_set.payload["schema_version"] == CANDIDATE_V4_SCHEMA_VERSION
     is_versioned = candidate_set.payload["schema_version"] in {
         CANDIDATE_V2_SCHEMA_VERSION,
         CANDIDATE_V3_SCHEMA_VERSION,
+        CANDIDATE_V4_SCHEMA_VERSION,
     }
     is_v3 = candidate_set.payload["schema_version"] == CANDIDATE_V3_SCHEMA_VERSION
     if sentinel_set.candidate_set_hash != candidate_set.candidate_set_hash():
@@ -137,7 +142,7 @@ def load_validated_sizing_plan(
             raise SizingPlanError("sentinel set references a different candidate set")
 
     specs = tuple(payload.get("candidate_specifications", []))
-    expected_candidate_count = 54 if is_versioned else EXPECTED_CANDIDATE_COUNT
+    expected_candidate_count = 10 if is_v4 else 54 if is_versioned else EXPECTED_CANDIDATE_COUNT
     if len(specs) != expected_candidate_count:
         raise SizingPlanError(
             f"approved dry-run plan must contain exactly {expected_candidate_count} candidates"
@@ -155,7 +160,7 @@ def load_validated_sizing_plan(
             raise SizingPlanError(f"request hash mismatch: {spec.get('candidate_query_id')}")
         if source == "SemanticScholar" and "/search/bulk" not in spec["request"]["url"]:
             raise SizingPlanError("Semantic Scholar sizing must remain in bulk mode")
-        if is_v3 and source == "PubMed":
+        if (is_v3 or is_v4) and source == "PubMed":
             request = spec["request"]
             if request.get("method") != "POST" or request.get("params") != {}:
                 raise SizingPlanError("v0.3 PubMed sizing must use form-encoded POST")
@@ -179,10 +184,12 @@ def load_validated_sizing_plan(
                 raise SizingPlanError(f"sentinel {key} hash mismatch")
     identity_specs = tuple(payload.get("sentinel_identity_specifications", []))
     semantic_control_specs = tuple(payload.get("semantic_control_specifications", []))
+    containment_specs = tuple(payload.get("containment_assertion_specifications", []))
     if is_versioned:
-        if len(identity_specs) != 42:
+        expected_identity_count = 20 if is_v4 else 42
+        if len(identity_specs) != expected_identity_count:
             raise SizingPlanError(
-                "versioned sizing requires 42 source-by-sentinel identity specifications"
+                "versioned sizing has an unexpected source-by-sentinel identity count"
             )
         identity_ids = {item["identity_resolution_id"] for item in identity_specs}
         for item in identity_specs:
@@ -228,6 +235,29 @@ def load_validated_sizing_plan(
                 assertion.get("right_probe_id"),
             } - known_probes:
                 raise SizingPlanError("semantic-control assertion references an unknown probe")
+    if is_v4:
+        if len(diagnostics) != 34:
+            raise SizingPlanError("v0.4 sizing requires 34 bounded sentinel diagnostics")
+        if len(containment_specs) != 2:
+            raise SizingPlanError("v0.4 sizing requires two containment assertions")
+        known_candidates = set(identifiers)
+        for item in containment_specs:
+            material = {key: value for key, value in item.items() if key != "assertion_hash"}
+            if hashlib.sha256(canonical_json(material).encode("utf-8")).hexdigest() != item.get(
+                "assertion_hash"
+            ):
+                raise SizingPlanError("containment assertion hash mismatch")
+            if item.get("source") != "SemanticScholar":
+                raise SizingPlanError("v0.4 containment is Semantic Scholar-only")
+            if {
+                item.get("subset_candidate_query_id"),
+                item.get("superset_candidate_query_id"),
+            } - known_candidates:
+                raise SizingPlanError("containment assertion references an unplanned candidate")
+            if item.get("failure_effect") != "qf02_selection_semantics_unresolved":
+                raise SizingPlanError("containment failure effect changed")
+    elif containment_specs:
+        raise SizingPlanError("legacy sizing plans cannot add containment assertions")
     return ValidatedSizingPlan(
         payload,
         actual,
@@ -235,6 +265,7 @@ def load_validated_sizing_plan(
         diagnostics,
         identity_specs,
         semantic_control_specs,
+        containment_specs,
     )
 
 
@@ -349,6 +380,11 @@ class LiveSizingExecutor:
             run.sentinel_diagnostics = self._execute_diagnostics(
                 plan, run, credentials, output
             )
+        if plan.containment_specs:
+            run.containment_evaluation = _evaluate_containment(
+                plan, run, self.timestamp()
+            )
+            save_sizing_run(output, run)
         run.status = SizingRunStatus.COMPLETED
         run.completed_at = self.timestamp()
         save_sizing_run(output, run)
@@ -1389,6 +1425,137 @@ def _evaluate_semantic_control_gate(
     )
 
 
+def _evaluate_containment(
+    plan: ValidatedSizingPlan,
+    run: QuerySizingRun,
+    evaluated_at: str,
+) -> ContainmentEvaluation:
+    observations = {item.candidate_query_id: item for item in run.observations}
+    diagnostics = {
+        (item.candidate_query_id, item.sentinel_id): item
+        for item in run.sentinel_diagnostics
+    }
+    results: list[ContainmentAssertionResult] = []
+    for spec in plan.containment_specs:
+        subset_id = spec["subset_candidate_query_id"]
+        superset_id = spec["superset_candidate_query_id"]
+        common = {
+            "assertion_id": spec["assertion_id"],
+            "kind": spec["kind"],
+            "source": spec["source"],
+            "subset_candidate_query_id": subset_id,
+            "superset_candidate_query_id": superset_id,
+        }
+        if spec["kind"] == "candidate_count_less_than_or_equal":
+            subset = observations.get(subset_id)
+            superset = observations.get(superset_id)
+            if (
+                subset is None
+                or superset is None
+                or subset.transport_status is not SizingTransportStatus.SUCCEEDED
+                or superset.transport_status is not SizingTransportStatus.SUCCEEDED
+                or subset.reported_count is None
+                or superset.reported_count is None
+            ):
+                results.append(
+                    ContainmentAssertionResult(
+                        **common,
+                        state=SizingGateStatus.UNRESOLVED,
+                        reasons=["candidate_count_unavailable_or_untrustworthy"],
+                    )
+                )
+            else:
+                passed = subset.reported_count <= superset.reported_count
+                results.append(
+                    ContainmentAssertionResult(
+                        **common,
+                        state=(
+                            SizingGateStatus.PASSED
+                            if passed
+                            else SizingGateStatus.FAILED
+                        ),
+                        subset_count=subset.reported_count,
+                        superset_count=superset.reported_count,
+                        reasons=[] if passed else ["subset_count_exceeds_superset_count"],
+                    )
+                )
+            continue
+
+        sentinel_ids = list(spec["sentinel_ids"])
+        failed: list[str] = []
+        unresolved: list[str] = []
+        for sentinel_id in sentinel_ids:
+            subset = diagnostics.get((subset_id, sentinel_id))
+            superset = diagnostics.get((superset_id, sentinel_id))
+            if subset is None or superset is None:
+                unresolved.append(sentinel_id)
+                continue
+            usable = {
+                SentinelDiagnosticOutcome.INDEXED_AND_MATCHED,
+                SentinelDiagnosticOutcome.INDEXED_BUT_QUERY_MISSED,
+            }
+            if subset.outcome not in usable or superset.outcome not in usable:
+                unresolved.append(sentinel_id)
+                continue
+            if (
+                subset.outcome is SentinelDiagnosticOutcome.INDEXED_AND_MATCHED
+                and superset.outcome is not SentinelDiagnosticOutcome.INDEXED_AND_MATCHED
+            ):
+                failed.append(sentinel_id)
+        if failed:
+            state = SizingGateStatus.FAILED
+            reasons = [f"subset_match_missing_from_superset:{item}" for item in failed]
+        elif unresolved:
+            state = SizingGateStatus.UNRESOLVED
+            reasons = [f"sentinel_diagnostic_unresolved:{item}" for item in unresolved]
+        else:
+            state = SizingGateStatus.PASSED
+            reasons = []
+        results.append(
+            ContainmentAssertionResult(
+                **common,
+                state=state,
+                evaluated_sentinel_ids=sentinel_ids,
+                failed_sentinel_ids=failed,
+                reasons=reasons,
+            )
+        )
+
+    failed_results = [item.assertion_id for item in results if item.state is SizingGateStatus.FAILED]
+    unresolved_results = [
+        item.assertion_id for item in results if item.state is SizingGateStatus.UNRESOLVED
+    ]
+    if failed_results:
+        state = SizingGateStatus.FAILED
+        reasons = [f"assertion_failed:{item}" for item in failed_results]
+    elif unresolved_results:
+        state = SizingGateStatus.UNRESOLVED
+        reasons = [f"assertion_unresolved:{item}" for item in unresolved_results]
+    else:
+        state = SizingGateStatus.PASSED
+        reasons = []
+    material = {
+        "dry_run_plan_hash": plan.plan_hash,
+        "assertion_results": [item.to_dict() for item in results],
+        "state": state.value,
+        "reasons": reasons,
+    }
+    evaluation_id = "containment-evaluation:" + hashlib.sha256(
+        canonical_json(material).encode("utf-8")
+    ).hexdigest()[:24]
+    return ContainmentEvaluation(
+        evaluation_id=evaluation_id,
+        state=state,
+        selection_status=(
+            "containment_supported" if state is SizingGateStatus.PASSED else "unresolved"
+        ),
+        evaluated_at=evaluated_at,
+        dry_run_plan_hash=plan.plan_hash,
+        assertion_results=results,
+        reasons=reasons,
+    )
+
+
 def _parse_envelope(
     source: str,
     response: HttpResponse,
@@ -1695,7 +1862,12 @@ def _unsupported_diagnostic(spec: dict[str, Any], warning: str) -> SentinelDiagn
 
 def build_comparison_report(run: QuerySizingRun) -> dict[str, Any]:
     qf01_counts = _variant_counts(run, "STAR-QF01-RELATIONAL-VIS", ("anchored", "unanchored"))
-    qf02_counts = _variant_counts(run, "STAR-QF02-ASSISTED-VIS", ("A", "B", "C", "D"))
+    qf02_counts = _variant_counts(
+        run, "STAR-QF02-ASSISTED-VIS", ("A", "B", "C", "D", "E")
+    )
+    qf03_counts = _variant_counts(
+        run, "STAR-QF03-INTERACTIVE-SYSTEMS", ("default", "revised")
+    )
     semantic_gate = run.semantic_control_gate
     semantic_candidates = [
         item for item in run.observations if item.source == "SemanticScholar"
@@ -1706,7 +1878,7 @@ def build_comparison_report(run: QuerySizingRun) -> dict[str, Any]:
         "run_hash": run.run_hash(),
         "dry_run_plan_hash": run.dry_run_plan_hash,
         "semantic_controls": {
-            "planned": 6 if run.schema_version == SIZING_RUN_V2_SCHEMA_VERSION else 0,
+            "planned": 6 if run.semantic_control_observations else 0,
             "attempted": sum(
                 bool(item.attempts) for item in run.semantic_control_observations
             ),
@@ -1757,6 +1929,12 @@ def build_comparison_report(run: QuerySizingRun) -> dict[str, Any]:
             }
             for source, counts in qf02_counts.items()
         },
+        "qf03": {source: {"counts": counts} for source, counts in qf03_counts.items()},
+        "semantic_scholar_qf02_containment": (
+            run.containment_evaluation.to_dict()
+            if run.containment_evaluation is not None
+            else None
+        ),
         "summary": {
             "transport_failures": [item.candidate_query_id for item in run.observations
                                    if item.transport_status is SizingTransportStatus.FAILED],

@@ -1,0 +1,30 @@
+{
+  "schema_version": "1.0.0",
+  "manifest_id": "star-query-sizing-v0-3-checksums",
+  "experiment_status": "completed_immutable_historical_evidence",
+  "executor_git_commit": "eda0d0daecdb3636245c9a7e87f679260af0537c",
+  "run_id": "star-query-sizing-v0-3-run-001",
+  "candidate_version": "0.3.0-preproduction",
+  "candidate_canonical_hash": "5add42cd86317a958951917ef5adcdbef3d70cf300f7c4f7511d9a0242ea0b5f",
+  "semantic_control_version": "0.3.0-preproduction",
+  "semantic_control_canonical_hash": "18570dba1111bbb0367f28af602c6a02d9bf6b4c34e9e1083a76c1fb3b8e5e64",
+  "sentinel_version": "0.1.0-pre-sizing",
+  "sentinel_canonical_hash": "1acc34ae05f0637bdfb5d3feebe2044197164ae4b6d6ffd0e043daa63bfd46a3",
+  "execution_started_at": "2026-09-01T20:33:23.721225Z",
+  "execution_completed_at": "2026-09-01T20:36:00.731700Z",
+  "ignored_output_artifacts": true,
+  "immutable_artifact_storage": {
+    "status": "unresolved",
+    "locator": null,
+    "repository_policy": "completed run artifacts are under the ignored outputs directory",
+    "limitation": "Checksums detect mutation but do not preserve ignored artifact bytes."
+  },
+  "artifacts": [
+    {"role": "candidate_config", "path": "config/star_query_candidates_v0_3.json", "byte_size": 936, "raw_sha256": "06f7d72da6b22d22ebf29923d465e49aec1df69e0cdf51487f24e4486e3a3b1c", "canonical_hash": "5add42cd86317a958951917ef5adcdbef3d70cf300f7c4f7511d9a0242ea0b5f"},
+    {"role": "semantic_control_config", "path": "config/star_query_semantic_controls_v0_3.json", "byte_size": 1956, "raw_sha256": "dc48759bb6ca1cebc8af72cf162f2db2098b86daf555f5db76b27194fc4a34c7", "canonical_hash": "18570dba1111bbb0367f28af602c6a02d9bf6b4c34e9e1083a76c1fb3b8e5e64"},
+    {"role": "sentinel_config", "path": "config/star_query_sentinels_v0_1.json", "byte_size": 4526, "raw_sha256": "ed05a667edf282588548a63d0e637efc2849d1980e2ecb7ff4cef80056ecaecf", "canonical_hash": "1acc34ae05f0637bdfb5d3feebe2044197164ae4b6d6ffd0e043daa63bfd46a3"},
+    {"role": "dry_run_plan", "path": "outputs/query_sizing/star-query-sizing-v0-3-run-001/dry_run.json", "byte_size": 1028277, "raw_sha256": "353141bad589bc61431ad080d52bb6ae7212d595450bdd1b720b787c4500d19b", "canonical_hash": "dda7e14c508f3ef375c097d3f991a5124d0918c9a431a6531f26011d8fdb8013"},
+    {"role": "completed_run", "path": "outputs/query_sizing/star-query-sizing-v0-3-run-001/query_sizing_run.json", "byte_size": 638448, "raw_sha256": "4455e5157c27a7113ac0663710574cdc7c56153629ccd44d10b15ee326e5ae4d", "canonical_hash": "5e4a4c551905e87bdebae8b4a7732be5a0d108ab9df3d2844871b0e2a58453df"},
+    {"role": "completed_report", "path": "outputs/query_sizing/star-query-sizing-v0-3-run-001/query_sizing_report.json", "byte_size": 7625, "raw_sha256": "f05d7c84d0585a3fbd441c1be793f981d9dee38bb4cd89634ad85f4bc1afe0f0", "canonical_hash": null}
+  ]
+}

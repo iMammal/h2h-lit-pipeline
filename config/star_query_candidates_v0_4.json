@@ -1,0 +1,70 @@
+{
+  "schema_version": "0.4.0",
+  "candidate_set_id": "h2h-star-five-family-query-candidates",
+  "candidate_set_version": "0.4.0-preproduction-bounded",
+  "methodological_status": "candidate_not_production_frozen",
+  "inherits": {
+    "relative_path": "star_query_candidates_v0_3.json",
+    "candidate_set_hash": "5add42cd86317a958951917ef5adcdbef3d70cf300f7c4f7511d9a0242ea0b5f"
+  },
+  "sentinel_compatibility": {
+    "sentinel_set_id": "star-query-sentinels-v0-1",
+    "sentinel_set_version": "0.1.0-pre-sizing",
+    "sentinel_set_hash": "1acc34ae05f0637bdfb5d3feebe2044197164ae4b6d6ffd0e043daa63bfd46a3",
+    "original_candidate_set_hash": "4c642ff04c84c1e1534566d789278fdab21af9f75a57332fce04fa3751fe01bc",
+    "membership_and_expectations_unchanged": true
+  },
+  "approved_production_freeze": [
+    {"family_id": "STAR-QF01-RELATIONAL-VIS", "variant_id": "unanchored"},
+    {"family_id": "STAR-QF04-NONDESKTOP-ENV", "variant_id": "default"},
+    {"family_id": "STAR-QF05-CONVERSATIONAL", "variant_id": "default"}
+  ],
+  "family_overrides": {
+    "STAR-QF02-ASSISTED-VIS": {
+      "additional_variants": {
+        "E": "{L} AND ({V} OR {S}) AND ({A_HIGH} OR ({A_GENERIC} AND {ASSISTANCE_CONTEXT}))"
+      },
+      "leading_candidate": null,
+      "historical_comparators": ["B", "D"]
+    },
+    "STAR-QF03-INTERACTIVE-SYSTEMS": {
+      "additional_variants": {
+        "revised": "{L} AND ({S} OR {V_HIGH}) AND ({R_HIGH} OR ({R_BROAD} AND {RELATIONAL_CONTEXT}))"
+      },
+      "leading_candidate": null,
+      "historical_comparators": ["default"]
+    }
+  },
+  "historical_evidence": {
+    "v0_3_completed_run_canonical_hash": "5e4a4c551905e87bdebae8b4a7732be5a0d108ab9df3d2844871b0e2a58453df",
+    "qf02_historical_comparators": ["B", "D"],
+    "semantic_scholar_containment_comparators": ["C", "D"],
+    "qf03_historical_expression_unchanged": true
+  },
+  "bounded_matrix": [
+    {"family_id": "STAR-QF02-ASSISTED-VIS", "variant_id": "E", "sources": ["PubMed", "EuropePMC", "SemanticScholar", "arXiv"]},
+    {"family_id": "STAR-QF03-INTERACTIVE-SYSTEMS", "variant_id": "revised", "sources": ["PubMed", "EuropePMC", "SemanticScholar", "arXiv"]},
+    {"family_id": "STAR-QF02-ASSISTED-VIS", "variant_id": "C", "sources": ["SemanticScholar"], "purpose": "containment_comparator_only"},
+    {"family_id": "STAR-QF02-ASSISTED-VIS", "variant_id": "D", "sources": ["SemanticScholar"], "purpose": "containment_comparator_only"}
+  ],
+  "containment_assertions": [
+    {
+      "assertion_id": "semantic-scholar-qf02-c-count-contained-by-d",
+      "kind": "candidate_count_less_than_or_equal",
+      "source": "SemanticScholar",
+      "subset": {"family_id": "STAR-QF02-ASSISTED-VIS", "variant_id": "C"},
+      "superset": {"family_id": "STAR-QF02-ASSISTED-VIS", "variant_id": "D"},
+      "failure_effect": "qf02_selection_semantics_unresolved"
+    },
+    {
+      "assertion_id": "semantic-scholar-qf02-c-sentinel-contained-by-d",
+      "kind": "sentinel_match_implication",
+      "source": "SemanticScholar",
+      "subset": {"family_id": "STAR-QF02-ASSISTED-VIS", "variant_id": "C"},
+      "superset": {"family_id": "STAR-QF02-ASSISTED-VIS", "variant_id": "D"},
+      "sentinel_ids": ["sentinel:icave-2017", "sentinel:wang-et-al-2025", "sentinel:phenoflow-2025"],
+      "failure_effect": "qf02_selection_semantics_unresolved"
+    }
+  ],
+  "no_partitioning_authorized": true
+}
