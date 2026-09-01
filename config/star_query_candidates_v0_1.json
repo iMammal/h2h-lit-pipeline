@@ -1,0 +1,442 @@
+{
+  "schema_version": "0.1.0",
+  "candidate_set_id": "h2h-star-five-family-query-candidates",
+  "candidate_set_version": "0.1.0-preproduction",
+  "methodological_status": "candidate_not_production_frozen",
+  "no_partitioning_authorized": true,
+  "retrieval_filters": {
+    "assistance_mode": null,
+    "document_type": null,
+    "full_text": null,
+    "language": null,
+    "lower_publication_date": null,
+    "modality": null,
+    "open_access": null,
+    "relevance": null
+  },
+  "blocks": {
+    "L": {
+      "label": "life-science population/domain",
+      "high_specificity": [
+        "\"life science\"",
+        "\"life sciences\"",
+        "biology",
+        "biological",
+        "biomedical",
+        "bioinformatics",
+        "\"systems biology\"",
+        "genomics",
+        "transcriptomics",
+        "proteomics",
+        "metabolomics",
+        "epigenomics",
+        "omics",
+        "\"single cell\"",
+        "\"single-cell\"",
+        "\"spatial transcriptomics\"",
+        "connectomics",
+        "neuroscience",
+        "pathology",
+        "microscopy",
+        "ecology",
+        "ecological",
+        "\"marine science\""
+      ],
+      "recall_expansion": [
+        "clinical",
+        "medical",
+        "health",
+        "tissue",
+        "cellular",
+        "molecular",
+        "imaging"
+      ],
+      "dangerously_generic": ["health", "tissue", "cellular", "molecular", "imaging"],
+      "loss_if_removed": "Clinical, imaging, cellular, ecological, and older domain descriptions may omit explicit life-science labels.",
+      "noise_if_unanchored": "General health services, imaging methods, molecular computation, and non-analytic clinical studies."
+    },
+    "R": {
+      "label": "relational, derived-structure, or multiscale relevance",
+      "high_specificity": [
+        "\"biological network\"",
+        "\"molecular network\"",
+        "\"protein-protein interaction\"",
+        "interactome",
+        "connectome",
+        "\"gene regulatory network\"",
+        "pathway",
+        "\"cell-cell communication\"",
+        "lineage",
+        "multiscale",
+        "\"multi-scale\"",
+        "hierarchy",
+        "hierarchical",
+        "\"node-link\"",
+        "\"adjacency matrix\""
+      ],
+      "recall_expansion": [
+        "network",
+        "graph",
+        "relational",
+        "relationship",
+        "relationships",
+        "connectivity",
+        "topology",
+        "neighborhood",
+        "neighbourhood",
+        "trajectory",
+        "similarity",
+        "spatial",
+        "temporal",
+        "multivariate",
+        "\"image-derived\""
+      ],
+      "dangerously_generic": ["relationship", "spatial", "temporal", "multivariate", "similarity"],
+      "loss_if_removed": "Implicit spatial, temporal, image-derived, trajectory, neighborhood, and similarity relationships would be under-retrieved.",
+      "noise_if_unanchored": "Generic spatial, temporal, similarity, and multivariate analyses without a qualifying relational analytic role."
+    },
+    "V": {
+      "label": "interactive visualization or visual analysis",
+      "high_specificity": [
+        "\"visual analytics\"",
+        "\"interactive visualization\"",
+        "\"interactive visualisation\"",
+        "\"visual exploration\"",
+        "\"visual analysis\"",
+        "\"exploratory visualization\"",
+        "\"exploratory visualisation\""
+      ],
+      "recall_expansion": [
+        "\"data visualization\"",
+        "\"data visualisation\"",
+        "\"information visualization\"",
+        "\"information visualisation\"",
+        "\"scientific visualization\"",
+        "\"scientific visualisation\"",
+        "visualization",
+        "visualisation",
+        "\"graphical display\""
+      ],
+      "dangerously_generic": ["visualization", "visualisation", "\"graphical display\""],
+      "loss_if_removed": "Older information/scientific-visualization papers and systems not using the phrase visual analytics would be missed.",
+      "noise_if_unanchored": "Static plots, presentation graphics, and visualization used only to report model outputs."
+    },
+    "A": {
+      "label": "computational assistance retrieval terminology",
+      "high_specificity": [
+        "\"mixed initiative\"",
+        "\"mixed-initiative\"",
+        "\"visual analytics guidance\"",
+        "\"guided visual analytics\"",
+        "\"visualization recommendation\"",
+        "\"visualisation recommendation\"",
+        "\"view recommendation\"",
+        "\"interaction recommendation\"",
+        "\"adaptive visualization\"",
+        "\"adaptive visualisation\"",
+        "\"adaptive interface\"",
+        "\"user model\"",
+        "\"user modeling\"",
+        "\"user modelling\"",
+        "\"personalized visualization\"",
+        "\"personalised visualisation\"",
+        "\"proactive visual analytics\"",
+        "\"human-in-the-loop analytics\"",
+        "\"natural language interface\"",
+        "\"conversational interface\"",
+        "\"large language model\"",
+        "LLM",
+        "\"visualization agent\"",
+        "\"visual analytics agent\""
+      ],
+      "recall_expansion": [
+        "\"machine learning\"",
+        "\"artificial intelligence\"",
+        "clustering",
+        "\"dimensionality reduction\"",
+        "aggregation",
+        "layout",
+        "ranking",
+        "recommendation",
+        "prediction",
+        "classification",
+        "annotation",
+        "segmentation",
+        "\"feature extraction\"",
+        "automatic",
+        "automated"
+      ],
+      "dangerously_generic": [
+        "\"machine learning\"",
+        "classification",
+        "prediction",
+        "segmentation",
+        "annotation",
+        "automatic",
+        "automated"
+      ],
+      "loss_if_removed": "Classic clustering, dimensionality-reduction, aggregation, and graph-layout systems often do not call their mechanisms intelligent assistance.",
+      "noise_if_unanchored": "Ordinary biomedical prediction, classification, segmentation, and machine-learning papers with no interactive visual system."
+    },
+    "S": {
+      "label": "interactive analytic-system terminology",
+      "high_specificity": [
+        "\"interactive system\"",
+        "\"interactive tool\"",
+        "\"interactive platform\"",
+        "\"visual interface\"",
+        "\"analytic interface\"",
+        "\"analysis workbench\"",
+        "\"exploration tool\"",
+        "\"exploratory tool\"",
+        "\"visualization system\"",
+        "\"visualisation system\"",
+        "\"visualization tool\"",
+        "\"visualisation tool\"",
+        "\"interactive dashboard\""
+      ],
+      "recall_expansion": [
+        "tool",
+        "system",
+        "platform",
+        "interface",
+        "explorer",
+        "workbench",
+        "dashboard"
+      ],
+      "dangerously_generic": ["tool", "system", "platform", "interface"],
+      "loss_if_removed": "Domain systems described as tools, platforms, explorers, or workbenches without explicit visual-analytics terminology would be missed.",
+      "noise_if_unanchored": "Databases, pipelines, software libraries, and automated tools without meaningful human analytic interaction."
+    },
+    "M": {
+      "label": "non-desktop visualization environments",
+      "high_specificity": [
+        "\"virtual reality\"",
+        "\"augmented reality\"",
+        "\"mixed reality\"",
+        "\"extended reality\"",
+        "\"immersive analytics\"",
+        "\"immersive visualization\"",
+        "\"immersive visualisation\"",
+        "\"head-mounted display\"",
+        "HMD",
+        "HoloLens",
+        "\"large display\"",
+        "\"display wall\"",
+        "\"tiled display\"",
+        "powerwall",
+        "\"CAVE automatic virtual environment\""
+      ],
+      "recall_expansion": [
+        "CAVE",
+        "VR",
+        "stereoscopic",
+        "\"virtual environment\"",
+        "\"immersive environment\"",
+        "\"spatial computing\"",
+        "\"room scale\"",
+        "\"projection-based\""
+      ],
+      "dangerously_generic": ["CAVE", "VR", "stereoscopic"],
+      "excluded_bare_acronyms": ["AR", "MR", "XR"],
+      "loss_if_removed": "Older VR/CAVE/stereoscopic papers and systems using virtual-environment terminology would be missed.",
+      "noise_if_unanchored": "Training, simulation, communication, and biomedical uses of ambiguous acronyms without an analytic visualization environment."
+    },
+    "C": {
+      "label": "conversational or agentic interaction",
+      "high_specificity": [
+        "\"natural language interface\"",
+        "\"natural-language interface\"",
+        "\"conversational interface\"",
+        "\"conversational visual analytics\"",
+        "\"dialogue-based interface\"",
+        "\"dialog-based interface\"",
+        "chatbot",
+        "\"large language model\"",
+        "LLM",
+        "\"visualization agent\"",
+        "\"visual analytics agent\"",
+        "\"analytics agent\"",
+        "\"analytic copilot\""
+      ],
+      "recall_expansion": [
+        "conversational",
+        "dialogue",
+        "dialog",
+        "\"natural language\"",
+        "\"question answering\"",
+        "\"voice interface\"",
+        "\"speech interface\"",
+        "agentic",
+        "copilot",
+        "\"AI agent\""
+      ],
+      "dangerously_generic": ["\"natural language\"", "dialog", "agentic", "copilot"],
+      "excluded_unanchored_terms": ["NLP"],
+      "loss_if_removed": "Pre-LLM natural-language, dialogue, speech, and question-answering analytic interfaces would be under-retrieved.",
+      "noise_if_unanchored": "Offline NLP, generic dialogue systems, and agents unrelated to interactive analysis."
+    }
+  },
+  "anchors": {
+    "INTERACTION": {
+      "purpose": "retrieval_context_only",
+      "terms": [
+        "interactive",
+        "exploratory",
+        "\"user-guided\"",
+        "\"user-steered\"",
+        "\"human-in-the-loop\"",
+        "brushing",
+        "filtering",
+        "\"linked views\"",
+        "\"coordinated views\""
+      ]
+    },
+    "ASSISTANCE_CONTEXT": {
+      "purpose": "retrieval_context_only",
+      "prohibited_interpretations": ["eligibility_evidence", "classification_evidence"],
+      "terms": [
+        "\"visual analytics\"",
+        "\"interactive visualization\"",
+        "\"interactive visualisation\"",
+        "\"interactive system\"",
+        "\"interactive tool\"",
+        "\"visualization system\"",
+        "\"visualisation system\"",
+        "\"visual interface\"",
+        "\"analytic interface\"",
+        "\"user-guided\"",
+        "\"user-steered\"",
+        "\"human-in-the-loop\"",
+        "\"mixed initiative\"",
+        "\"mixed-initiative\""
+      ]
+    },
+    "RELATIONAL_CONTEXT": {
+      "purpose": "retrieval_context_only",
+      "terms": [
+        "\"relational data\"",
+        "\"data relationships\"",
+        "\"derived relationship\"",
+        "\"spatial organization\"",
+        "\"spatial relationship\"",
+        "\"temporal relationship\"",
+        "\"multivariate relationship\"",
+        "\"multiscale structure\"",
+        "\"neighborhood analysis\"",
+        "\"neighbourhood analysis\"",
+        "\"trajectory analysis\"",
+        "\"similarity analysis\"",
+        "\"connectivity analysis\"",
+        "\"topological analysis\""
+      ]
+    },
+    "ENVIRONMENT_CONTEXT": {
+      "purpose": "retrieval_context_only",
+      "terms": ["environment", "display", "visualization", "visualisation", "analytics"]
+    },
+    "CONVERSATIONAL_CONTEXT": {
+      "purpose": "retrieval_context_only",
+      "terms": [
+        "interface",
+        "query",
+        "dialogue",
+        "dialog",
+        "explanation",
+        "recommendation",
+        "visualization",
+        "visualisation",
+        "analysis",
+        "analytics"
+      ]
+    }
+  },
+  "families": {
+    "STAR-QF01-RELATIONAL-VIS": {
+      "role": "core",
+      "variants": {
+        "anchored": "{L} AND {V} AND ({R_HIGH} OR ({R_BROAD} AND {RELATIONAL_CONTEXT}))",
+        "unanchored": "{L} AND {V} AND ({R_HIGH} OR {R_BROAD})"
+      },
+      "leading_candidate": null
+    },
+    "STAR-QF02-ASSISTED-VIS": {
+      "role": "core",
+      "variants": {
+        "A": "{L} AND {V} AND ({A_HIGH} OR {A_GENERIC})",
+        "B": "{L} AND ({V} OR {S}) AND ({A_HIGH} OR {A_GENERIC})",
+        "C": "{L} AND {V} AND {A_HIGH}",
+        "D": "{L} AND {V} AND ({A_HIGH} OR ({A_GENERIC} AND {ASSISTANCE_CONTEXT}))"
+      },
+      "leading_candidate": "D"
+    },
+    "STAR-QF03-INTERACTIVE-SYSTEMS": {
+      "role": "core",
+      "variants": {
+        "default": "{L} AND {S} AND ({R_HIGH} OR {R_BROAD})"
+      },
+      "leading_candidate": "default"
+    },
+    "STAR-QF04-NONDESKTOP-ENV": {
+      "role": "complementary",
+      "variants": {
+        "default": "{L} AND {M} AND ({V} OR {S} OR \"interactive analysis\" OR \"data exploration\")"
+      },
+      "leading_candidate": "default"
+    },
+    "STAR-QF05-CONVERSATIONAL": {
+      "role": "complementary",
+      "variants": {
+        "default": "{L} AND {C} AND ({V} OR {S} OR \"data analysis\" OR \"data exploration\" OR \"analytic query\" OR \"visualization query\")"
+      },
+      "leading_candidate": "default"
+    }
+  },
+  "sources": {
+    "PubMed": {
+      "families": ["STAR-QF01-RELATIONAL-VIS", "STAR-QF02-ASSISTED-VIS", "STAR-QF03-INTERACTIVE-SYSTEMS", "STAR-QF04-NONDESKTOP-ENV", "STAR-QF05-CONVERSATIONAL"],
+      "role": "primary_identification",
+      "syntax": "pubmed_title_abstract",
+      "sizing": {"count_kind": "exact", "hard_window": 10000, "request_size": 0}
+    },
+    "EuropePMC": {
+      "families": ["STAR-QF01-RELATIONAL-VIS", "STAR-QF02-ASSISTED-VIS", "STAR-QF03-INTERACTIVE-SYSTEMS", "STAR-QF04-NONDESKTOP-ENV", "STAR-QF05-CONVERSATIONAL"],
+      "role": "primary_identification",
+      "syntax": "europe_pmc_title_abstract",
+      "sizing": {"count_kind": "exact", "hard_window": null, "request_size": 1}
+    },
+    "SemanticScholar": {
+      "families": ["STAR-QF01-RELATIONAL-VIS", "STAR-QF02-ASSISTED-VIS", "STAR-QF03-INTERACTIVE-SYSTEMS", "STAR-QF04-NONDESKTOP-ENV", "STAR-QF05-CONVERSATIONAL"],
+      "role": "supplemental_identification_and_enrichment",
+      "syntax": "unfielded_boolean_semantics_unverified",
+      "pagination_mode": "bulk",
+      "validation_gate": "bulk_boolean_semantics",
+      "sizing": {"count_kind": "estimated", "hard_window": null, "request_size": 1}
+    },
+    "arXiv": {
+      "families": ["STAR-QF01-RELATIONAL-VIS", "STAR-QF02-ASSISTED-VIS", "STAR-QF03-INTERACTIVE-SYSTEMS", "STAR-QF04-NONDESKTOP-ENV", "STAR-QF05-CONVERSATIONAL"],
+      "role": "supplemental_identification",
+      "syntax": "arxiv_all_fields",
+      "sizing": {"count_kind": "exact", "hard_window": 30000, "request_size": 1}
+    },
+    "IEEEXplore": {
+      "families": ["STAR-QF01-RELATIONAL-VIS", "STAR-QF02-ASSISTED-VIS", "STAR-QF03-INTERACTIVE-SYSTEMS", "STAR-QF04-NONDESKTOP-ENV", "STAR-QF05-CONVERSATIONAL"],
+      "role": "supplemental_identification",
+      "syntax": "ieee_querytext",
+      "sizing": {"count_kind": "exact", "hard_window": null, "request_size": 1}
+    },
+    "ACMDigitalLibrary": {
+      "families": ["STAR-QF01-RELATIONAL-VIS", "STAR-QF02-ASSISTED-VIS", "STAR-QF03-INTERACTIVE-SYSTEMS", "STAR-QF04-NONDESKTOP-ENV", "STAR-QF05-CONVERSATIONAL"],
+      "role": "supplemental_identification",
+      "syntax": "acm_advanced_search_ui",
+      "sizing": {"count_kind": "ui_reported", "hard_window": null, "request_size": 0}
+    },
+    "CrossRef": {
+      "families": ["STAR-QF01-RELATIONAL-VIS", "STAR-QF02-ASSISTED-VIS", "STAR-QF04-NONDESKTOP-ENV", "STAR-QF05-CONVERSATIONAL"],
+      "role": "provisional_limited_identification_and_enrichment",
+      "syntax": "general_query_semantics_unverified",
+      "validation_gate": "identification_semantics",
+      "sizing": {"count_kind": "exact", "hard_window": null, "request_size": 0}
+    }
+  }
+}
