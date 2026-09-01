@@ -6,6 +6,7 @@ import hashlib
 import json
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -18,6 +19,8 @@ from h2h_lit.review import (
     DecisionProvenance,
     DecisionScope,
     RecordOccurrence,
+    RetrievalRun,
+    RetrievalRunKind,
     ReviewDataset,
     SourceQuery,
     canonicalize_occurrences,
@@ -104,6 +107,7 @@ def execute_retrieval_run(
     software_version: str | None = None,
     protocol_version: str = "1.0.0",
     rubric_version: str = "1.0.0",
+    query_plan_version: str = "retrieval-query-plan-v1",
     adapters: Mapping[str, SourceAdapter] = SOURCE_ADAPTERS,
     adapter_options: Mapping[str, Mapping[str, Any]] | None = None,
 ) -> ReviewDataset:
@@ -112,23 +116,26 @@ def execute_retrieval_run(
     if not run_id.strip():
         raise ValueError("run_id must not be empty")
 
+    query_specs = list(queries)
+    if not query_specs:
+        raise ValueError("retrieval runs require at least one planned source query")
+    if not query_plan_version.strip():
+        raise ValueError("query_plan_version must not be empty")
+
     options = adapter_options or {}
     source_queries: list[SourceQuery] = []
     occurrences: list[RecordOccurrence] = []
+    first_timestamp: str | None = None
     last_timestamp: str | None = None
+    planned_query_ids = [
+        _query_id(run_id, request_index, spec)
+        for request_index, spec in enumerate(query_specs)
+    ]
 
-    for request_index, spec in enumerate(queries):
+    for request_index, spec in enumerate(query_specs):
         started_at = timestamp()
-        query_id = _stable_id(
-            "query",
-            run_id,
-            str(request_index),
-            spec.source_database,
-            spec.query_version,
-            spec.query_text,
-            str(spec.page),
-            str(spec.cursor),
-        )
+        first_timestamp = first_timestamp or started_at
+        query_id = planned_query_ids[request_index]
         tracking_client: _StatusCheckingHttpClient | None = None
         records: list[LiteratureRecord] = []
         errors: list[str] = []
@@ -217,7 +224,39 @@ def execute_retrieval_run(
         occurrences,
         provenance=dedupe_provenance,
     )
+    failed_queries = [
+        query for query in source_queries if query.status is ProcessingStatus.FAILED
+    ]
+    if not failed_queries:
+        run_status = ProcessingStatus.OK
+    elif len(failed_queries) == len(source_queries):
+        run_status = ProcessingStatus.FAILED
+    else:
+        run_status = ProcessingStatus.PARTIAL
+    completed_at = last_timestamp or timestamp()
+    retrieval_run = RetrievalRun(
+        run_id=run_id,
+        kind=RetrievalRunKind.PRIMARY,
+        query_plan_version=query_plan_version,
+        query_plan_hash=_query_plan_hash(query_specs),
+        planned_query_ids=planned_query_ids,
+        source_query_ids=[query.query_id for query in source_queries],
+        retrieval_started_at=first_timestamp or completed_at,
+        retrieval_completed_at=completed_at,
+        status=run_status,
+        protocol_version=protocol_version,
+        retrieval_cutoff_date=_utc_date(completed_at) if run_status is ProcessingStatus.OK else None,
+        software_version=software_version,
+        errors=[
+            f"{query.query_id}: {error}"
+            for query in failed_queries
+            for error in query.errors
+        ],
+        metadata={"rubric_version": rubric_version},
+    )
     dataset = ReviewDataset(
+        schema_version="1.1.0",
+        retrieval_runs=[retrieval_run],
         source_queries=source_queries,
         occurrences=occurrences,
         canonical_records=canonical_records,
@@ -254,6 +293,49 @@ def _source_identifier(record: LiteratureRecord, source_rank: int) -> str:
 def _payload_hash(payload: dict[str, Any]) -> str:
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
+def _query_id(run_id: str, request_index: int, spec: RetrievalQuerySpec) -> str:
+    return _stable_id(
+        "query",
+        run_id,
+        str(request_index),
+        spec.source_database,
+        spec.query_version,
+        spec.query_text,
+        str(spec.page),
+        str(spec.cursor),
+    )
+
+
+def _query_plan_hash(specs: list[RetrievalQuerySpec]) -> str:
+    payload = [
+        {
+            "source_database": spec.source_database,
+            "query_text": spec.query_text,
+            "query_version": spec.query_version,
+            "limit": spec.limit,
+            "page": spec.page,
+            "cursor": spec.cursor,
+            "endpoint": spec.endpoint,
+            "fields": list(spec.fields),
+            "filters": dict(spec.filters),
+            "metadata": dict(spec.metadata),
+        }
+        for spec in specs
+    ]
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
+def _utc_date(value: str) -> str:
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError as exc:
+        raise ValueError("retrieval timestamps must be ISO 8601") from exc
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        raise ValueError("retrieval timestamps must include a UTC offset")
+    return parsed.astimezone(UTC).date().isoformat()
 
 
 def _stable_id(prefix: str, *parts: str) -> str:

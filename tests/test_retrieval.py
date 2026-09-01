@@ -12,7 +12,7 @@ from h2h_lit.retrieval import (
     load_review_dataset,
     save_review_dataset,
 )
-from h2h_lit.review import DedupeOutcome
+from h2h_lit.review import DedupeOutcome, RetrievalRunKind
 from tests.fake_http import FakeHttp, FakeResponse
 
 PUBMED_SEARCH = b"<eSearchResult><IdList><Id>123</Id></IdList></eSearchResult>"
@@ -106,6 +106,12 @@ def test_multi_source_records_preserve_occurrences_and_deduplicate_by_doi():
     assert dataset.occurrences[0].source_identifier == "123"
     assert dataset.occurrences[1].record.doi == "10.1000/shared"
     assert dataset.occurrences[1].record.title == "Shared Paper"
+    run = dataset.retrieval_runs[0]
+    assert run.kind is RetrievalRunKind.PRIMARY
+    assert run.status is ProcessingStatus.OK
+    assert run.retrieval_cutoff_date == "2026-08-30"
+    assert run.planned_query_ids == run.source_query_ids
+    assert run.source_query_ids == [query.query_id for query in dataset.source_queries]
 
 
 def test_failed_source_and_empty_page_remain_in_run_provenance():
@@ -135,7 +141,12 @@ def test_failed_source_and_empty_page_remain_in_run_provenance():
                 [FakeResponse(content=b"<eSearchResult><IdList /></eSearchResult>")]
             ),
         },
-        timestamp=_clock("t1", "t2", "t3", "t4"),
+        timestamp=_clock(
+            "2026-08-30T10:00:00+00:00",
+            "2026-08-30T10:00:01+00:00",
+            "2026-08-30T10:00:02+00:00",
+            "2026-08-30T10:00:03+00:00",
+        ),
     )
 
     failed, empty = dataset.source_queries
@@ -154,6 +165,8 @@ def test_failed_source_and_empty_page_remain_in_run_provenance():
     assert empty.cursor == "empty-cursor"
     assert dataset.occurrences == []
     assert dataset.canonical_records == []
+    assert dataset.retrieval_runs[0].status is ProcessingStatus.PARTIAL
+    assert dataset.retrieval_runs[0].retrieval_cutoff_date is None
 
     report = reconcile_prisma(dataset)
     assert report.source_query_count == 2
@@ -178,7 +191,10 @@ def test_persisted_dataset_is_deterministic_and_round_trips(tmp_path):
         http_clients={
             "CrossRef": FakeHttp([FakeResponse(payload=_crossref_payload("10.1000/one"))])
         },
-        timestamp=_clock("start", "end"),
+        timestamp=_clock(
+            "2026-08-30T10:00:00+00:00",
+            "2026-08-30T10:00:01+00:00",
+        ),
     )
     first = tmp_path / "first.json"
     second = tmp_path / "second.json"
@@ -195,6 +211,7 @@ def test_persisted_dataset_is_deterministic_and_round_trips(tmp_path):
         "limit": 50,
         "type": "journal-article",
     }
+    assert restored.retrieval_runs == dataset.retrieval_runs
 
 
 def test_repeated_runs_have_distinct_query_and_occurrence_lineage():
@@ -207,13 +224,19 @@ def test_repeated_runs_have_distinct_query_and_occurrence_lineage():
         run_id="run:first",
         queries=[query],
         http_clients={"CrossRef": FakeHttp([FakeResponse(payload=_crossref_payload())])},
-        timestamp=_clock("start", "end"),
+        timestamp=_clock(
+            "2026-08-30T10:00:00+00:00",
+            "2026-08-30T10:00:01+00:00",
+        ),
     )
     second = execute_retrieval_run(
         run_id="run:second",
         queries=[query],
         http_clients={"CrossRef": FakeHttp([FakeResponse(payload=_crossref_payload())])},
-        timestamp=_clock("start", "end"),
+        timestamp=_clock(
+            "2026-08-30T10:00:00+00:00",
+            "2026-08-30T10:00:01+00:00",
+        ),
     )
 
     assert first.source_queries[0].run_id == "run:first"
@@ -235,7 +258,12 @@ def test_prisma_counts_reconcile_from_stored_occurrences_and_decisions():
             ),
             "CrossRef": FakeHttp([FakeResponse(payload=_crossref_payload())]),
         },
-        timestamp=_clock("t1", "t2", "t3", "t4"),
+        timestamp=_clock(
+            "2026-08-30T23:59:58+00:00",
+            "2026-08-30T23:59:59+00:00",
+            "2026-08-31T00:00:00+00:00",
+            "2026-08-31T00:00:01+00:00",
+        ),
     )
 
     report = reconcile_prisma(dataset)
@@ -251,3 +279,41 @@ def test_prisma_counts_reconcile_from_stored_occurrences_and_decisions():
     dataset.source_queries[0].result_count = 2
     with pytest.raises(ValueError, match="result_count=2 but has 1 occurrences"):
         reconcile_prisma(dataset)
+
+
+def test_retrieval_cutoff_is_final_utc_day_of_complete_wave():
+    dataset = execute_retrieval_run(
+        run_id="run:spans-days",
+        queries=[RetrievalQuerySpec("CrossRef", "query", "crossref-v1")],
+        http_clients={
+            "CrossRef": FakeHttp([FakeResponse(payload=_crossref_payload())])
+        },
+        timestamp=_clock(
+            "2026-08-30T23:59:59-05:00",
+            "2026-08-31T05:00:01+00:00",
+        ),
+        query_plan_version="production-plan-v1",
+    )
+
+    run = dataset.retrieval_runs[0]
+    assert run.retrieval_cutoff_date == "2026-08-31"
+    assert run.query_plan_version == "production-plan-v1"
+    assert len(run.query_plan_hash) == 64
+
+
+def test_successful_run_manifest_cannot_omit_a_planned_query():
+    dataset = execute_retrieval_run(
+        run_id="run:manifest",
+        queries=[RetrievalQuerySpec("CrossRef", "query", "crossref-v1")],
+        http_clients={
+            "CrossRef": FakeHttp([FakeResponse(payload=_crossref_payload())])
+        },
+        timestamp=_clock(
+            "2026-08-30T10:00:00+00:00",
+            "2026-08-30T10:00:01+00:00",
+        ),
+    )
+    dataset.retrieval_runs[0].source_query_ids.clear()
+
+    with pytest.raises(ValueError, match="source query manifest disagrees"):
+        dataset.validate()

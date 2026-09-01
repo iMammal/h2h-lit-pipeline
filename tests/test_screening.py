@@ -271,10 +271,26 @@ def test_conflicting_human_decisions_require_adjudication_before_membership():
     assert adjudicated.corpus_membership.provenance.authority is DecisionAuthority.ADJUDICATED
 
 
-def test_human_decision_supersedes_proposed_screening_and_membership():
+def test_llm_proposal_cannot_create_membership_and_human_can_supersede_it():
     dataset = _dataset()
     record_id = dataset.canonical_records[0].canonical_id
     evidence_id = _add_evidence(dataset, record_id, "abstract", EvidenceSource.TITLE_ABSTRACT)
+    with pytest.raises(
+        ValueError, match="LLM proposals cannot create authoritative corpus membership"
+    ):
+        record_screening_decision(
+            dataset,
+            _submission(
+                canonical_record_id=record_id,
+                stage=ScreeningStage.TITLE_ABSTRACT,
+                evidence_id=evidence_id,
+                provenance=_provenance(
+                    ActorType.LLM, DecisionAuthority.PROPOSED, "machine-proposal"
+                ),
+            ),
+            finalize_membership=True,
+        )
+
     machine = record_screening_decision(
         dataset,
         _submission(
@@ -285,7 +301,6 @@ def test_human_decision_supersedes_proposed_screening_and_membership():
                 ActorType.LLM, DecisionAuthority.PROPOSED, "machine-proposal"
             ),
         ),
-        finalize_membership=True,
     )
     human = record_screening_decision(
         dataset,
@@ -308,14 +323,12 @@ def test_human_decision_supersedes_proposed_screening_and_membership():
     )
 
     assert len(dataset.screening_decisions) == 2
-    assert len(dataset.corpus_memberships) == 2
+    assert len(dataset.corpus_memberships) == 1
     assert dataset.effective_screening_decisions() == [human.decision]
     assert dataset.effective_corpus_memberships() == [human.corpus_membership]
     assert human.corpus_membership is not None
-    assert machine.corpus_membership is not None
-    assert human.corpus_membership.provenance.supersedes_ids == [
-        machine.corpus_membership.decision_id
-    ]
+    assert machine.corpus_membership is None
+    assert human.corpus_membership.provenance.supersedes_ids == []
 
 
 def test_excluded_record_requires_complete_ordered_frozen_reasons():

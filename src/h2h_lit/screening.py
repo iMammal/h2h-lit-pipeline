@@ -11,6 +11,7 @@ from h2h_lit.review import (
     ActorType,
     CorpusMembership,
     CriterionDecision,
+    DecisionAuthority,
     DecisionProvenance,
     DecisionScope,
     EligibilityCriterion,
@@ -302,6 +303,11 @@ def _append_membership(
     dataset: ReviewDataset,
     decision: ScreeningDecision,
 ) -> CorpusMembership:
+    if (
+        decision.provenance.authority is DecisionAuthority.PROPOSED
+        or decision.provenance.actor.actor_type is ActorType.LLM
+    ):
+        raise ValueError("LLM proposals cannot create authoritative corpus membership")
     if decision.status is EligibilityStatus.UNCERTAIN:
         raise ValueError("unresolved decisions cannot be finalized as corpus membership")
     effective = [

@@ -6,6 +6,7 @@ import hashlib
 import json
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field, fields, is_dataclass
+from datetime import UTC, datetime
 from enum import Enum
 from typing import Any, TypeVar
 
@@ -131,6 +132,29 @@ class EvidenceSource(str, Enum):
     OTHER = "other"
 
 
+class RetrievalRunKind(str, Enum):
+    PRIMARY = "primary"
+    SUPPLEMENTAL = "supplemental"
+
+
+class PublicationDatePrecision(str, Enum):
+    DAY = "day"
+    MONTH = "month"
+    YEAR = "year"
+    UNKNOWN = "unknown"
+
+
+class AdministrativeDocumentType(str, Enum):
+    JOURNAL_ARTICLE = "journal_article"
+    CONFERENCE_PAPER = "conference_paper"
+    WORKSHOP_PAPER = "workshop_paper"
+    PREPRINT = "preprint"
+    SURVEY = "survey"
+    CONCEPTUAL = "conceptual"
+    OTHER = "other"
+    UNKNOWN = "unknown"
+
+
 @dataclass(slots=True)
 class DecisionActor:
     actor_id: str
@@ -199,6 +223,34 @@ class SourceQuery:
     def from_dict(cls, data: dict[str, Any]) -> SourceQuery:
         payload = dict(data)
         payload["status"] = ProcessingStatus(payload.get("status", ProcessingStatus.OK.value))
+        return cls(**payload)
+
+
+@dataclass(slots=True)
+class RetrievalRun:
+    """One complete planned retrieval wave, distinct from its source requests."""
+
+    run_id: str
+    kind: RetrievalRunKind
+    query_plan_version: str
+    query_plan_hash: str
+    planned_query_ids: list[str]
+    source_query_ids: list[str]
+    retrieval_started_at: str
+    retrieval_completed_at: str
+    status: ProcessingStatus
+    protocol_version: str
+    retrieval_cutoff_date: str | None = None
+    software_version: str | None = None
+    parent_run_id: str | None = None
+    errors: list[str] = field(default_factory=list)
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> RetrievalRun:
+        payload = dict(data)
+        payload["kind"] = RetrievalRunKind(payload["kind"])
+        payload["status"] = ProcessingStatus(payload["status"])
         return cls(**payload)
 
 
@@ -346,6 +398,48 @@ class CriterionDecision:
 
 
 @dataclass(slots=True)
+class AdministrativeScopeDecision:
+    """Software-derived E6 decision and its structured administrative inputs."""
+
+    decision_id: str
+    canonical_record_id: str
+    retrieval_run_id: str
+    publication_date: str | None
+    publication_date_precision: PublicationDatePrecision
+    full_text_language: str | None
+    full_text_available: bool | None
+    document_type: AdministrativeDocumentType
+    qualifying_system_evidence: TriState
+    date_state: TriState
+    language_state: TriState
+    document_type_state: TriState
+    full_text_state: TriState
+    value: TriState
+    exclusion_reasons: list[ExclusionReason]
+    evidence_ids: list[str]
+    provenance: DecisionProvenance
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> AdministrativeScopeDecision:
+        payload = dict(data)
+        payload["publication_date_precision"] = PublicationDatePrecision(
+            payload["publication_date_precision"]
+        )
+        payload["document_type"] = AdministrativeDocumentType(payload["document_type"])
+        payload["qualifying_system_evidence"] = TriState(
+            payload["qualifying_system_evidence"]
+        )
+        for key in ("date_state", "language_state", "document_type_state", "full_text_state", "value"):
+            payload[key] = TriState(payload[key])
+        payload["exclusion_reasons"] = [
+            ExclusionReason(value) for value in payload.get("exclusion_reasons", [])
+        ]
+        payload["provenance"] = DecisionProvenance.from_dict(payload["provenance"])
+        return cls(**payload)
+
+
+@dataclass(slots=True)
 class ScreeningDecision:
     decision_id: str
     canonical_record_id: str
@@ -479,6 +573,7 @@ def _effective_decisions(items: Iterable[DecisionT]) -> list[DecisionT]:
 @dataclass(slots=True)
 class ReviewDataset:
     schema_version: str = "1.0.0"
+    retrieval_runs: list[RetrievalRun] = field(default_factory=list)
     source_queries: list[SourceQuery] = field(default_factory=list)
     occurrences: list[RecordOccurrence] = field(default_factory=list)
     canonical_records: list[CanonicalRecord] = field(default_factory=list)
@@ -486,6 +581,9 @@ class ReviewDataset:
     inference_runs: list[InferenceRun] = field(default_factory=list)
     inference_attempts: list[InferenceAttempt] = field(default_factory=list)
     evidence: list[EvidenceReference] = field(default_factory=list)
+    administrative_scope_decisions: list[AdministrativeScopeDecision] = field(
+        default_factory=list
+    )
     screening_decisions: list[ScreeningDecision] = field(default_factory=list)
     corpus_memberships: list[CorpusMembership] = field(default_factory=list)
     annotations: list[DimensionAnnotation] = field(default_factory=list)
@@ -502,6 +600,9 @@ class ReviewDataset:
     def from_dict(cls, data: dict[str, Any]) -> ReviewDataset:
         return cls(
             schema_version=data.get("schema_version", "1.0.0"),
+            retrieval_runs=[
+                RetrievalRun.from_dict(item) for item in data.get("retrieval_runs", [])
+            ],
             source_queries=[SourceQuery.from_dict(item) for item in data.get("source_queries", [])],
             occurrences=[RecordOccurrence.from_dict(item) for item in data.get("occurrences", [])],
             canonical_records=[
@@ -518,6 +619,10 @@ class ReviewDataset:
                 for item in data.get("inference_attempts", [])
             ],
             evidence=[EvidenceReference.from_dict(item) for item in data.get("evidence", [])],
+            administrative_scope_decisions=[
+                AdministrativeScopeDecision.from_dict(item)
+                for item in data.get("administrative_scope_decisions", [])
+            ],
             screening_decisions=[
                 ScreeningDecision.from_dict(item) for item in data.get("screening_decisions", [])
             ],
@@ -545,14 +650,20 @@ class ReviewDataset:
     def effective_duplicate_decisions(self) -> list[DuplicateDecision]:
         return _effective_decisions(self.duplicate_decisions)
 
+    def effective_administrative_scope_decisions(self) -> list[AdministrativeScopeDecision]:
+        return _effective_decisions(self.administrative_scope_decisions)
+
     def effective_corpus_memberships(self) -> list[CorpusMembership]:
         return _effective_decisions(self.corpus_memberships)
 
     def validate(self) -> None:
+        retrieval_runs = _unique_by_id(self.retrieval_runs, "run_id", "retrieval run")
         queries = _unique_by_id(self.source_queries, "query_id", "source query")
         occurrences = _unique_by_id(self.occurrences, "occurrence_id", "occurrence")
         canonical = _unique_by_id(self.canonical_records, "canonical_id", "canonical record")
         evidence = _unique_by_id(self.evidence, "evidence_id", "evidence reference")
+
+        self._validate_retrieval_runs(retrieval_runs, queries)
 
         occurrence_counts = {query_id: 0 for query_id in queries}
         for occurrence in self.occurrences:
@@ -588,6 +699,7 @@ class ReviewDataset:
         self._validate_decision_histories()
         self._validate_deduplication(occurrences, canonical)
         self._validate_screening(canonical, evidence)
+        self._validate_administrative_scope(retrieval_runs, canonical, evidence)
         self._validate_inference(canonical)
         self._validate_membership(canonical)
         self._validate_annotations(canonical, evidence)
@@ -597,6 +709,11 @@ class ReviewDataset:
         collections: list[tuple[str, list[Any], Callable[[Any], tuple[Any, ...]]]] = [
             ("duplicate", self.duplicate_decisions, lambda item: (item.occurrence_id,)),
             ("screening", self.screening_decisions, lambda item: (item.canonical_record_id,)),
+            (
+                "administrative",
+                self.administrative_scope_decisions,
+                lambda item: (item.canonical_record_id, item.retrieval_run_id),
+            ),
             ("membership", self.corpus_memberships, lambda item: (item.canonical_record_id,)),
             (
                 "annotation",
@@ -618,6 +735,153 @@ class ReviewDataset:
                 raise ValueError(f"decision IDs are not globally unique: {sorted(overlap)}")
             all_ids.update(by_id)
             _validate_history(name, items, identity)
+
+    def _validate_retrieval_runs(
+        self,
+        runs: dict[str, RetrievalRun],
+        queries: dict[str, SourceQuery],
+    ) -> None:
+        if not runs:
+            return
+        queries_by_run: dict[str, list[str]] = {run_id: [] for run_id in runs}
+        for query in self.source_queries:
+            if query.run_id not in runs:
+                raise ValueError(
+                    f"source query {query.query_id} references missing retrieval run {query.run_id}"
+                )
+            queries_by_run[query.run_id].append(query.query_id)
+
+        for run in self.retrieval_runs:
+            if not run.planned_query_ids:
+                raise ValueError("retrieval runs require at least one planned source query")
+            if len(run.planned_query_ids) != len(set(run.planned_query_ids)):
+                raise ValueError("retrieval run planned query IDs must be unique")
+            if len(run.source_query_ids) != len(set(run.source_query_ids)):
+                raise ValueError("retrieval run source query IDs must be unique")
+            if run.source_query_ids != queries_by_run[run.run_id]:
+                raise ValueError(
+                    f"retrieval run {run.run_id} source query manifest disagrees with dataset"
+                )
+            started_at = _utc_datetime(run.retrieval_started_at)
+            completed_at = _utc_datetime(run.retrieval_completed_at)
+            if completed_at < started_at:
+                raise ValueError("retrieval run completion cannot precede its start")
+            for query_id in run.source_query_ids:
+                query_started = _utc_datetime(queries[query_id].retrieval_started_at)
+                query_ended = _utc_datetime(queries[query_id].retrieval_ended_at)
+                if query_ended < query_started:
+                    raise ValueError("source query completion cannot precede its start")
+                if query_started < started_at or query_ended > completed_at:
+                    raise ValueError("source query timestamps must fall within their retrieval run")
+            if run.status is ProcessingStatus.OK:
+                if run.planned_query_ids != run.source_query_ids:
+                    raise ValueError(
+                        f"successful retrieval run {run.run_id} must execute its exact frozen plan"
+                    )
+                if any(queries[item].status is not ProcessingStatus.OK for item in run.source_query_ids):
+                    raise ValueError(
+                        f"successful retrieval run {run.run_id} cannot contain failed requests"
+                    )
+                if run.errors:
+                    raise ValueError("successful retrieval runs cannot contain errors")
+                if not run.retrieval_cutoff_date:
+                    raise ValueError("successful retrieval runs require a retrieval cutoff date")
+                if _utc_calendar_date(run.retrieval_completed_at) != run.retrieval_cutoff_date:
+                    raise ValueError(
+                        "retrieval cutoff must equal the UTC completion date of the successful wave"
+                    )
+            else:
+                if run.retrieval_cutoff_date is not None:
+                    raise ValueError("incomplete retrieval runs cannot establish a retrieval cutoff")
+                if not run.errors:
+                    raise ValueError("incomplete retrieval runs must preserve errors")
+            if run.kind is RetrievalRunKind.PRIMARY and run.parent_run_id is not None:
+                raise ValueError("primary retrieval runs cannot have a parent run")
+            if run.kind is RetrievalRunKind.SUPPLEMENTAL and (
+                not run.parent_run_id or run.parent_run_id not in runs
+            ):
+                raise ValueError("supplemental retrieval runs require a persisted parent run")
+            if (
+                not run.query_plan_version.strip()
+                or len(run.query_plan_hash) != 64
+                or any(character not in "0123456789abcdef" for character in run.query_plan_hash)
+            ):
+                raise ValueError("retrieval runs require versioned, hashed query plans")
+
+    def _validate_administrative_scope(
+        self,
+        runs: dict[str, RetrievalRun],
+        canonical: dict[str, CanonicalRecord],
+        evidence: dict[str, EvidenceReference],
+    ) -> None:
+        from h2h_lit.administrative import derive_administrative_states
+
+        for item in self.administrative_scope_decisions:
+            if item.canonical_record_id not in canonical:
+                raise ValueError(
+                    f"administrative decision {item.decision_id} has missing canonical record"
+                )
+            run = runs.get(item.retrieval_run_id)
+            if run is None:
+                raise ValueError(
+                    f"administrative decision {item.decision_id} has missing retrieval run"
+                )
+            if run.status is not ProcessingStatus.OK or not run.retrieval_cutoff_date:
+                raise ValueError("production E6 requires a successful retrieval run cutoff")
+            derived_states = derive_administrative_states(
+                publication_date=item.publication_date,
+                publication_date_precision=item.publication_date_precision,
+                retrieval_cutoff_date=run.retrieval_cutoff_date,
+                full_text_language=item.full_text_language,
+                full_text_available=item.full_text_available,
+                document_type=item.document_type,
+                qualifying_system_evidence=item.qualifying_system_evidence,
+            )
+            if (
+                item.date_state is not derived_states["date"]
+                or item.language_state is not derived_states["language"]
+                or item.document_type_state is not derived_states["document_type"]
+                or item.full_text_state is not derived_states["full_text"]
+            ):
+                raise ValueError(
+                    "administrative component states are not deterministically derived"
+                )
+            if item.metadata.get("retrieval_cutoff_date") != run.retrieval_cutoff_date:
+                raise ValueError("administrative decision cutoff disagrees with its retrieval run")
+            states = [
+                item.date_state,
+                item.language_state,
+                item.document_type_state,
+                item.full_text_state,
+            ]
+            expected = (
+                TriState.NO
+                if TriState.NO in states
+                else TriState.YES
+                if all(value is TriState.YES for value in states)
+                else TriState.UNCERTAIN
+            )
+            if item.value is not expected:
+                raise ValueError("administrative E6 value disagrees with component states")
+            expected_reasons: list[ExclusionReason] = []
+            if item.date_state is TriState.NO:
+                expected_reasons.append(ExclusionReason.AFTER_RETRIEVAL_END_DATE)
+            if item.language_state is TriState.NO:
+                expected_reasons.append(ExclusionReason.NON_ENGLISH_FULL_TEXT)
+            if item.document_type_state is TriState.NO:
+                expected_reasons.append(ExclusionReason.INELIGIBLE_DOCUMENT_TYPE)
+            if item.exclusion_reasons != expected_reasons:
+                raise ValueError("administrative exclusion reasons are not deterministically derived")
+            if not item.evidence_ids:
+                raise ValueError("administrative E6 decisions require evidence references")
+            self._validate_evidence_ids(
+                item.evidence_ids, item.canonical_record_id, evidence, item.decision_id
+            )
+        _require_one_effective_per_key(
+            "administrative scope",
+            _effective_decisions(self.administrative_scope_decisions),
+            lambda item: (item.canonical_record_id, item.retrieval_run_id),
+        )
 
     def _validate_deduplication(
         self,
@@ -730,6 +994,13 @@ class ReviewDataset:
                 raise ValueError(f"membership {item.decision_id} has missing screening decision")
             if screen.provenance.scope is not item.provenance.scope:
                 raise ValueError("membership and screening decision scopes must agree")
+            if (
+                screen.provenance.authority is DecisionAuthority.PROPOSED
+                or item.provenance.authority is DecisionAuthority.PROPOSED
+                or screen.provenance.actor.actor_type is ActorType.LLM
+                or item.provenance.actor.actor_type is ActorType.LLM
+            ):
+                raise ValueError("LLM proposals cannot create authoritative corpus membership")
             if screen.canonical_record_id != item.canonical_record_id or screen.status is not item.status:
                 raise ValueError("corpus membership must agree with its screening decision")
         effective_memberships = _effective_decisions(self.corpus_memberships)
@@ -1004,6 +1275,20 @@ def _json_hash(value: Any) -> str:
 
 def _decision_id_field(name: str) -> str:
     return "annotation_id" if name == "annotation" else "decision_id"
+
+
+def _utc_calendar_date(value: str) -> str:
+    return _utc_datetime(value).astimezone(UTC).date().isoformat()
+
+
+def _utc_datetime(value: str) -> datetime:
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError as exc:
+        raise ValueError("retrieval timestamps must be ISO 8601") from exc
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        raise ValueError("retrieval timestamps must include a UTC offset")
+    return parsed
 
 
 def _item_decision_id(item: Any) -> str:

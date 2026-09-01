@@ -472,5 +472,7 @@ def test_effective_membership_cannot_reference_a_superseded_screening_decision()
         )
     )
 
-    with pytest.raises(ValueError, match="requires one effective prospective screening"):
+    with pytest.raises(
+        ValueError, match="LLM proposals cannot create authoritative corpus membership"
+    ):
         dataset.validate()
