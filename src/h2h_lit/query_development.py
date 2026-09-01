@@ -86,6 +86,17 @@ class SizingTransportStatus(str, Enum):
     SUCCEEDED = "succeeded"
     FAILED = "failed"
     NOT_APPLICABLE = "not_applicable"
+    BLOCKED_CREDENTIAL = "blocked_credential"
+    PENDING_MANUAL = "pending_manual"
+    GATE_FAILED = "gate_failed"
+
+
+class SizingGateStatus(str, Enum):
+    NOT_APPLICABLE = "not_applicable"
+    PENDING = "pending"
+    PASSED = "passed"
+    FAILED = "failed"
+    UNRESOLVED = "unresolved"
 
 
 class SentinelDiagnosticOutcome(str, Enum):
@@ -401,6 +412,8 @@ class SizingObservation:
     transport_status: SizingTransportStatus = SizingTransportStatus.PLANNED
     response_status: str | int | None = None
     credential_reference: str | None = None
+    gate_name: str | None = None
+    gate_status: SizingGateStatus = SizingGateStatus.NOT_APPLICABLE
     source_query_translation: str | None = None
     warnings: list[str] = field(default_factory=list)
     attempts: list[SizingAttempt] = field(default_factory=list)
@@ -425,6 +438,8 @@ class SizingObservation:
         _validate_request(self.request, self.request_hash)
         _validate_hash(self.response_hash, "response hash")
         _validate_credential_reference(self.credential_reference)
+        if self.gate_status is not SizingGateStatus.NOT_APPLICABLE and not self.gate_name:
+            raise ValueError("sizing gate status requires a gate name")
         for expected, attempt in enumerate(self.attempts, start=1):
             attempt.validate()
             if attempt.attempt_number != expected:
@@ -467,6 +482,10 @@ class SizingObservation:
             ),
             response_status=data.get("response_status"),
             credential_reference=data.get("credential_reference"),
+            gate_name=data.get("gate_name"),
+            gate_status=SizingGateStatus(
+                data.get("gate_status", SizingGateStatus.NOT_APPLICABLE.value)
+            ),
             source_query_translation=data.get("source_query_translation"),
             warnings=list(data.get("warnings", [])),
             attempts=[SizingAttempt.from_dict(item) for item in data.get("attempts", [])],
@@ -582,6 +601,7 @@ class QuerySizingRun:
     sentinel_set_id: str | None = None
     sentinel_set_version: str | None = None
     sentinel_set_hash: str | None = None
+    dry_run_plan_hash: str | None = None
     started_at: str | None = None
     observations: list[SizingObservation] = field(default_factory=list)
     sentinel_diagnostics: list[SentinelDiagnostic] = field(default_factory=list)
@@ -609,6 +629,7 @@ class QuerySizingRun:
             ):
                 raise ValueError("current query-sizing runs require sentinel-set provenance")
             _validate_hash(self.sentinel_set_hash, "sentinel-set hash")
+        _validate_hash(self.dry_run_plan_hash, "dry-run plan hash")
         if self.purpose != "count_and_syntax_sizing_only":
             raise ValueError("query sizing has an invalid purpose")
         if any(
@@ -685,6 +706,7 @@ class QuerySizingRun:
             sentinel_set_id=data.get("sentinel_set_id"),
             sentinel_set_version=data.get("sentinel_set_version"),
             sentinel_set_hash=data.get("sentinel_set_hash"),
+            dry_run_plan_hash=data.get("dry_run_plan_hash"),
             status=SizingRunStatus(data["status"]),
             planned_candidate_query_ids=list(data["planned_candidate_query_ids"]),
             created_at=str(data["created_at"]),
