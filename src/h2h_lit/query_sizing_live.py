@@ -19,7 +19,7 @@ from h2h_lit.http import HttpClient, HttpResponse, RequestsHttpClient
 from h2h_lit.pagination import RateLimiter, RetryPolicy
 from h2h_lit.query_development import (
     CANDIDATE_V2_SCHEMA_VERSION,
-    SIZING_RUN_SCHEMA_VERSION,
+    CANDIDATE_V3_SCHEMA_VERSION,
     SIZING_RUN_V2_SCHEMA_VERSION,
     QuerySizingRun,
     SemanticAssertionResult,
@@ -122,10 +122,14 @@ def load_validated_sizing_plan(
     mismatches = [key for key, value in expected.items() if run.get(key) != value]
     if mismatches:
         raise SizingPlanError(f"dry-run plan provenance mismatch: {', '.join(mismatches)}")
-    is_v2 = candidate_set.payload["schema_version"] == CANDIDATE_V2_SCHEMA_VERSION
+    is_versioned = candidate_set.payload["schema_version"] in {
+        CANDIDATE_V2_SCHEMA_VERSION,
+        CANDIDATE_V3_SCHEMA_VERSION,
+    }
+    is_v3 = candidate_set.payload["schema_version"] == CANDIDATE_V3_SCHEMA_VERSION
     if sentinel_set.candidate_set_hash != candidate_set.candidate_set_hash():
         compatibility = candidate_set.payload.get("sentinel_compatibility", {})
-        if not is_v2 or (
+        if not is_versioned or (
             compatibility.get("sentinel_set_hash") != sentinel_set.sentinel_set_hash()
             or compatibility.get("original_candidate_set_hash")
             != sentinel_set.candidate_set_hash
@@ -133,7 +137,7 @@ def load_validated_sizing_plan(
             raise SizingPlanError("sentinel set references a different candidate set")
 
     specs = tuple(payload.get("candidate_specifications", []))
-    expected_candidate_count = 54 if is_v2 else EXPECTED_CANDIDATE_COUNT
+    expected_candidate_count = 54 if is_versioned else EXPECTED_CANDIDATE_COUNT
     if len(specs) != expected_candidate_count:
         raise SizingPlanError(
             f"approved dry-run plan must contain exactly {expected_candidate_count} candidates"
@@ -151,6 +155,12 @@ def load_validated_sizing_plan(
             raise SizingPlanError(f"request hash mismatch: {spec.get('candidate_query_id')}")
         if source == "SemanticScholar" and "/search/bulk" not in spec["request"]["url"]:
             raise SizingPlanError("Semantic Scholar sizing must remain in bulk mode")
+        if is_v3 and source == "PubMed":
+            request = spec["request"]
+            if request.get("method") != "POST" or request.get("params") != {}:
+                raise SizingPlanError("v0.3 PubMed sizing must use form-encoded POST")
+            if set(request.get("form", {})) != {"db", "term", "retmax", "retmode"}:
+                raise SizingPlanError("v0.3 PubMed POST form fields changed")
         if "partition" in canonical_json(spec).lower():
             raise SizingPlanError("query sizing does not authorize partitioning")
 
@@ -158,16 +168,22 @@ def load_validated_sizing_plan(
     for item in diagnostics:
         if item.get("candidate_query_id") not in set(identifiers):
             raise SizingPlanError("sentinel diagnostic references an unplanned candidate")
-        request_keys = ("match_request",) if is_v2 else ("identity_request", "match_request")
+        request_keys = (
+            ("match_request",)
+            if is_versioned
+            else ("identity_request", "match_request")
+        )
         for key in request_keys:
             request = item[key]
             if sizing_request_hash(request) != item.get(f"{key}_hash"):
                 raise SizingPlanError(f"sentinel {key} hash mismatch")
     identity_specs = tuple(payload.get("sentinel_identity_specifications", []))
     semantic_control_specs = tuple(payload.get("semantic_control_specifications", []))
-    if is_v2:
+    if is_versioned:
         if len(identity_specs) != 42:
-            raise SizingPlanError("v0.2 requires 42 source-by-sentinel identity specifications")
+            raise SizingPlanError(
+                "versioned sizing requires 42 source-by-sentinel identity specifications"
+            )
         identity_ids = {item["identity_resolution_id"] for item in identity_specs}
         for item in identity_specs:
             if sizing_request_hash(item["request"]) != item.get("request_hash"):
@@ -175,7 +191,9 @@ def load_validated_sizing_plan(
         if any(item.get("identity_resolution_id") not in identity_ids for item in diagnostics):
             raise SizingPlanError("candidate diagnostic lacks a frozen identity resolution")
         if len(semantic_control_specs) != 6:
-            raise SizingPlanError("v0.2 requires six Semantic Scholar semantic controls")
+            raise SizingPlanError(
+                "versioned sizing requires six Semantic Scholar semantic controls"
+            )
         control_ids = [item.get("control_query_id") for item in semantic_control_specs]
         probe_ids = [item.get("probe_id") for item in semantic_control_specs]
         if len(set(control_ids)) != 6 or len(set(probe_ids)) != 6:
@@ -194,7 +212,9 @@ def load_validated_sizing_plan(
                 raise SizingPlanError("semantic-control expression hash mismatch")
         assertions = payload.get("semantic_control_provenance", {}).get("assertions", [])
         if len(assertions) != 5:
-            raise SizingPlanError("v0.2 requires five frozen Boolean assertions")
+            raise SizingPlanError(
+                "versioned sizing requires five frozen Boolean assertions"
+            )
         known_probes = set(probe_ids)
         for assertion in assertions:
             if assertion.get("relation") not in {
@@ -545,11 +565,7 @@ class LiveSizingExecutor:
 
         observations = [_fresh_observation(spec, self.timestamp()) for spec in plan.candidate_specs]
         run = QuerySizingRun(
-            schema_version=(
-                SIZING_RUN_V2_SCHEMA_VERSION
-                if plan.identity_specs
-                else SIZING_RUN_SCHEMA_VERSION
-            ),
+            schema_version=str(plan_run["schema_version"]),
             sizing_run_id=plan_run["sizing_run_id"],
             candidate_set_id=plan_run["candidate_set_id"],
             candidate_set_version=plan_run["candidate_set_version"],
@@ -754,14 +770,25 @@ class LiveSizingExecutor:
         credentials: Mapping[str, str],
     ) -> HttpResponse:
         params = dict(request.get("params", {}))
-        headers: dict[str, str] = {}
+        headers = dict(request.get("headers", {}))
         if source == "IEEEXplore":
             params["apikey"] = credentials["IEEE_XPLORE_API_KEY"]
         elif source == "SemanticScholar" and credentials.get("SEMANTIC_SCHOLAR_API_KEY"):
             headers["x-api-key"] = credentials["SEMANTIC_SCHOLAR_API_KEY"]
-        return self.http.get(
-            request["url"], params=params, headers=headers, timeout=self.timeout
-        )
+        method = request.get("method")
+        if method == "GET":
+            return self.http.get(
+                request["url"], params=params, headers=headers, timeout=self.timeout
+            )
+        if method == "POST":
+            return self.http.post(
+                request["url"],
+                params=params,
+                data=dict(request["form"]),
+                headers=headers,
+                timeout=self.timeout,
+            )
+        raise SizingPlanError(f"unsupported serialized HTTP method: {method}")
 
     def _execute_diagnostics(
         self,
@@ -1604,6 +1631,20 @@ def _terminal_http_failure(
     retry_reason: str | None, status: int, response_hash: str,
     *, attempt_request: dict[str, Any] | None = None,
 ) -> SizingObservation:
+    actual_request = attempt_request or observation.request
+    if status == 414 and actual_request.get("method") == "POST":
+        current = _failed_attempt(
+            observation,
+            number,
+            started,
+            completed,
+            retry_reason,
+            "request_target_too_long:414",
+            response_status=status,
+            response_hash=response_hash,
+            attempt_request=actual_request,
+        )
+        return replace(current, syntax_status=SizingSyntaxStatus.UNTESTED)
     current = _failed_attempt(observation, number, started, completed, retry_reason,
                               f"terminal_http_status:{status}", response_status=status,
                               response_hash=response_hash, attempt_request=attempt_request)

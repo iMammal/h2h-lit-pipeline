@@ -1,0 +1,25 @@
+{
+  "schema_version": "0.3.0",
+  "candidate_set_id": "h2h-star-five-family-query-candidates",
+  "candidate_set_version": "0.3.0-preproduction",
+  "methodological_status": "candidate_not_production_frozen",
+  "inherits": {
+    "relative_path": "star_query_candidates_v0_2.json",
+    "candidate_set_hash": "701bba1a7b40ba508b41df6a8d03d340449b5f67f8ed89ee9e9ad3dcf7cfeaf2"
+  },
+  "sentinel_compatibility": {
+    "sentinel_set_id": "star-query-sentinels-v0-1",
+    "sentinel_set_version": "0.1.0-pre-sizing",
+    "sentinel_set_hash": "1acc34ae05f0637bdfb5d3feebe2044197164ae4b6d6ffd0e043daa63bfd46a3",
+    "original_candidate_set_hash": "4c642ff04c84c1e1534566d789278fdab21af9f75a57332fce04fa3751fe01bc",
+    "membership_and_expectations_unchanged": true
+  },
+  "source_overrides": {
+    "PubMed": {
+      "sizing_transport": "form_post"
+    },
+    "SemanticScholar": {
+      "syntax": "semantic_scholar_bulk_symbolic_boolean"
+    }
+  }
+}

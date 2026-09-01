@@ -10,6 +10,7 @@ from typing import Any
 from h2h_lit.checkpoint import atomic_write
 from h2h_lit.query_development import (
     CANDIDATE_V2_SCHEMA_VERSION,
+    CANDIDATE_V3_SCHEMA_VERSION,
     SIZING_RUN_SCHEMA_VERSION,
     SIZING_RUN_V2_SCHEMA_VERSION,
     QuerySizingRun,
@@ -75,10 +76,13 @@ def build_sizing_dry_run(
 ) -> dict[str, Any]:
     candidate_set = load_candidate_set(candidate_config)
     sentinel_set = load_sentinel_set(sentinel_config)
-    is_v2 = candidate_set.payload["schema_version"] == CANDIDATE_V2_SCHEMA_VERSION
+    is_versioned = candidate_set.payload["schema_version"] in {
+        CANDIDATE_V2_SCHEMA_VERSION,
+        CANDIDATE_V3_SCHEMA_VERSION,
+    }
     if sentinel_set.candidate_set_hash != candidate_set.candidate_set_hash():
         compatibility = candidate_set.payload.get("sentinel_compatibility", {})
-        if not is_v2 or (
+        if not is_versioned or (
             compatibility.get("sentinel_set_hash") != sentinel_set.sentinel_set_hash()
             or compatibility.get("original_candidate_set_hash")
             != sentinel_set.candidate_set_hash
@@ -88,7 +92,7 @@ def build_sizing_dry_run(
 
     timestamp = created_at or sentinel_set.frozen_at
     candidates = candidate_set.render_all()
-    expected_candidates = 54 if is_v2 else 62
+    expected_candidates = 54 if is_versioned else 62
     if len(candidates) != expected_candidates:
         raise ValueError(
             f"the candidate configuration must render exactly {expected_candidates} queries"
@@ -96,7 +100,9 @@ def build_sizing_dry_run(
 
     observations = [_planned_observation(item, timestamp) for item in candidates]
     run = QuerySizingRun(
-        schema_version=(SIZING_RUN_V2_SCHEMA_VERSION if is_v2 else SIZING_RUN_SCHEMA_VERSION),
+        schema_version=(
+            SIZING_RUN_V2_SCHEMA_VERSION if is_versioned else SIZING_RUN_SCHEMA_VERSION
+        ),
         sizing_run_id=run_id,
         candidate_set_id=candidate_set.candidate_set_id,
         candidate_set_version=candidate_set.candidate_set_version,
@@ -131,7 +137,7 @@ def build_sizing_dry_run(
         for index, item in enumerate(candidates)
     ]
     identity_specs: list[dict[str, Any]] = []
-    if is_v2:
+    if is_versioned:
         identity_specs = [
             _sentinel_identity_spec(source, sentinel)
             for source in candidate_set.payload["sources"]
@@ -160,9 +166,9 @@ def build_sizing_dry_run(
         ]
     semantic_controls: list[dict[str, Any]] = []
     semantic_control_provenance: dict[str, Any] | None = None
-    if is_v2:
+    if is_versioned:
         if semantic_control_config is None:
-            raise ValueError("v0.2 dry runs require the frozen semantic-control config")
+            raise ValueError("versioned dry runs require the frozen semantic-control config")
         controls = load_semantic_control_set(semantic_control_config)
         semantic_controls = [_semantic_control_spec(item) for item in controls.probes]
         semantic_control_provenance = {
@@ -174,7 +180,9 @@ def build_sizing_dry_run(
             "automatic_mode_switching": controls.automatic_mode_switching,
         }
     report = {
-        "schema_version": DRY_RUN_V2_SCHEMA_VERSION if is_v2 else DRY_RUN_SCHEMA_VERSION,
+        "schema_version": (
+            DRY_RUN_V2_SCHEMA_VERSION if is_versioned else DRY_RUN_SCHEMA_VERSION
+        ),
         "report_kind": "non_production_query_sizing_dry_run",
         "run": run.to_dict(),
         "candidate_specifications": candidate_specs,
@@ -182,7 +190,7 @@ def build_sizing_dry_run(
         "sentinel_diagnostic_specifications": diagnostics,
         "semantic_control_specifications": semantic_controls,
         "semantic_control_provenance": semantic_control_provenance,
-        "source_requirements": _source_requirements(is_v2=is_v2),
+        "source_requirements": _source_requirements(is_v2=is_versioned),
         "interpretation_rules": list(INTERPRETATION_RULES),
         "non_production_invariants": dict(NON_PRODUCTION_INVARIANTS),
     }
@@ -250,6 +258,10 @@ def _execution_request(source: str, rendered: dict[str, Any]) -> dict[str, Any]:
         "url": SOURCE_URLS[source],
         "params": dict(rendered["params"]),
     }
+    if "form" in rendered:
+        request["form"] = dict(rendered["form"])
+    if "headers" in rendered:
+        request["headers"] = dict(rendered["headers"])
     if source == "CrossRef":
         request["fallback"] = {
             "transport": "http",
@@ -465,17 +477,26 @@ def _diagnostic_requests(
     source = candidate.source
     if source == "PubMed":
         identity = f'"{doi}"[DOI]' if doi else f'"{title}"[Title]'
-        return (
-            _http(SOURCE_URLS[source], {"db": "pubmed", "term": identity, "retmax": 1, "retmode": "xml"}),
+        match_fields = {
+            "db": "pubmed",
+            "term": f"({candidate.query_text}) AND ({identity})",
+            "retmax": 1,
+            "retmode": "xml",
+        }
+        match_request = (
             _http(
                 SOURCE_URLS[source],
-                {
-                    "db": "pubmed",
-                    "term": f"({candidate.query_text}) AND ({identity})",
-                    "retmax": 1,
-                    "retmode": "xml",
-                },
-            ),
+                {},
+                method="POST",
+                form=match_fields,
+                headers={"content-type": "application/x-www-form-urlencoded"},
+            )
+            if candidate.sizing_request["method"] == "POST"
+            else _http(SOURCE_URLS[source], match_fields)
+        )
+        return (
+            _http(SOURCE_URLS[source], {"db": "pubmed", "term": identity, "retmax": 1, "retmode": "xml"}),
+            match_request,
             "identifier_constrained",
         )
     if source == "EuropePMC":
@@ -492,11 +513,18 @@ def _diagnostic_requests(
     if source == "SemanticScholar":
         identity_query = f'"{title}"'
         params = {"limit": 1, "fields": "paperId", "sort": "paperId:asc"}
+        conjunction = (
+            "+"
+            if candidate.sizing_request.get("params", {}).get("query") == candidate.query_text
+            and candidate.sizing_request.get("endpoint") == "paper/search/bulk"
+            and "bulk_boolean_semantics_control_required" in candidate.syntax_uncertainties
+            else "AND"
+        )
         return (
             _http(SOURCE_URLS[source], {**params, "query": identity_query}),
             _http(
                 SOURCE_URLS[source],
-                {**params, "query": f"({candidate.query_text}) AND {identity_query}"},
+                {**params, "query": f"({candidate.query_text}) {conjunction} {identity_query}"},
             ),
             "bulk_boolean_semantics_gate_required",
         )
@@ -570,13 +598,20 @@ def _http(
     params: dict[str, Any],
     *,
     credential_reference: str | None = None,
+    method: str = "GET",
+    form: dict[str, Any] | None = None,
+    headers: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     request: dict[str, Any] = {
         "transport": "http",
-        "method": "GET",
+        "method": method,
         "url": url,
         "params": params,
     }
+    if form is not None:
+        request["form"] = form
+    if headers is not None:
+        request["headers"] = headers
     if credential_reference:
         request["credential_reference"] = credential_reference
     return request

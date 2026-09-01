@@ -31,6 +31,17 @@ class HttpClient(Protocol):
         allow_redirects: bool = True,
     ) -> HttpResponse: ...
 
+    def post(
+        self,
+        url: str,
+        *,
+        data: dict[str, Any] | None = None,
+        params: dict[str, Any] | None = None,
+        headers: dict[str, str] | None = None,
+        timeout: float | None = None,
+        allow_redirects: bool = True,
+    ) -> HttpResponse: ...
+
 
 @dataclass(slots=True)
 class RequestsHttpResponse:
@@ -101,6 +112,26 @@ class RequestsHttpClient:
             headers=headers,
             timeout=timeout,
             stream=stream,
+            allow_redirects=allow_redirects,
+        )
+        return RequestsHttpResponse(response)
+
+    def post(
+        self,
+        url: str,
+        *,
+        data: dict[str, Any] | None = None,
+        params: dict[str, Any] | None = None,
+        headers: dict[str, str] | None = None,
+        timeout: float | None = None,
+        allow_redirects: bool = True,
+    ) -> RequestsHttpResponse:
+        response = self.session.post(
+            url,
+            data=data,
+            params=params,
+            headers=headers,
+            timeout=timeout,
             allow_redirects=allow_redirects,
         )
         return RequestsHttpResponse(response)

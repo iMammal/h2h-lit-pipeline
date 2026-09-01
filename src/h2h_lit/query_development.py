@@ -15,6 +15,7 @@ from h2h_lit.checkpoint import atomic_write
 
 CANDIDATE_SCHEMA_VERSION = "0.1.0"
 CANDIDATE_V2_SCHEMA_VERSION = "0.2.0"
+CANDIDATE_V3_SCHEMA_VERSION = "0.3.0"
 SIZING_RUN_SCHEMA_VERSION = "1.1.0"
 SIZING_RUN_V2_SCHEMA_VERSION = "1.2.0"
 LEGACY_SIZING_RUN_SCHEMA_VERSION = "1.0.0"
@@ -176,6 +177,7 @@ class CandidateSet:
         if data.get("schema_version") not in {
             CANDIDATE_SCHEMA_VERSION,
             CANDIDATE_V2_SCHEMA_VERSION,
+            CANDIDATE_V3_SCHEMA_VERSION,
         }:
             raise CandidateConfigurationError("unsupported candidate-query schema version")
         if data.get("methodological_status") != "candidate_not_production_frozen":
@@ -1348,22 +1350,24 @@ def sizing_request_hash(request: dict[str, Any]) -> str:
 
 
 def _resolve_candidate_payload(raw: dict[str, Any], directory: Path) -> dict[str, Any]:
-    if raw.get("schema_version") != CANDIDATE_V2_SCHEMA_VERSION:
+    schema_version = raw.get("schema_version")
+    if schema_version not in {
+        CANDIDATE_V2_SCHEMA_VERSION,
+        CANDIDATE_V3_SCHEMA_VERSION,
+    }:
         return raw
     inheritance = raw.get("inherits")
     if not isinstance(inheritance, dict):
-        raise CandidateConfigurationError("v0.2 candidate config requires frozen inheritance")
+        raise CandidateConfigurationError("versioned candidate config requires frozen inheritance")
     relative = str(inheritance.get("relative_path", ""))
     _validate_relative_path(relative)
     base_path = directory / relative
-    base_raw = json.loads(base_path.read_text(encoding="utf-8"))
-    base = CandidateSet(base_raw)
-    base.validate()
+    base = load_candidate_set(base_path)
     expected_hash = inheritance.get("candidate_set_hash")
     if base.candidate_set_hash() != expected_hash:
-        raise CandidateConfigurationError("v0.2 inherited candidate-set hash mismatch")
+        raise CandidateConfigurationError("inherited candidate-set hash mismatch")
     payload = deepcopy(base.payload)
-    payload["schema_version"] = CANDIDATE_V2_SCHEMA_VERSION
+    payload["schema_version"] = schema_version
     payload["candidate_set_version"] = str(raw["candidate_set_version"])
     payload["base_candidate_set_hash"] = str(expected_hash)
     payload["sentinel_compatibility"] = deepcopy(raw["sentinel_compatibility"])
@@ -1377,6 +1381,17 @@ def _resolve_candidate_payload(raw: dict[str, Any], directory: Path) -> dict[str
 def _validate_request(request: dict[str, Any], expected_hash: str | None = None) -> None:
     _reject_forbidden_keys(request, _FORBIDDEN_SIZING_KEYS)
     _reject_secrets(request)
+    if request.get("transport") == "http":
+        method = request.get("method")
+        if method not in {"GET", "POST"}:
+            raise ValueError("HTTP sizing requests must use GET or POST")
+        form = request.get("form")
+        if method == "GET" and form is not None:
+            raise ValueError("GET sizing requests cannot carry a form body")
+        if method == "POST" and not isinstance(form, dict):
+            raise ValueError("POST sizing requests require a form body")
+        if not isinstance(request.get("params", {}), dict):
+            raise ValueError("HTTP sizing request parameters must be an object")
     if expected_hash is not None and _sha256(_canonical_json(request)) != expected_hash:
         raise ValueError("sizing request hash does not match canonical request")
 
@@ -1472,6 +1487,19 @@ def _render_source_query(
             "endpoint": "search",
             "params": {"query": query_text, "format": "json", "pageSize": 1, "resultType": "core"},
         }
+    elif syntax == "semantic_scholar_bulk_symbolic_boolean":
+        query_text = _render_semantic_scholar_bulk(expression)
+        uncertainties.append("bulk_boolean_semantics_control_required")
+        request = {
+            "method": "GET",
+            "endpoint": "paper/search/bulk",
+            "params": {
+                "query": query_text,
+                "limit": 1,
+                "fields": "paperId",
+                "sort": "paperId:asc",
+            },
+        }
     elif source == "SemanticScholar":
         uncertainties.append("bulk_boolean_semantics_unverified")
         request = {
@@ -1533,6 +1561,20 @@ def _render_source_query(
         _canonical_json({"query_text": query_text, "fields": fields, "request": request})
     )
     candidate_id = f"candidate:{family_id}:{variant_id}:{source}"
+    if (
+        source == "PubMed"
+        and source_spec.get("sizing_transport") == "form_post"
+    ):
+        request = {
+            "method": "POST",
+            "endpoint": "esearch.fcgi",
+            "params": {},
+            "form": dict(request["params"]),
+            "headers": {"content-type": "application/x-www-form-urlencoded"},
+        }
+        query_hash = _sha256(
+            _canonical_json({"query_text": query_text, "fields": fields, "request": request})
+        )
     return CandidateQuery(
         candidate_query_id=candidate_id,
         candidate_set_id=candidate_set.candidate_set_id,
@@ -1571,6 +1613,98 @@ def _render_pubmed_title_abstract(expression: str) -> str:
     ]
     rendered = " ".join(output)
     return rendered.replace("( ", "(").replace(" )", ")")
+
+
+@dataclass(frozen=True, slots=True)
+class _BooleanExpressionNode:
+    kind: str
+    value: str | None = None
+    children: tuple[_BooleanExpressionNode, ...] = ()
+
+
+class _BooleanExpressionParser:
+    def __init__(self, expression: str):
+        token_pattern = re.compile(
+            r'"[^"\n]+"|\(|\)|\bAND\b|\bOR\b|\bNOT\b|[^\s()]+'
+        )
+        self.tokens = token_pattern.findall(expression + " ")
+        if not self.tokens or "".join(self.tokens).replace(" ", "") != expression.replace(
+            " ", ""
+        ):
+            raise CandidateConfigurationError("Boolean expression contains an unsupported token")
+        self.index = 0
+
+    def parse(self) -> _BooleanExpressionNode:
+        node = self._parse_or()
+        if self.index != len(self.tokens):
+            raise CandidateConfigurationError("Boolean expression has trailing tokens")
+        return node
+
+    def _parse_or(self) -> _BooleanExpressionNode:
+        children = [self._parse_and()]
+        while self._peek() == "OR":
+            self.index += 1
+            children.append(self._parse_and())
+        return self._combine("or", children)
+
+    def _parse_and(self) -> _BooleanExpressionNode:
+        children = [self._parse_unary()]
+        while self._peek() == "AND":
+            self.index += 1
+            children.append(self._parse_unary())
+        return self._combine("and", children)
+
+    def _parse_unary(self) -> _BooleanExpressionNode:
+        if self._peek() == "NOT":
+            self.index += 1
+            return _BooleanExpressionNode("not", children=(self._parse_unary(),))
+        return self._parse_primary()
+
+    def _parse_primary(self) -> _BooleanExpressionNode:
+        token = self._peek()
+        if token is None:
+            raise CandidateConfigurationError("Boolean expression ended unexpectedly")
+        if token == "(":
+            self.index += 1
+            node = self._parse_or()
+            if self._peek() != ")":
+                raise CandidateConfigurationError("Boolean expression has unbalanced parentheses")
+            self.index += 1
+            return node
+        if token in {"AND", "OR", ")"}:
+            raise CandidateConfigurationError(f"unexpected Boolean token: {token}")
+        self.index += 1
+        return _BooleanExpressionNode("leaf", value=token)
+
+    def _peek(self) -> str | None:
+        return self.tokens[self.index] if self.index < len(self.tokens) else None
+
+    @staticmethod
+    def _combine(kind: str, children: list[_BooleanExpressionNode]) -> _BooleanExpressionNode:
+        return (
+            children[0]
+            if len(children) == 1
+            else _BooleanExpressionNode(kind, children=tuple(children))
+        )
+
+
+def _render_semantic_scholar_bulk(expression: str) -> str:
+    return _render_semantic_scholar_node(_BooleanExpressionParser(expression).parse())
+
+
+def _render_semantic_scholar_node(node: _BooleanExpressionNode) -> str:
+    if node.kind == "leaf":
+        if node.value is None:  # pragma: no cover - construction invariant
+            raise CandidateConfigurationError("Boolean leaf is empty")
+        return node.value
+    if node.kind == "not":
+        return "-" + _render_semantic_scholar_node(node.children[0])
+    operator = " + " if node.kind == "and" else " | "
+    return (
+        "("
+        + operator.join(_render_semantic_scholar_node(item) for item in node.children)
+        + ")"
+    )
 
 
 def _or(left: str, right: str) -> str:

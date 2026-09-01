@@ -1,0 +1,28 @@
+{
+  "schema_version": "1.0.0",
+  "control_set_id": "semantic-scholar-bulk-boolean-controls",
+  "control_set_version": "0.3.0-preproduction",
+  "target_source": "SemanticScholar",
+  "endpoint_mode": "bulk",
+  "purpose": "endpoint_boolean_semantics_only",
+  "production_identification_gate": "bulk_boolean_semantics",
+  "automatic_mode_switching": false,
+  "creates_production_occurrences": false,
+  "contributes_prisma_counts": false,
+  "term_rationale": "The v0.2 logical propositions are preserved using the documented Semantic Scholar bulk + and | operators; they remain endpoint diagnostics only.",
+  "probes": [
+    {"probe_id": "atomic-a", "expression": "visualization", "role": "atomic_a"},
+    {"probe_id": "atomic-b", "expression": "biology", "role": "atomic_b"},
+    {"probe_id": "a-and-b", "expression": "visualization + biology", "role": "conjunction"},
+    {"probe_id": "a-or-b", "expression": "visualization | biology", "role": "disjunction"},
+    {"probe_id": "grouped-left", "expression": "visualization + (biology | interactive)", "role": "grouping_equivalence_left"},
+    {"probe_id": "grouped-right", "expression": "(visualization + biology) | (visualization + interactive)", "role": "grouping_equivalence_right"}
+  ],
+  "assertions": [
+    {"assertion_id": "and-not-greater-than-a", "left_probe_id": "a-and-b", "relation": "less_than_or_equal", "right_probe_id": "atomic-a"},
+    {"assertion_id": "and-not-greater-than-b", "left_probe_id": "a-and-b", "relation": "less_than_or_equal", "right_probe_id": "atomic-b"},
+    {"assertion_id": "or-not-less-than-a", "left_probe_id": "a-or-b", "relation": "greater_than_or_equal", "right_probe_id": "atomic-a"},
+    {"assertion_id": "or-not-less-than-b", "left_probe_id": "a-or-b", "relation": "greater_than_or_equal", "right_probe_id": "atomic-b"},
+    {"assertion_id": "equivalent-grouping-count", "left_probe_id": "grouped-left", "relation": "equal", "right_probe_id": "grouped-right"}
+  ]
+}
