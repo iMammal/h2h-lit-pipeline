@@ -56,9 +56,8 @@ def test_package_regenerates_deterministically_from_frozen_evidence() -> None:
         assert json.dumps(payload, sort_keys=True, indent=2) + "\n" == (
             CHILD_ROOT / filename
         ).read_text(encoding="utf-8")
-    assert tracked["package_hash"] == (
-        "4b3c66ac6974b04a0015c397c95db7e4d2138cc229dc0044a63174d82e89f970"
-    )
+    assert tracked["package_hash"] == package.package_hash()
+    assert tracked["updated_at"] == "2026-09-02T03:15:09Z"
 
 
 def test_ieee_absent_credential_is_explicit_and_never_persisted() -> None:
@@ -124,7 +123,7 @@ def test_acm_spec_is_human_only_and_has_required_operator_evidence_fields() -> N
         assert export["ui_total_reconciliation_required"] is True
 
 
-@pytest.mark.parametrize("seed_id", ["EBK25", "JFR25", "FP19"])
+@pytest.mark.parametrize("seed_id", ["EBK25", "FP19"])
 def test_seed_manifest_is_prospective_unpopulated_and_infers_nothing(seed_id: str) -> None:
     seed = json.loads((CHILD_ROOT / f"seed_{seed_id.lower()}.json").read_text())
     assert seed["seed_set_id"] == seed_id
@@ -137,6 +136,18 @@ def test_seed_manifest_is_prospective_unpopulated_and_infers_nothing(seed_id: st
     assert seed["expected_entry_count"] is None
     assert seed["import_allowed"] is False
     assert seed["occurrences_created"] == 0
+    assert seed["entry_schema"]["eligibility_or_taxonomy_fields_permitted"] is False
+
+
+def test_jfr25_seed_is_populated_but_not_imported() -> None:
+    seed = json.loads((CHILD_ROOT / "seed_jfr25.json").read_text())
+    assert seed["seed_set_id"] == "JFR25"
+    assert seed["status"] == "POPULATED_VALIDATED_NOT_IMPORTED"
+    assert seed["expected_entry_count"] == 138
+    assert len(seed["entries"]) == 138
+    assert seed["import_allowed"] is True
+    assert seed["occurrences_created"] == 0
+    assert seed["reconciliation"]["fuzzy_or_title_matching_used"] is False
     assert seed["entry_schema"]["eligibility_or_taxonomy_fields_permitted"] is False
 
 
@@ -178,6 +189,10 @@ def test_phase4a_contract_is_compatible_but_not_ready_and_crossref_is_support_on
     assert phase4a["required_inputs_available"] is False
     assert phase4a["ready"] is False
     assert phase4a["wave_instantiated"] is False
+    assert package["states"]["JFR25"] == "POPULATED_VALIDATED_NOT_IMPORTED"
+    assert package["states"]["EBK25"] == "UNPOPULATED_REQUIRES_CURATOR_INPUT"
+    assert package["states"]["FP19"] == "UNPOPULATED_REQUIRES_CURATOR_INPUT"
+    assert package["overall_status"] == "BLOCKED_EXTERNAL_INPUT"
 
 
 def test_no_production_review_or_occurrence_state_is_created() -> None:

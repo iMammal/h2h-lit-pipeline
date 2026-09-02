@@ -26,11 +26,11 @@
     },
     {
       "artifact_id": "star-seed-jfr25-v1",
-      "byte_size": 1122,
-      "canonical_hash": "dc431dd8becd9ab7e2fe40b3f52ee396e9a3f1f8320f8f51c58cf231d32090a9",
+      "byte_size": 491176,
+      "canonical_hash": "90071facd9d75becb6ffa62cdbc3fb7ab570557b1b7bffc65a2dda171a637743",
       "path": "config/star_retrieval_prerequisites_v1/seed_jfr25.json",
-      "raw_sha256": "14171b45877df777061dcfa20578e7ddc192bd21f8eb2064855ee6cd5ae2cc0a",
-      "status": "UNPOPULATED_REQUIRES_CURATOR_INPUT"
+      "raw_sha256": "91838be9985a5707ef3ba8f622a531ce41761dc844c4469a61a8d010e07a730b",
+      "status": "POPULATED_VALIDATED_NOT_IMPORTED"
     },
     {
       "artifact_id": "star-seed-fp19-v1",
@@ -52,12 +52,12 @@
   "blocking_reasons": [
     "IEEE_XPLORE_API_KEY is absent and IEEE verification has not run",
     "ACM operator/access, sizing, and export evidence are not supplied",
-    "EBK25, JFR25, and FP19 require prospective curator-populated manifests",
+    "EBK25 and FP19 require prospective curator-populated manifests",
     "IEEE and ACM final-query source-window states remain unsized"
   ],
   "generated_at": "2026-09-02T00:54:40Z",
   "overall_status": "BLOCKED_EXTERNAL_INPUT",
-  "package_hash": "4b3c66ac6974b04a0015c397c95db7e4d2138cc229dc0044a63174d82e89f970",
+  "package_hash": "3699d605dce1b1c637e172d38fba6c1f0f0e760d62f73d54ea95aac518d101f3",
   "package_id": "h2h-star-retrieval-prerequisites",
   "package_version": "1.0.0",
   "phase4a_compatibility": {
@@ -99,9 +99,10 @@
   "states": {
     "EBK25": "UNPOPULATED_REQUIRES_CURATOR_INPUT",
     "FP19": "UNPOPULATED_REQUIRES_CURATOR_INPUT",
-    "JFR25": "UNPOPULATED_REQUIRES_CURATOR_INPUT",
+    "JFR25": "POPULATED_VALIDATED_NOT_IMPORTED",
     "acm": "REQUIRES_OPERATOR_INPUT",
     "ieee": "BLOCKED_CREDENTIAL",
     "source_windows": "UNRESOLVED_SUPPLEMENTAL_SOURCES"
-  }
+  },
+  "updated_at": "2026-09-02T03:15:09Z"
 }

@@ -132,7 +132,7 @@ def build_prerequisite_payloads(
 
     ieee = _build_ieee(plan.payload, generated_at, ieee_credential_present)
     acm = _build_acm(plan.payload, generated_at)
-    seeds = {seed_id: _build_seed(seed_id) for seed_id in SEED_SET_IDS}
+    seeds = {seed_id: _build_seed(seed_id, root_path) for seed_id in SEED_SET_IDS}
     windows = _build_source_windows(plan.payload, root_path)
     children = {
         "ieee_readiness.json": _finalize_artifact(ieee),
@@ -163,6 +163,14 @@ def build_prerequisite_payloads(
         "package_id": "h2h-star-retrieval-prerequisites",
         "package_version": PREREQUISITE_PACKAGE_VERSION,
         "generated_at": generated_at,
+        "updated_at": max(
+            [generated_at]
+            + [
+                str(seed.get("acquired_at"))
+                for seed in seeds.values()
+                if seed.get("acquired_at")
+            ]
+        ),
         "production_query_plan": _file_reference(
             plan_file, root_path, plan.plan_hash(), plan.payload["plan_version"]
         ),
@@ -177,7 +185,7 @@ def build_prerequisite_payloads(
         "blocking_reasons": [
             "IEEE_XPLORE_API_KEY is absent and IEEE verification has not run",
             "ACM operator/access, sizing, and export evidence are not supplied",
-            "EBK25, JFR25, and FP19 require prospective curator-populated manifests",
+            "EBK25 and FP19 require prospective curator-populated manifests",
             "IEEE and ACM final-query source-window states remain unsized",
         ],
         "phase4a_compatibility": {
@@ -414,7 +422,14 @@ def _build_acm(plan: dict[str, Any], generated_at: str) -> dict[str, Any]:
     }
 
 
-def _build_seed(seed_set_id: str) -> dict[str, Any]:
+def _build_seed(seed_set_id: str, root: Path) -> dict[str, Any]:
+    if seed_set_id == "JFR25":
+        tracked = root / "config/star_retrieval_prerequisites_v1/seed_jfr25.json"
+        if tracked.is_file():
+            current = json.loads(tracked.read_text(encoding="utf-8"))
+            if current.get("status") == "POPULATED_VALIDATED_NOT_IMPORTED":
+                current.pop("artifact_hash", None)
+                return current
     return {
         "schema_version": PREREQUISITE_SCHEMA_VERSION,
         "artifact_id": f"star-seed-{seed_set_id.lower()}-v1",
@@ -563,6 +578,43 @@ def _validate_acm(data: dict[str, Any], plan: dict[str, Any]) -> None:
 def _validate_seed(data: dict[str, Any], seed_set_id: str) -> None:
     if data["seed_set_id"] != seed_set_id:
         raise ProductionPrerequisiteError("seed-set ID changed")
+    if seed_set_id == "JFR25" and data["status"] == "POPULATED_VALIDATED_NOT_IMPORTED":
+        reconciliation = data["reconciliation"]
+        expected = {
+            "application_rows": 87,
+            "study_rows": 59,
+            "raw_category_rows": 146,
+            "shared_source_id_count": 8,
+            "shared_source_ids": ["7", "22", "29", "35", "44", "52", "53", "93"],
+            "unique_members": 138,
+            "identity_key": "companion_site_explicit_source_id",
+            "fuzzy_or_title_matching_used": False,
+            "equation": "87 + 59 - 8 = 138",
+        }
+        if reconciliation != expected:
+            raise ProductionPrerequisiteError("JFR25 membership reconciliation changed")
+        entries = data["entries"]
+        if data["expected_entry_count"] != 138 or len(entries) != 138:
+            raise ProductionPrerequisiteError("JFR25 member count changed")
+        if len({entry["source_member_id"] for entry in entries}) != 138:
+            raise ProductionPrerequisiteError("JFR25 source IDs are not unique")
+        if [entry["ordinal"] for entry in entries] != list(range(1, 139)):
+            raise ProductionPrerequisiteError("JFR25 ordinals are not contiguous")
+        if data["originating_review"]["arxiv_id"] != "2501.08500":
+            raise ProductionPrerequisiteError("JFR25 review identity changed")
+        if not data["import_allowed"] or data["occurrences_created"] != 0:
+            raise ProductionPrerequisiteError("JFR25 import/occurrence state is invalid")
+        forbidden = {
+            "star_eligibility",
+            "assistance_modes",
+            "visualization_modalities",
+            "task_annotations",
+            "synthesis_priority",
+            "corpus_membership",
+        }
+        if forbidden & _nested_keys(data):
+            raise ProductionPrerequisiteError("JFR25 contains STAR decision fields")
+        return
     if data["status"] != "UNPOPULATED_REQUIRES_CURATOR_INPUT":
         raise ProductionPrerequisiteError("seed manifest cannot be marked populated")
     if data["entries"] or data["expected_entry_count"] is not None:
@@ -707,3 +759,15 @@ def _canonical_json(payload: dict[str, Any]) -> str:
 
 def _sha256(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
+
+
+def _nested_keys(value: Any) -> set[str]:
+    if isinstance(value, dict):
+        return set(value) | {
+            key
+            for item in value.values()
+            for key in _nested_keys(item)
+        }
+    if isinstance(value, list):
+        return {key for item in value for key in _nested_keys(item)}
+    return set()
