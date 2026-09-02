@@ -1,0 +1,107 @@
+{
+  "artifacts": [
+    {
+      "artifact_id": "star-ieee-readiness-v1",
+      "byte_size": 44620,
+      "canonical_hash": "8ff04364d84ae4d6cd20a4befc8bd05be29b57484d11c8364fcff98036ccdbb0",
+      "path": "config/star_retrieval_prerequisites_v1/ieee_readiness.json",
+      "raw_sha256": "4627a6e0bf96e3441f24af54e4e1d78fb006fd1e58d95934658b22cc834b04f6",
+      "status": "BLOCKED_CREDENTIAL"
+    },
+    {
+      "artifact_id": "star-acm-operator-spec-v1",
+      "byte_size": 19013,
+      "canonical_hash": "fe061ac4d9ff157e310e94a0a38ef9624f9b9e64f2e2c3da115c742303026203",
+      "path": "config/star_retrieval_prerequisites_v1/acm_operator_spec.json",
+      "raw_sha256": "87ef62ce4786d657c6562167fdb06e12432f05dbe21f4937d377c10d46f29ef0",
+      "status": "REQUIRES_OPERATOR_INPUT"
+    },
+    {
+      "artifact_id": "star-seed-ebk25-v1",
+      "byte_size": 1122,
+      "canonical_hash": "2d1f34a5e19d1b0b2dde8cbff24cb531b537cce4d566ad8a1490ba8c4cbbccab",
+      "path": "config/star_retrieval_prerequisites_v1/seed_ebk25.json",
+      "raw_sha256": "9329ddf68ea03e6c287acfe9abf364df1daf3cb36bc123489995c14ba60c862c",
+      "status": "UNPOPULATED_REQUIRES_CURATOR_INPUT"
+    },
+    {
+      "artifact_id": "star-seed-jfr25-v1",
+      "byte_size": 1122,
+      "canonical_hash": "dc431dd8becd9ab7e2fe40b3f52ee396e9a3f1f8320f8f51c58cf231d32090a9",
+      "path": "config/star_retrieval_prerequisites_v1/seed_jfr25.json",
+      "raw_sha256": "14171b45877df777061dcfa20578e7ddc192bd21f8eb2064855ee6cd5ae2cc0a",
+      "status": "UNPOPULATED_REQUIRES_CURATOR_INPUT"
+    },
+    {
+      "artifact_id": "star-seed-fp19-v1",
+      "byte_size": 1120,
+      "canonical_hash": "013124db0cea0da83159552f2aa735a04285be09bb0e4738f230426adae3b09d",
+      "path": "config/star_retrieval_prerequisites_v1/seed_fp19.json",
+      "raw_sha256": "78e231c9fc9fda0adf52eb84abbca5585c438421203c6dbf1e18660813f436f9",
+      "status": "UNPOPULATED_REQUIRES_CURATOR_INPUT"
+    },
+    {
+      "artifact_id": "star-source-window-review-v1",
+      "byte_size": 14762,
+      "canonical_hash": "2f60cdbd3684a1f045b370c5afbf29fc6aedaadb858b0d124aa75ffbb3943811",
+      "path": "config/star_retrieval_prerequisites_v1/source_window_review.json",
+      "raw_sha256": "53f7357f8a10732fe0621af284ec64038d1a78d1bb4dc2578a0860c3eef589e3",
+      "status": "UNRESOLVED_SUPPLEMENTAL_SOURCES"
+    }
+  ],
+  "blocking_reasons": [
+    "IEEE_XPLORE_API_KEY is absent and IEEE verification has not run",
+    "ACM operator/access, sizing, and export evidence are not supplied",
+    "EBK25, JFR25, and FP19 require prospective curator-populated manifests",
+    "IEEE and ACM final-query source-window states remain unsized"
+  ],
+  "generated_at": "2026-09-02T00:54:40Z",
+  "overall_status": "BLOCKED_EXTERNAL_INPUT",
+  "package_hash": "4b3c66ac6974b04a0015c397c95db7e4d2138cc229dc0044a63174d82e89f970",
+  "package_id": "h2h-star-retrieval-prerequisites",
+  "package_version": "1.0.0",
+  "phase4a_compatibility": {
+    "crossref_identification_allowed": false,
+    "planning_contract_compatible": true,
+    "production_plan_accepted": true,
+    "readiness_issues": [
+      "IEEE_BLOCKED_CREDENTIAL",
+      "ACM_OPERATOR_EVIDENCE_MISSING",
+      "PRIOR_SURVEY_SEED_MANIFESTS_UNPOPULATED",
+      "SUPPLEMENTAL_SOURCE_WINDOWS_UNKNOWN"
+    ],
+    "ready": false,
+    "required_identification_sources": [
+      "PubMed",
+      "EuropePMC",
+      "SemanticScholar",
+      "arXiv",
+      "IEEEXplore",
+      "ACMDigitalLibrary",
+      "PriorSurveySeed"
+    ],
+    "required_inputs_available": false,
+    "required_support_sources": [
+      "CrossRef"
+    ],
+    "wave_instantiated": false,
+    "wave_schema_version": "1.1.0"
+  },
+  "production_operations_created": [],
+  "production_query_plan": {
+    "byte_size": 205457,
+    "canonical_hash": "856ef04518bc26941275cf6b60a793814fe18ff6b0b80dd24571252a7161e091",
+    "path": "config/star_production_query_plan_v1.json",
+    "raw_sha256": "b887d638e42f4909c1c8461dde733d758e5176d528ddccee4370211e14ed7451",
+    "version": "1.0.0"
+  },
+  "schema_version": "1.0.0",
+  "states": {
+    "EBK25": "UNPOPULATED_REQUIRES_CURATOR_INPUT",
+    "FP19": "UNPOPULATED_REQUIRES_CURATOR_INPUT",
+    "JFR25": "UNPOPULATED_REQUIRES_CURATOR_INPUT",
+    "acm": "REQUIRES_OPERATOR_INPUT",
+    "ieee": "BLOCKED_CREDENTIAL",
+    "source_windows": "UNRESOLVED_SUPPLEMENTAL_SOURCES"
+  }
+}

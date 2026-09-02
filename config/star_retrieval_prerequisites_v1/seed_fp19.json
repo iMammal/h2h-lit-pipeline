@@ -1,0 +1,45 @@
+{
+  "artifact_hash": "013124db0cea0da83159552f2aa735a04285be09bb0e4738f230426adae3b09d",
+  "artifact_id": "star-seed-fp19-v1",
+  "artifact_version": "1.0.0",
+  "completeness_state": "UNPOPULATED",
+  "curator": {
+    "operator_id": null,
+    "required": true
+  },
+  "entries": [],
+  "entry_schema": {
+    "eligibility_or_taxonomy_fields_permitted": false,
+    "optional": [
+      "doi",
+      "title",
+      "source_page",
+      "source_table",
+      "source_reference_locator"
+    ],
+    "required": [
+      "entry_id",
+      "ordinal",
+      "raw_citation"
+    ]
+  },
+  "expected_entry_count": null,
+  "extraction_method": null,
+  "import_allowed": false,
+  "occurrences_created": 0,
+  "originating_review": {
+    "citation": null,
+    "doi": null,
+    "repository_recovery_state": "UNRECOVERABLE_FROM_EXPLICIT_REPOSITORY_EVIDENCE"
+  },
+  "schema_version": "1.0.0",
+  "seed_set_id": "FP19",
+  "seed_set_version": "1.0.0-prospective",
+  "source_artifact": {
+    "relative_path": null,
+    "required": true,
+    "sha256": null
+  },
+  "source_role": "prior_survey_seed",
+  "status": "UNPOPULATED_REQUIRES_CURATOR_INPUT"
+}
