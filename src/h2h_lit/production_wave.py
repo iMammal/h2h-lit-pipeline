@@ -39,6 +39,17 @@ REQUIRED_PRODUCTION_SOURCES = (
     "PriorSurveySeed",
 )
 
+REQUIRED_IDENTIFICATION_SOURCES_V2 = (
+    "PubMed",
+    "EuropePMC",
+    "SemanticScholar",
+    "arXiv",
+    "IEEEXplore",
+    "ACMDigitalLibrary",
+    "PriorSurveySeed",
+)
+REQUIRED_SUPPORT_SOURCES_V2 = ("CrossRef",)
+
 
 class ProductionWaveStatus(str, Enum):
     PLANNED = "planned"
@@ -159,9 +170,13 @@ class ProductionRetrievalWave:
     status: ProductionWaveStatus
     retrieval_cutoff_date: str | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
+    support_sources: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
-        return _serialize(self)
+        payload = _serialize(self)
+        if self.schema_version == "1.0.0":
+            payload.pop("support_sources", None)
+        return payload
 
     def to_json(self) -> str:
         return json.dumps(
@@ -186,6 +201,7 @@ class ProductionRetrievalWave:
             status=ProductionWaveStatus(data["status"]),
             retrieval_cutoff_date=data.get("retrieval_cutoff_date"),
             metadata=dict(data.get("metadata", {})),
+            support_sources=list(data.get("support_sources", [])),
         )
 
     @classmethod
@@ -318,6 +334,8 @@ def compute_query_plan_hash(wave: ProductionRetrievalWave) -> str:
         "required_sources": wave.required_sources,
         "query_families": _serialize(wave.query_families),
     }
+    if wave.schema_version == "1.1.0":
+        payload["support_sources"] = wave.support_sources
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
@@ -408,13 +426,32 @@ def _validate_wave_identity(
     ):
         if not value.strip():
             issues.append(PreflightIssue("MISSING_WAVE_IDENTITY", f"{name} is required"))
-    if wave.schema_version != "1.0.0":
-        issues.append(PreflightIssue("UNSUPPORTED_SCHEMA", "wave schema_version must be 1.0.0"))
-    if wave.required_sources != list(REQUIRED_PRODUCTION_SOURCES):
+    if wave.schema_version not in {"1.0.0", "1.1.0"}:
+        issues.append(
+            PreflightIssue(
+                "UNSUPPORTED_SCHEMA", "wave schema_version must be 1.0.0 or 1.1.0"
+            )
+        )
+    expected_sources = (
+        REQUIRED_IDENTIFICATION_SOURCES_V2
+        if wave.schema_version == "1.1.0"
+        else REQUIRED_PRODUCTION_SOURCES
+    )
+    if wave.required_sources != list(expected_sources):
         issues.append(
             PreflightIssue(
                 "REQUIRED_SOURCE_LIST_MISMATCH",
                 "required_sources must contain the exact ordered production source inventory",
+            )
+        )
+    expected_support = (
+        list(REQUIRED_SUPPORT_SOURCES_V2) if wave.schema_version == "1.1.0" else []
+    )
+    if wave.support_sources != expected_support:
+        issues.append(
+            PreflightIssue(
+                "SUPPORT_SOURCE_LIST_MISMATCH",
+                "support_sources must match the schema-specific frozen support inventory",
             )
         )
     computed = compute_query_plan_hash(wave)
@@ -440,7 +477,7 @@ def _validate_query_families(
             )
         )
     covered = {family.source_database for family in wave.query_families}
-    for source in REQUIRED_PRODUCTION_SOURCES:
+    for source in wave.required_sources:
         if source not in covered:
             issues.append(
                 PreflightIssue(
@@ -448,6 +485,15 @@ def _validate_query_families(
                     f"required source {source} has no query family",
                 )
             )
+    if wave.schema_version == "1.1.0" and any(
+        family.source_database == "CrossRef" for family in wave.query_families
+    ):
+        issues.append(
+            PreflightIssue(
+                "CROSSREF_IDENTIFICATION_PROHIBITED",
+                "Crossref is support-only and cannot have a production identification query",
+            )
+        )
     for family in wave.query_families:
         _validate_query_family(family, issues)
 

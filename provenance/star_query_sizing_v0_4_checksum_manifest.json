@@ -1,0 +1,102 @@
+{
+  "schema_version": "1.1.0",
+  "manifest_id": "star-query-sizing-v0-4-checksums",
+  "experiment_status": "completed_immutable_historical_evidence_after_bounded_resume",
+  "run_id": "star-query-sizing-v0-4-run-001",
+  "original_executor_git_commit": "bd014c9f76356468644554dbe2acfc515970935b",
+  "bounded_resume_git_commit": "bd014c9f76356468644554dbe2acfc515970935b",
+  "git_commit_recovery": {
+    "status": "recovered_same_commit",
+    "basis": "The original run and bounded resume occurred after the tracked v0.4 implementation commit with no intervening tracked executor change."
+  },
+  "candidate_version": "0.4.0-preproduction-bounded",
+  "candidate_canonical_hash": "324903e8c62dbae656a429754f3d5695b174f2a36a9dc4de74aecd86e83a8600",
+  "semantic_control_version": "0.3.0-preproduction",
+  "semantic_control_canonical_hash": "18570dba1111bbb0367f28af602c6a02d9bf6b4c34e9e1083a76c1fb3b8e5e64",
+  "sentinel_version": "0.1.0-pre-sizing",
+  "sentinel_canonical_hash": "1acc34ae05f0637bdfb5d3feebe2044197164ae4b6d6ffd0e043daa63bfd46a3",
+  "execution_timestamps": {
+    "started_at": "2026-09-01T22:06:07.970633Z",
+    "initial_completed_at": "2026-09-01T22:07:10.373734Z",
+    "resume_started_at": "2026-09-01T22:50:22.467076Z",
+    "final_completed_at": "2026-09-01T22:50:36.430160Z"
+  },
+  "prior_checkpoint_provenance": {
+    "status": "overwritten_by_bounded_resume_not_reconstructed",
+    "run_raw_sha256": "f63b5d9c54bd12339823c4957766a51ed2d58ededd807ff7025dbbe8ad898334",
+    "run_canonical_hash": "d875df2fab692fef1d89883267699dd486c1eaa9c8011d58c9bdbfe0d1387637",
+    "report_raw_sha256": "62b66d9af1832acacd17007b77eee8ed1750c13f0d0b1cfcd2cbef0ebe4092b2",
+    "report_canonical_hash": "358642e8e77b357c828ce2c024756d3d1c02e46a3b1866504d5ad931311668f1",
+    "limitation": "The pre-resume bytes were overwritten by the authorized checkpoint resume; these previously recorded hashes are provenance only and were not reconstructed."
+  },
+  "semantic_scholar_gate": {
+    "evaluation_id": "semantic-gate:55cddb1df884cd7c8944c52a",
+    "state": "passed"
+  },
+  "containment_evaluation": {
+    "evaluation_id": "containment-evaluation:cacd36dc2102128ac25da5cb",
+    "state": "passed",
+    "selection_status": "containment_supported",
+    "count_containment": {
+      "state": "passed",
+      "qf02_c_count": 418,
+      "qf02_d_count": 3686
+    },
+    "sentinel_containment": [
+      {"sentinel_id": "sentinel:icave-2017", "qf02_c": "missed", "qf02_d": "missed", "state": "passed"},
+      {"sentinel_id": "sentinel:wang-et-al-2025", "qf02_c": "missed", "qf02_d": "missed", "state": "passed"},
+      {"sentinel_id": "sentinel:phenoflow-2025", "qf02_c": "matched", "qf02_d": "matched", "state": "passed"}
+    ]
+  },
+  "ignored_output_artifacts": true,
+  "immutable_artifact_storage": {
+    "status": "unresolved",
+    "locator": null,
+    "repository_policy": "completed run artifacts are under the ignored outputs directory",
+    "limitation": "Checksums detect mutation but do not preserve ignored artifact bytes."
+  },
+  "artifacts": [
+    {
+      "role": "candidate_config",
+      "path": "config/star_query_candidates_v0_4.json",
+      "byte_size": 3373,
+      "raw_sha256": "88bd3ba4c5ed3140d916b4ffa05f12a32df3d3ff1561d659bed291a4b56c0d46",
+      "canonical_hash": "324903e8c62dbae656a429754f3d5695b174f2a36a9dc4de74aecd86e83a8600"
+    },
+    {
+      "role": "semantic_control_config",
+      "path": "config/star_query_semantic_controls_v0_3.json",
+      "byte_size": 1956,
+      "raw_sha256": "dc48759bb6ca1cebc8af72cf162f2db2098b86daf555f5db76b27194fc4a34c7",
+      "canonical_hash": "18570dba1111bbb0367f28af602c6a02d9bf6b4c34e9e1083a76c1fb3b8e5e64"
+    },
+    {
+      "role": "sentinel_config",
+      "path": "config/star_query_sentinels_v0_1.json",
+      "byte_size": 4526,
+      "raw_sha256": "ed05a667edf282588548a63d0e637efc2849d1980e2ecb7ff4cef80056ecaecf",
+      "canonical_hash": "1acc34ae05f0637bdfb5d3feebe2044197164ae4b6d6ffd0e043daa63bfd46a3"
+    },
+    {
+      "role": "dry_run_plan",
+      "path": "outputs/query_sizing/star-query-sizing-v0-4-run-001/dry_run.json",
+      "byte_size": 262558,
+      "raw_sha256": "5e6a322aa21f368b131c7dde09b5d3b4a624c8ca647060d66cb8007c5212026b",
+      "canonical_hash": "99adad194e98a5d3eb387dac41e27e9e716e1d15f5ef5723b36e14e4b1572d8a"
+    },
+    {
+      "role": "final_completed_run",
+      "path": "outputs/query_sizing/star-query-sizing-v0-4-run-001/query_sizing_run.json",
+      "byte_size": 228777,
+      "raw_sha256": "115fa44ff0b7ff765d301dd1022ba093000c76ebabd36b4a1df99429dcdf3f73",
+      "canonical_hash": "69abf1cc8c6edeb7aac75f1fa3c53ca16fd77fefe2fd07033e1d43c4b34ad681"
+    },
+    {
+      "role": "final_completed_report",
+      "path": "outputs/query_sizing/star-query-sizing-v0-4-run-001/query_sizing_report.json",
+      "byte_size": 5538,
+      "raw_sha256": "6481859af1e8931b8a8fde4f88f390774a832571a1c91bed415b28dbe0ae86d1",
+      "canonical_hash": "ff7d67caae04e2cef8fc0ca2fb7845f4887208ba75344640a4d97011a5874f02"
+    }
+  ]
+}

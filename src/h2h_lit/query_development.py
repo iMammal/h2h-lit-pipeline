@@ -398,6 +398,49 @@ class CandidateSet:
                     )
         return output
 
+    def render_selected(
+        self,
+        selections: dict[str, str],
+        sources: list[str],
+    ) -> list[CandidateQuery]:
+        """Render an explicit family/variant freeze without changing candidate state."""
+
+        self.validate()
+        if set(selections) != set(EXPECTED_FAMILIES):
+            raise CandidateConfigurationError(
+                "production selection must contain exactly the approved five families"
+            )
+        expansions = _expansions(self.payload)
+        output: list[CandidateQuery] = []
+        for family_id in EXPECTED_FAMILIES:
+            family = self.payload["families"][family_id]
+            variant_id = selections[family_id]
+            if variant_id not in family["variants"]:
+                raise CandidateConfigurationError(
+                    f"unknown production variant {family_id}:{variant_id}"
+                )
+            expression = _expand_template(family["variants"][variant_id], expansions)
+            for source in sources:
+                source_spec = self.payload["sources"].get(source)
+                if source_spec is None:
+                    raise CandidateConfigurationError(f"unknown production source: {source}")
+                if family_id not in source_spec.get("families", []):
+                    raise CandidateConfigurationError(
+                        f"source {source} does not support production family {family_id}"
+                    )
+                output.append(
+                    _render_source_query(
+                        self,
+                        source,
+                        source_spec,
+                        family_id,
+                        family,
+                        variant_id,
+                        expression,
+                    )
+                )
+        return output
+
 
 @dataclass(frozen=True, slots=True)
 class SizingAttempt:
