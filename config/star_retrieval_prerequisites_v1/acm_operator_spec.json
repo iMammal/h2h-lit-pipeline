@@ -1,34 +1,36 @@
 {
-  "artifact_hash": "fe061ac4d9ff157e310e94a0a38ef9624f9b9e64f2e2c3da115c742303026203",
+  "artifact_hash": "30fa33ed4e9bd9af08b12c48362b3b6b76132aeda1332a29d93e157d60470a00",
   "artifact_id": "star-acm-operator-spec-v1",
   "artifact_version": "1.0.0",
   "created_at": "2026-09-02T00:54:40Z",
+  "execution_model": "FIELD_DECOMPOSED_STABLE_IDENTITY_UNION",
+  "final_reconciliation": {
+    "byte_size": 91897,
+    "manifest_hash": "c159e0b2b6dc7991d0eab55ed5b395817d524c0b8245011db3d083870f3f4e12",
+    "manifest_id": "star-acm-field-execution-2026-09-03-final-reconciliation",
+    "manifest_version": "1.0.0",
+    "path": "provenance/star_acm_field_execution_2026-09-03_final_reconciliation_manifest.json",
+    "raw_sha256": "1770b9ffab28d951e06e0840a3e60aa85d7b2c7c7d1103c921e61784755daf25",
+    "status": "RETRIEVAL_EVIDENCE_COMPLETE_NOT_IMPORTED"
+  },
   "operator": {
     "institutional_access_status": "UNRESOLVED",
     "institutional_access_tier": null,
+    "metadata_state": "LIMITED_NONBLOCKING_FOR_RETRIEVED_SET",
     "operator_id": null,
-    "operator_id_required": true
+    "operator_id_required": true,
+    "retrieval_completeness_affected": false
   },
   "queries": [
     {
       "citation_export_evidence": {
-        "chunk_schema": {
-          "relative_traversal_safe_paths_only": true,
-          "required": [
-            "chunk_id",
-            "first_record",
-            "last_record",
-            "artifact_relative_path",
-            "artifact_sha256",
-            "exported_at_utc"
-          ]
-        },
-        "chunks": [],
-        "contiguous_range_coverage_required": true,
+        "evidence_manifest_hash": "c159e0b2b6dc7991d0eab55ed5b395817d524c0b8245011db3d083870f3f4e12",
+        "evidence_path": "provenance/star_acm_field_execution_2026-09-03_final_reconciliation_manifest.json",
         "export_format": "BibTeX",
-        "status": "NOT_EXPORTED",
-        "ui_reported_total": null,
-        "ui_total_reconciliation_required": true
+        "field_union_digest_sha256": "2dea57c9fbacddbb93204ef455a2e59368cbe5794bbb97bb4e4e3569c14ca433",
+        "field_union_unique_count": 1949,
+        "production_import_performed": false,
+        "status": "FIELD_CHILD_EXPORTS_RECONCILED_NOT_IMPORTED"
       },
       "family_id": "STAR-QF01-RELATIONAL-VIS",
       "fields": [
@@ -42,34 +44,27 @@
       "query_sha256": "34e0d8334d0cfde34108bd7e38def34665c3a0ada70d74697b7864ea15880cff",
       "scope": "ACM Publications",
       "sizing_search_evidence": {
-        "query_url": null,
-        "screenshot_relative_path": null,
-        "screenshot_sha256": null,
-        "search_timestamp_utc": null,
-        "status": "NOT_PERFORMED",
-        "ui_reported_count": null
+        "evidence_manifest_hash": "c159e0b2b6dc7991d0eab55ed5b395817d524c0b8245011db3d083870f3f4e12",
+        "evidence_path": "provenance/star_acm_field_execution_2026-09-03_final_reconciliation_manifest.json",
+        "field_counts": {
+          "abstract": 1931,
+          "keyword": 28,
+          "title": 8
+        },
+        "later_verification_is_completeness_gate": false,
+        "status": "FIELD_CHILD_EXECUTION_OBSERVATIONS_PRESERVED"
       },
       "sort": "publicationDate asc"
     },
     {
       "citation_export_evidence": {
-        "chunk_schema": {
-          "relative_traversal_safe_paths_only": true,
-          "required": [
-            "chunk_id",
-            "first_record",
-            "last_record",
-            "artifact_relative_path",
-            "artifact_sha256",
-            "exported_at_utc"
-          ]
-        },
-        "chunks": [],
-        "contiguous_range_coverage_required": true,
+        "evidence_manifest_hash": "c159e0b2b6dc7991d0eab55ed5b395817d524c0b8245011db3d083870f3f4e12",
+        "evidence_path": "provenance/star_acm_field_execution_2026-09-03_final_reconciliation_manifest.json",
         "export_format": "BibTeX",
-        "status": "NOT_EXPORTED",
-        "ui_reported_total": null,
-        "ui_total_reconciliation_required": true
+        "field_union_digest_sha256": "f77b4c5844f016192c3289572164595631bf98b1f9ae6e1ac17366bc03555f4a",
+        "field_union_unique_count": 1689,
+        "production_import_performed": false,
+        "status": "FIELD_CHILD_EXPORTS_RECONCILED_NOT_IMPORTED"
       },
       "family_id": "STAR-QF02-ASSISTED-VIS",
       "fields": [
@@ -83,34 +78,27 @@
       "query_sha256": "6024c805ff3cd10c4323c30e8f358614affc25c238de5257eab9466545954023",
       "scope": "ACM Publications",
       "sizing_search_evidence": {
-        "query_url": null,
-        "screenshot_relative_path": null,
-        "screenshot_sha256": null,
-        "search_timestamp_utc": null,
-        "status": "NOT_PERFORMED",
-        "ui_reported_count": null
+        "evidence_manifest_hash": "c159e0b2b6dc7991d0eab55ed5b395817d524c0b8245011db3d083870f3f4e12",
+        "evidence_path": "provenance/star_acm_field_execution_2026-09-03_final_reconciliation_manifest.json",
+        "field_counts": {
+          "abstract": 1673,
+          "keyword": 16,
+          "title": 18
+        },
+        "later_verification_is_completeness_gate": false,
+        "status": "FIELD_CHILD_EXECUTION_OBSERVATIONS_PRESERVED"
       },
       "sort": "publicationDate asc"
     },
     {
       "citation_export_evidence": {
-        "chunk_schema": {
-          "relative_traversal_safe_paths_only": true,
-          "required": [
-            "chunk_id",
-            "first_record",
-            "last_record",
-            "artifact_relative_path",
-            "artifact_sha256",
-            "exported_at_utc"
-          ]
-        },
-        "chunks": [],
-        "contiguous_range_coverage_required": true,
+        "evidence_manifest_hash": "c159e0b2b6dc7991d0eab55ed5b395817d524c0b8245011db3d083870f3f4e12",
+        "evidence_path": "provenance/star_acm_field_execution_2026-09-03_final_reconciliation_manifest.json",
         "export_format": "BibTeX",
-        "status": "NOT_EXPORTED",
-        "ui_reported_total": null,
-        "ui_total_reconciliation_required": true
+        "field_union_digest_sha256": "21885c632ce0374e582584647d59e0e1e953f46244638317b0026b77c221c6c1",
+        "field_union_unique_count": 1995,
+        "production_import_performed": false,
+        "status": "FIELD_CHILD_EXPORTS_RECONCILED_NOT_IMPORTED"
       },
       "family_id": "STAR-QF03-INTERACTIVE-SYSTEMS",
       "fields": [
@@ -124,34 +112,27 @@
       "query_sha256": "f4a0f2156bf638908544c8015c4e77f2c4dabd09bf109d99f3fdcdb0d7986203",
       "scope": "ACM Publications",
       "sizing_search_evidence": {
-        "query_url": null,
-        "screenshot_relative_path": null,
-        "screenshot_sha256": null,
-        "search_timestamp_utc": null,
-        "status": "NOT_PERFORMED",
-        "ui_reported_count": null
+        "evidence_manifest_hash": "c159e0b2b6dc7991d0eab55ed5b395817d524c0b8245011db3d083870f3f4e12",
+        "evidence_path": "provenance/star_acm_field_execution_2026-09-03_final_reconciliation_manifest.json",
+        "field_counts": {
+          "abstract": 1983,
+          "keyword": 12,
+          "title": 4
+        },
+        "later_verification_is_completeness_gate": false,
+        "status": "FIELD_CHILD_EXECUTION_OBSERVATIONS_PRESERVED"
       },
       "sort": "publicationDate asc"
     },
     {
       "citation_export_evidence": {
-        "chunk_schema": {
-          "relative_traversal_safe_paths_only": true,
-          "required": [
-            "chunk_id",
-            "first_record",
-            "last_record",
-            "artifact_relative_path",
-            "artifact_sha256",
-            "exported_at_utc"
-          ]
-        },
-        "chunks": [],
-        "contiguous_range_coverage_required": true,
+        "evidence_manifest_hash": "c159e0b2b6dc7991d0eab55ed5b395817d524c0b8245011db3d083870f3f4e12",
+        "evidence_path": "provenance/star_acm_field_execution_2026-09-03_final_reconciliation_manifest.json",
         "export_format": "BibTeX",
-        "status": "NOT_EXPORTED",
-        "ui_reported_total": null,
-        "ui_total_reconciliation_required": true
+        "field_union_digest_sha256": "870734a26ccd16de1a1592e541ea774b554ddeb418fb7706b66c17afbdef68bc",
+        "field_union_unique_count": 2456,
+        "production_import_performed": false,
+        "status": "FIELD_CHILD_EXPORTS_RECONCILED_NOT_IMPORTED"
       },
       "family_id": "STAR-QF04-NONDESKTOP-ENV",
       "fields": [
@@ -165,34 +146,27 @@
       "query_sha256": "20648b4a5ffa36eb0c46c0b44d38705663ec65d38b263b1153bcc49c9ce1e5ef",
       "scope": "ACM Publications",
       "sizing_search_evidence": {
-        "query_url": null,
-        "screenshot_relative_path": null,
-        "screenshot_sha256": null,
-        "search_timestamp_utc": null,
-        "status": "NOT_PERFORMED",
-        "ui_reported_count": null
+        "evidence_manifest_hash": "c159e0b2b6dc7991d0eab55ed5b395817d524c0b8245011db3d083870f3f4e12",
+        "evidence_path": "provenance/star_acm_field_execution_2026-09-03_final_reconciliation_manifest.json",
+        "field_counts": {
+          "abstract": 2432,
+          "keyword": 34,
+          "title": 23
+        },
+        "later_verification_is_completeness_gate": false,
+        "status": "FIELD_CHILD_EXECUTION_OBSERVATIONS_PRESERVED"
       },
       "sort": "publicationDate asc"
     },
     {
       "citation_export_evidence": {
-        "chunk_schema": {
-          "relative_traversal_safe_paths_only": true,
-          "required": [
-            "chunk_id",
-            "first_record",
-            "last_record",
-            "artifact_relative_path",
-            "artifact_sha256",
-            "exported_at_utc"
-          ]
-        },
-        "chunks": [],
-        "contiguous_range_coverage_required": true,
+        "evidence_manifest_hash": "c159e0b2b6dc7991d0eab55ed5b395817d524c0b8245011db3d083870f3f4e12",
+        "evidence_path": "provenance/star_acm_field_execution_2026-09-03_final_reconciliation_manifest.json",
         "export_format": "BibTeX",
-        "status": "NOT_EXPORTED",
-        "ui_reported_total": null,
-        "ui_total_reconciliation_required": true
+        "field_union_digest_sha256": "6f3c70f13969ef00093cb5b35304509cd7a25ae6d9decb36775e93eca07248fd",
+        "field_union_unique_count": 3477,
+        "production_import_performed": false,
+        "status": "FIELD_CHILD_EXPORTS_RECONCILED_NOT_IMPORTED"
       },
       "family_id": "STAR-QF05-CONVERSATIONAL",
       "fields": [
@@ -206,25 +180,29 @@
       "query_sha256": "ec46a190e59e13fedbfbac57493a26a4958b5fa4f7cab6d36aac3bf5f920b6cd",
       "scope": "ACM Publications",
       "sizing_search_evidence": {
-        "query_url": null,
-        "screenshot_relative_path": null,
-        "screenshot_sha256": null,
-        "search_timestamp_utc": null,
-        "status": "NOT_PERFORMED",
-        "ui_reported_count": null
+        "evidence_manifest_hash": "c159e0b2b6dc7991d0eab55ed5b395817d524c0b8245011db3d083870f3f4e12",
+        "evidence_path": "provenance/star_acm_field_execution_2026-09-03_final_reconciliation_manifest.json",
+        "field_counts": {
+          "abstract": 3454,
+          "keyword": 24,
+          "title": 19
+        },
+        "later_verification_is_completeness_gate": false,
+        "status": "FIELD_CHILD_EXECUTION_OBSERVATIONS_PRESERVED"
       },
       "sort": "publicationDate asc"
     }
   ],
   "readiness_requirements": [
-    "operator identity recorded",
-    "institutional access status recorded",
-    "each query has UTC sizing/search evidence and UI count",
-    "each export has relative artifact paths and SHA-256 hashes",
-    "exported contiguous ranges reconcile exactly to the UI total"
+    "frozen field-query syntax validated",
+    "selected raw BibTeX artifacts bound by byte size and SHA-256",
+    "every physical BibTeX header explicitly accounted",
+    "year-partition and field unions reconciled by stable identity",
+    "later provider observations retained without temporal-invariance gating",
+    "affirmative operator/export failures superseded without deleting history"
   ],
   "schema_version": "1.0.0",
-  "status": "REQUIRES_OPERATOR_INPUT",
+  "status": "RETRIEVAL_EVIDENCE_COMPLETE_NOT_IMPORTED",
   "workflow": {
     "browser_automation": false,
     "export_format": "BibTeX",

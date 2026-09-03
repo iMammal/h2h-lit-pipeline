@@ -10,11 +10,11 @@
     },
     {
       "artifact_id": "star-acm-operator-spec-v1",
-      "byte_size": 19013,
-      "canonical_hash": "fe061ac4d9ff157e310e94a0a38ef9624f9b9e64f2e2c3da115c742303026203",
+      "byte_size": 20860,
+      "canonical_hash": "30fa33ed4e9bd9af08b12c48362b3b6b76132aeda1332a29d93e157d60470a00",
       "path": "config/star_retrieval_prerequisites_v1/acm_operator_spec.json",
-      "raw_sha256": "87ef62ce4786d657c6562167fdb06e12432f05dbe21f4937d377c10d46f29ef0",
-      "status": "REQUIRES_OPERATOR_INPUT"
+      "raw_sha256": "129442081510dfa5a70e7e798d50443d4445245c8c816175765930f20456b220",
+      "status": "RETRIEVAL_EVIDENCE_COMPLETE_NOT_IMPORTED"
     },
     {
       "artifact_id": "star-seed-ebk25-v1",
@@ -42,22 +42,21 @@
     },
     {
       "artifact_id": "star-source-window-review-v1",
-      "byte_size": 14762,
-      "canonical_hash": "2f60cdbd3684a1f045b370c5afbf29fc6aedaadb858b0d124aa75ffbb3943811",
+      "byte_size": 15415,
+      "canonical_hash": "91ee2ec7d772aff135d049e83ade3042b1155dd4c834ad7fd3370b0c50b71e85",
       "path": "config/star_retrieval_prerequisites_v1/source_window_review.json",
-      "raw_sha256": "53f7357f8a10732fe0621af284ec64038d1a78d1bb4dc2578a0860c3eef589e3",
+      "raw_sha256": "e85be96cb39bd996252c293f377371ac4806f4433266c8c2364aa26bdffe1718",
       "status": "UNRESOLVED_SUPPLEMENTAL_SOURCES"
     }
   ],
   "blocking_reasons": [
     "IEEE_XPLORE_API_KEY is absent and IEEE verification has not run",
-    "ACM operator/access, sizing, and export evidence are not supplied",
     "EBK25 and FP19 require prospective curator-populated manifests",
-    "IEEE and ACM final-query source-window states remain unsized"
+    "IEEE final-query source-window states remain unsized"
   ],
   "generated_at": "2026-09-02T00:54:40Z",
   "overall_status": "BLOCKED_EXTERNAL_INPUT",
-  "package_hash": "3699d605dce1b1c637e172d38fba6c1f0f0e760d62f73d54ea95aac518d101f3",
+  "package_hash": "976140fcaa87818dd0b53dbf8fde39a4b4b0992448b13a29a8e4850002e3335d",
   "package_id": "h2h-star-retrieval-prerequisites",
   "package_version": "1.0.0",
   "phase4a_compatibility": {
@@ -66,7 +65,6 @@
     "production_plan_accepted": true,
     "readiness_issues": [
       "IEEE_BLOCKED_CREDENTIAL",
-      "ACM_OPERATOR_EVIDENCE_MISSING",
       "PRIOR_SURVEY_SEED_MANIFESTS_UNPOPULATED",
       "SUPPLEMENTAL_SOURCE_WINDOWS_UNKNOWN"
     ],
@@ -100,9 +98,9 @@
     "EBK25": "UNPOPULATED_REQUIRES_CURATOR_INPUT",
     "FP19": "UNPOPULATED_REQUIRES_CURATOR_INPUT",
     "JFR25": "POPULATED_VALIDATED_NOT_IMPORTED",
-    "acm": "REQUIRES_OPERATOR_INPUT",
+    "acm": "RETRIEVAL_EVIDENCE_COMPLETE_NOT_IMPORTED",
     "ieee": "BLOCKED_CREDENTIAL",
     "source_windows": "UNRESOLVED_SUPPLEMENTAL_SOURCES"
   },
-  "updated_at": "2026-09-02T03:15:09Z"
+  "updated_at": "2026-09-03T18:29:49Z"
 }

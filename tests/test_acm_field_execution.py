@@ -9,6 +9,7 @@ import pytest
 from h2h_lit.acm_field_execution import (
     ACM_EXPORT_FILTER,
     ACM_EXPORT_RECORD_CEILING,
+    ACM_RETRIEVAL_EVIDENCE_COMPLETE,
     EXECUTION_METHOD_COMMIT,
     OPERATOR_EVIDENCE_LIMITATIONS,
     QUERY_SYNTAX_COMPLETE,
@@ -23,12 +24,15 @@ from h2h_lit.acm_field_execution import (
     AcmYearPartitionEvidence,
     build_acm_export_partition_contract,
     build_acm_field_execution_contract,
+    build_acm_final_reconciliation_manifest,
     build_acm_parent_union,
     build_acm_query_syntax_manifest,
     contract_json,
     export_partition_contract_json,
+    final_reconciliation_manifest_json,
     load_acm_export_partition_contract,
     load_acm_field_execution_contract,
+    load_acm_final_reconciliation_manifest,
     load_acm_query_syntax_manifest,
     normalize_acm_search_timestamp,
     parse_acm_query_syntax_csv,
@@ -48,6 +52,10 @@ CALIBRATION_MANIFEST_PATH = (
 QUERY_SYNTAX_ROOT = ROOT / "artifacts/acm_field_execution/2026-09-02/query_syntax"
 QUERY_SYNTAX_MANIFEST_PATH = (
     ROOT / "provenance/star_acm_field_execution_2026-09-02_query_syntax_manifest.json"
+)
+FINAL_RECONCILIATION_MANIFEST_PATH = (
+    ROOT
+    / "provenance/star_acm_field_execution_2026-09-03_final_reconciliation_manifest.json"
 )
 PLAN_RAW_SHA256 = "b887d638e42f4909c1c8461dde733d758e5176d528ddccee4370211e14ed7451"
 
@@ -674,3 +682,77 @@ def test_qf01_abstract_bulk_export_is_calibration_only() -> None:
     assert len(contract_raw) == partition_contract["byte_size"]
     assert hashlib.sha256(contract_raw).hexdigest() == partition_contract["raw_sha256"]
     assert all(value is False for value in manifest["production_side_effects"].values())
+
+
+def test_final_acm_reconciliation_is_deterministic_and_binds_all_raw_evidence() -> None:
+    tracked = load_acm_final_reconciliation_manifest(
+        FINAL_RECONCILIATION_MANIFEST_PATH, root=ROOT, verify_artifacts=True
+    )
+    rebuilt = build_acm_final_reconciliation_manifest(root=ROOT)
+    assert rebuilt == tracked
+    assert final_reconciliation_manifest_json(rebuilt) == (
+        FINAL_RECONCILIATION_MANIFEST_PATH.read_text(encoding="utf-8")
+    )
+    assert tracked["status"] == ACM_RETRIEVAL_EVIDENCE_COMPLETE
+    assert len(tracked["families"]) == 5
+    assert sum(len(family["children"]) for family in tracked["families"]) == 15
+    assert len(tracked["subsequent_verification_screenshots"]) == 21
+    assert tracked["limitations"]["ambiguous_screenshot_family_count"] == 4
+    assert all(value is False for value in tracked["production_side_effects"].values())
+
+
+def test_later_provider_counts_are_observations_not_temporal_invariance_gates() -> None:
+    manifest = load_acm_final_reconciliation_manifest(
+        FINAL_RECONCILIATION_MANIFEST_PATH, root=ROOT
+    )
+    by_family = {family["family_id"]: family for family in manifest["families"]}
+    expected_abstract = {
+        "STAR-QF01-RELATIONAL-VIS": (1931, 1932, 1),
+        "STAR-QF02-ASSISTED-VIS": (1673, 1673, 0),
+        "STAR-QF03-INTERACTIVE-SYSTEMS": (1983, 1984, 1),
+        "STAR-QF04-NONDESKTOP-ENV": (2432, 2433, 1),
+        "STAR-QF05-CONVERSATIONAL": (3454, 3456, 2),
+    }
+    for family_id, (observed, retrieved, difference) in expected_abstract.items():
+        abstract = next(
+            child
+            for child in by_family[family_id]["children"]
+            if child["field_key"] == "abstract"
+        )
+        assert abstract["execution_time_provider_observation"]["count"] == observed
+        assert abstract["retrieved_set"]["unique_stable_identity_count"] == retrieved
+        assert abstract["count_comparison"][
+            "retrieved_minus_execution_observation"
+        ] == difference
+        assert abstract["count_comparison"]["blocks_retrieval_completeness"] is False
+        assert abstract["retrieval_completeness_state"] == "COMPLETE_RETRIEVED_SET"
+    assert all(
+        item["used_as_retrieval_completeness_gate"] is False
+        for item in manifest["subsequent_verification_screenshots"]
+    )
+    assert manifest["methodology"]["provider_index_temporal_invariance_required"] is False
+
+
+def test_only_affirmative_incomplete_export_is_superseded_not_selected() -> None:
+    manifest = load_acm_final_reconciliation_manifest(
+        FINAL_RECONCILIATION_MANIFEST_PATH, root=ROOT
+    )
+    nonselected = {
+        Path(item["relative_path"]).name: item
+        for item in manifest["nonselected_preserved_bibtex_artifacts"]
+    }
+    old_keyword = nonselected["QF01_keyword_000001-000020.bib"]
+    assert old_keyword["classification"] == "SUPERSEDED_INCOMPLETE_OPERATOR_EXPORT"
+    assert old_keyword["affirmative_operator_or_export_failure"] is True
+    assert old_keyword["failure_resolved_by_superseding_artifact"] is True
+    assert old_keyword["stable_identity_set_relationship"] == (
+        "STRICT_SUBSET_OF_SELECTED_EXPORT"
+    )
+    assert old_keyword["selected_export_additional_identity_count"] == 8
+
+    qf01 = manifest["families"][0]
+    keyword = next(child for child in qf01["children"] if child["field_key"] == "keyword")
+    assert keyword["retrieved_set"]["unique_stable_identity_count"] == 28
+    assert Path(keyword["selected_artifacts"][0]["relative_path"]).name == (
+        "QF01_keyword_000001-000028.bib"
+    )

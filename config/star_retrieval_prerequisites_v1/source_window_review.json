@@ -1,9 +1,9 @@
 {
-  "artifact_hash": "2f60cdbd3684a1f045b370c5afbf29fc6aedaadb858b0d124aa75ffbb3943811",
+  "artifact_hash": "91ee2ec7d772aff135d049e83ade3042b1155dd4c834ad7fd3370b0c50b71e85",
   "artifact_id": "star-source-window-review-v1",
   "artifact_version": "1.0.0",
   "automatic_partitioning": false,
-  "derivation": "frozen_v0_3_and_final_v0_4_sizing_observations_only",
+  "derivation": "frozen_v0_3_and_final_v0_4_sizing_plus_final_acm_retrieval_evidence",
   "items": [
     {
       "candidate_query_id": "candidate:STAR-QF01-RELATIONAL-VIS:unanchored:PubMed",
@@ -67,15 +67,15 @@
     },
     {
       "candidate_query_id": null,
-      "evidence_path": null,
-      "evidence_run_hash": null,
+      "evidence_path": "provenance/star_acm_field_execution_2026-09-03_final_reconciliation_manifest.json",
+      "evidence_run_hash": "c159e0b2b6dc7991d0eab55ed5b395817d524c0b8245011db3d083870f3f4e12",
       "family_id": "STAR-QF01-RELATIONAL-VIS",
       "hard_window": null,
-      "reported_count": null,
+      "reported_count": 1949,
       "source": "ACMDigitalLibrary",
-      "state": "UNKNOWN_UNSIZED",
+      "state": "RESOLVED_RETRIEVAL_EVIDENCE",
       "variant_id": "unanchored",
-      "window_status": "unknown"
+      "window_status": "field_decomposed_export_complete"
     },
     {
       "candidate_query_id": "candidate:STAR-QF02-ASSISTED-VIS:E:PubMed",
@@ -139,15 +139,15 @@
     },
     {
       "candidate_query_id": null,
-      "evidence_path": null,
-      "evidence_run_hash": null,
+      "evidence_path": "provenance/star_acm_field_execution_2026-09-03_final_reconciliation_manifest.json",
+      "evidence_run_hash": "c159e0b2b6dc7991d0eab55ed5b395817d524c0b8245011db3d083870f3f4e12",
       "family_id": "STAR-QF02-ASSISTED-VIS",
       "hard_window": null,
-      "reported_count": null,
+      "reported_count": 1689,
       "source": "ACMDigitalLibrary",
-      "state": "UNKNOWN_UNSIZED",
+      "state": "RESOLVED_RETRIEVAL_EVIDENCE",
       "variant_id": "E",
-      "window_status": "unknown"
+      "window_status": "field_decomposed_export_complete"
     },
     {
       "candidate_query_id": "candidate:STAR-QF03-INTERACTIVE-SYSTEMS:revised:PubMed",
@@ -211,15 +211,15 @@
     },
     {
       "candidate_query_id": null,
-      "evidence_path": null,
-      "evidence_run_hash": null,
+      "evidence_path": "provenance/star_acm_field_execution_2026-09-03_final_reconciliation_manifest.json",
+      "evidence_run_hash": "c159e0b2b6dc7991d0eab55ed5b395817d524c0b8245011db3d083870f3f4e12",
       "family_id": "STAR-QF03-INTERACTIVE-SYSTEMS",
       "hard_window": null,
-      "reported_count": null,
+      "reported_count": 1995,
       "source": "ACMDigitalLibrary",
-      "state": "UNKNOWN_UNSIZED",
+      "state": "RESOLVED_RETRIEVAL_EVIDENCE",
       "variant_id": "revised",
-      "window_status": "unknown"
+      "window_status": "field_decomposed_export_complete"
     },
     {
       "candidate_query_id": "candidate:STAR-QF04-NONDESKTOP-ENV:default:PubMed",
@@ -283,15 +283,15 @@
     },
     {
       "candidate_query_id": null,
-      "evidence_path": null,
-      "evidence_run_hash": null,
+      "evidence_path": "provenance/star_acm_field_execution_2026-09-03_final_reconciliation_manifest.json",
+      "evidence_run_hash": "c159e0b2b6dc7991d0eab55ed5b395817d524c0b8245011db3d083870f3f4e12",
       "family_id": "STAR-QF04-NONDESKTOP-ENV",
       "hard_window": null,
-      "reported_count": null,
+      "reported_count": 2456,
       "source": "ACMDigitalLibrary",
-      "state": "UNKNOWN_UNSIZED",
+      "state": "RESOLVED_RETRIEVAL_EVIDENCE",
       "variant_id": "default",
-      "window_status": "unknown"
+      "window_status": "field_decomposed_export_complete"
     },
     {
       "candidate_query_id": "candidate:STAR-QF05-CONVERSATIONAL:default:PubMed",
@@ -355,15 +355,15 @@
     },
     {
       "candidate_query_id": null,
-      "evidence_path": null,
-      "evidence_run_hash": null,
+      "evidence_path": "provenance/star_acm_field_execution_2026-09-03_final_reconciliation_manifest.json",
+      "evidence_run_hash": "c159e0b2b6dc7991d0eab55ed5b395817d524c0b8245011db3d083870f3f4e12",
       "family_id": "STAR-QF05-CONVERSATIONAL",
       "hard_window": null,
-      "reported_count": null,
+      "reported_count": 3477,
       "source": "ACMDigitalLibrary",
-      "state": "UNKNOWN_UNSIZED",
+      "state": "RESOLVED_RETRIEVAL_EVIDENCE",
       "variant_id": "default",
-      "window_status": "unknown"
+      "window_status": "field_decomposed_export_complete"
     }
   ],
   "known_overflows": [],
@@ -371,14 +371,9 @@
   "status": "UNRESOLVED_SUPPLEMENTAL_SOURCES",
   "unresolved_items": [
     "STAR-QF01-RELATIONAL-VIS:IEEEXplore",
-    "STAR-QF01-RELATIONAL-VIS:ACMDigitalLibrary",
     "STAR-QF02-ASSISTED-VIS:IEEEXplore",
-    "STAR-QF02-ASSISTED-VIS:ACMDigitalLibrary",
     "STAR-QF03-INTERACTIVE-SYSTEMS:IEEEXplore",
-    "STAR-QF03-INTERACTIVE-SYSTEMS:ACMDigitalLibrary",
     "STAR-QF04-NONDESKTOP-ENV:IEEEXplore",
-    "STAR-QF04-NONDESKTOP-ENV:ACMDigitalLibrary",
-    "STAR-QF05-CONVERSATIONAL:IEEEXplore",
-    "STAR-QF05-CONVERSATIONAL:ACMDigitalLibrary"
+    "STAR-QF05-CONVERSATIONAL:IEEEXplore"
   ]
 }

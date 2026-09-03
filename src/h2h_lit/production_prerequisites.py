@@ -8,6 +8,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from h2h_lit.acm_field_execution import (
+    ACM_RETRIEVAL_EVIDENCE_COMPLETE,
+    load_acm_final_reconciliation_manifest,
+)
 from h2h_lit.checkpoint import atomic_write
 from h2h_lit.production_query_plan import load_production_query_plan
 from h2h_lit.production_wave import (
@@ -53,6 +57,9 @@ SIZING_EVIDENCE = {
         "default",
     ),
 }
+ACM_FINAL_RECONCILIATION_PATH = (
+    "provenance/star_acm_field_execution_2026-09-03_final_reconciliation_manifest.json"
+)
 
 
 class ProductionPrerequisiteError(ValueError):
@@ -109,7 +116,7 @@ class ProductionPrerequisitePackage:
             children[ref["artifact_id"]] = child
 
         _validate_ieee(children["star-ieee-readiness-v1"], plan.payload)
-        _validate_acm(children["star-acm-operator-spec-v1"], plan.payload)
+        _validate_acm(children["star-acm-operator-spec-v1"], plan.payload, root_path)
         for seed_id in SEED_SET_IDS:
             _validate_seed(children[f"star-seed-{seed_id.lower()}-v1"], seed_id)
         _validate_windows(children["star-source-window-review-v1"], plan.payload)
@@ -131,9 +138,10 @@ def build_prerequisite_payloads(
     _validate_expected_plan(plan_file, plan.payload, root_path)
 
     ieee = _build_ieee(plan.payload, generated_at, ieee_credential_present)
-    acm = _build_acm(plan.payload, generated_at)
+    acm_final = _load_final_acm_reconciliation(root_path)
+    acm = _build_acm(plan.payload, generated_at, acm_final, root_path)
     seeds = {seed_id: _build_seed(seed_id, root_path) for seed_id in SEED_SET_IDS}
-    windows = _build_source_windows(plan.payload, root_path)
+    windows = _build_source_windows(plan.payload, root_path, acm_final)
     children = {
         "ieee_readiness.json": _finalize_artifact(ieee),
         "acm_operator_spec.json": _finalize_artifact(acm),
@@ -158,6 +166,26 @@ def build_prerequisite_payloads(
             }
         )
 
+    blocking_reasons = [
+        "IEEE_XPLORE_API_KEY is absent and IEEE verification has not run",
+        "EBK25 and FP19 require prospective curator-populated manifests",
+        (
+            "IEEE final-query source-window states remain unsized"
+            if acm_final
+            else "IEEE and ACM final-query source-window states remain unsized"
+        ),
+    ]
+    readiness_issues = [
+        "IEEE_BLOCKED_CREDENTIAL",
+        "PRIOR_SURVEY_SEED_MANIFESTS_UNPOPULATED",
+        "SUPPLEMENTAL_SOURCE_WINDOWS_UNKNOWN",
+    ]
+    if acm_final is None:
+        blocking_reasons.insert(
+            1, "ACM operator/access, sizing, and export evidence are not supplied"
+        )
+        readiness_issues.insert(1, "ACM_OPERATOR_EVIDENCE_MISSING")
+
     package_payload: dict[str, Any] = {
         "schema_version": PREREQUISITE_SCHEMA_VERSION,
         "package_id": "h2h-star-retrieval-prerequisites",
@@ -165,6 +193,7 @@ def build_prerequisite_payloads(
         "generated_at": generated_at,
         "updated_at": max(
             [generated_at]
+            + ([str(acm_final["reconciled_at_utc"])] if acm_final else [])
             + [
                 str(seed.get("acquired_at"))
                 for seed in seeds.values()
@@ -182,12 +211,7 @@ def build_prerequisite_payloads(
             "source_windows": windows["status"],
         },
         "overall_status": "BLOCKED_EXTERNAL_INPUT",
-        "blocking_reasons": [
-            "IEEE_XPLORE_API_KEY is absent and IEEE verification has not run",
-            "ACM operator/access, sizing, and export evidence are not supplied",
-            "EBK25 and FP19 require prospective curator-populated manifests",
-            "IEEE and ACM final-query source-window states remain unsized",
-        ],
+        "blocking_reasons": blocking_reasons,
         "phase4a_compatibility": {
             "wave_schema_version": "1.1.0",
             "production_plan_accepted": True,
@@ -198,12 +222,7 @@ def build_prerequisite_payloads(
             "required_inputs_available": False,
             "ready": False,
             "wave_instantiated": False,
-            "readiness_issues": [
-                "IEEE_BLOCKED_CREDENTIAL",
-                "ACM_OPERATOR_EVIDENCE_MISSING",
-                "PRIOR_SURVEY_SEED_MANIFESTS_UNPOPULATED",
-                "SUPPLEMENTAL_SOURCE_WINDOWS_UNKNOWN",
-            ],
+            "readiness_issues": readiness_issues,
         },
         "production_operations_created": [],
     }
@@ -346,9 +365,14 @@ def _build_ieee(
     }
 
 
-def _build_acm(plan: dict[str, Any], generated_at: str) -> dict[str, Any]:
+def _build_acm(
+    plan: dict[str, Any],
+    generated_at: str,
+    final_reconciliation: dict[str, Any] | None,
+    root: Path,
+) -> dict[str, Any]:
     queries = _queries_for(plan, "ACMDigitalLibrary")
-    return {
+    payload = {
         "schema_version": PREREQUISITE_SCHEMA_VERSION,
         "artifact_id": "star-acm-operator-spec-v1",
         "artifact_version": "1.0.0",
@@ -420,6 +444,59 @@ def _build_acm(plan: dict[str, Any], generated_at: str) -> dict[str, Any]:
         ],
         "artifact_hash": None,
     }
+    if final_reconciliation is None:
+        return payload
+
+    final_families = {
+        family["family_id"]: family for family in final_reconciliation["families"]
+    }
+    payload["status"] = ACM_RETRIEVAL_EVIDENCE_COMPLETE
+    payload["operator"]["metadata_state"] = "LIMITED_NONBLOCKING_FOR_RETRIEVED_SET"
+    payload["operator"]["retrieval_completeness_affected"] = False
+    payload["execution_model"] = "FIELD_DECOMPOSED_STABLE_IDENTITY_UNION"
+    payload["final_reconciliation"] = {
+        "path": ACM_FINAL_RECONCILIATION_PATH,
+        "manifest_id": final_reconciliation["manifest_id"],
+        "manifest_version": final_reconciliation["manifest_version"],
+        "manifest_hash": final_reconciliation["manifest_hash"],
+        "status": final_reconciliation["status"],
+        "raw_sha256": _sha256((root / ACM_FINAL_RECONCILIATION_PATH).read_bytes()),
+        "byte_size": (root / ACM_FINAL_RECONCILIATION_PATH).stat().st_size,
+    }
+    for query in payload["queries"]:
+        family = final_families[query["family_id"]]
+        query["sizing_search_evidence"] = {
+            "status": "FIELD_CHILD_EXECUTION_OBSERVATIONS_PRESERVED",
+            "field_counts": {
+                child["field_key"]: child["execution_time_provider_observation"]["count"]
+                for child in family["children"]
+            },
+            "evidence_path": ACM_FINAL_RECONCILIATION_PATH,
+            "evidence_manifest_hash": final_reconciliation["manifest_hash"],
+            "later_verification_is_completeness_gate": False,
+        }
+        query["citation_export_evidence"] = {
+            "status": "FIELD_CHILD_EXPORTS_RECONCILED_NOT_IMPORTED",
+            "export_format": "BibTeX",
+            "field_union_unique_count": family["field_union"][
+                "unique_stable_identity_count"
+            ],
+            "field_union_digest_sha256": family["field_union"][
+                "stable_identity_union_digest_sha256"
+            ],
+            "evidence_path": ACM_FINAL_RECONCILIATION_PATH,
+            "evidence_manifest_hash": final_reconciliation["manifest_hash"],
+            "production_import_performed": False,
+        }
+    payload["readiness_requirements"] = [
+        "frozen field-query syntax validated",
+        "selected raw BibTeX artifacts bound by byte size and SHA-256",
+        "every physical BibTeX header explicitly accounted",
+        "year-partition and field unions reconciled by stable identity",
+        "later provider observations retained without temporal-invariance gating",
+        "affirmative operator/export failures superseded without deleting history",
+    ]
+    return payload
 
 
 def _build_seed(seed_set_id: str, root: Path) -> dict[str, Any]:
@@ -470,7 +547,11 @@ def _build_seed(seed_set_id: str, root: Path) -> dict[str, Any]:
     }
 
 
-def _build_source_windows(plan: dict[str, Any], root: Path) -> dict[str, Any]:
+def _build_source_windows(
+    plan: dict[str, Any],
+    root: Path,
+    final_acm_reconciliation: dict[str, Any] | None,
+) -> dict[str, Any]:
     loaded_runs: dict[str, dict[str, Any]] = {}
     items = []
     for family_id, variant in PRODUCTION_SELECTION.items():
@@ -511,17 +592,42 @@ def _build_source_windows(plan: dict[str, Any], root: Path) -> dict[str, Any]:
                 }
             )
         for source in ("IEEEXplore", "ACMDigitalLibrary"):
+            acm_family = (
+                next(
+                    item
+                    for item in final_acm_reconciliation["families"]
+                    if item["family_id"] == family_id
+                )
+                if source == "ACMDigitalLibrary" and final_acm_reconciliation
+                else None
+            )
             items.append(
                 {
                     "family_id": family_id,
                     "variant_id": variant,
                     "source": source,
-                    "state": "UNKNOWN_UNSIZED",
-                    "reported_count": None,
+                    "state": (
+                        "RESOLVED_RETRIEVAL_EVIDENCE"
+                        if acm_family
+                        else "UNKNOWN_UNSIZED"
+                    ),
+                    "reported_count": (
+                        acm_family["field_union"]["unique_stable_identity_count"]
+                        if acm_family
+                        else None
+                    ),
                     "hard_window": _plan_query(plan, family_id, source)["hard_window"],
-                    "window_status": "unknown",
-                    "evidence_path": None,
-                    "evidence_run_hash": None,
+                    "window_status": (
+                        "field_decomposed_export_complete" if acm_family else "unknown"
+                    ),
+                    "evidence_path": (
+                        ACM_FINAL_RECONCILIATION_PATH if acm_family else None
+                    ),
+                    "evidence_run_hash": (
+                        final_acm_reconciliation["manifest_hash"]
+                        if acm_family
+                        else None
+                    ),
                     "candidate_query_id": None,
                 }
             )
@@ -530,7 +636,9 @@ def _build_source_windows(plan: dict[str, Any], root: Path) -> dict[str, Any]:
         "artifact_id": "star-source-window-review-v1",
         "artifact_version": "1.0.0",
         "status": "UNRESOLVED_SUPPLEMENTAL_SOURCES",
-        "derivation": "frozen_v0_3_and_final_v0_4_sizing_observations_only",
+        "derivation": (
+            "frozen_v0_3_and_final_v0_4_sizing_plus_final_acm_retrieval_evidence"
+        ),
         "automatic_partitioning": False,
         "known_overflows": [],
         "unresolved_items": [
@@ -558,7 +666,7 @@ def _validate_ieee(data: dict[str, Any], plan: dict[str, Any]) -> None:
         raise ProductionPrerequisiteError("IEEE verification must remain unexecuted")
 
 
-def _validate_acm(data: dict[str, Any], plan: dict[str, Any]) -> None:
+def _validate_acm(data: dict[str, Any], plan: dict[str, Any], root: Path) -> None:
     workflow = data["workflow"]
     if workflow["kind"] != "human_operated_advanced_search_and_citation_export":
         raise ProductionPrerequisiteError("ACM workflow must remain human operated")
@@ -573,6 +681,28 @@ def _validate_acm(data: dict[str, Any], plan: dict[str, Any]) -> None:
         raise ProductionPrerequisiteError("ACM production queries changed")
     if data["operator"]["operator_id"] is not None:
         raise ProductionPrerequisiteError("ACM operator input was fabricated")
+    if data["status"] == ACM_RETRIEVAL_EVIDENCE_COMPLETE:
+        final = data.get("final_reconciliation", {})
+        if final.get("path") != ACM_FINAL_RECONCILIATION_PATH:
+            raise ProductionPrerequisiteError("ACM final reconciliation binding changed")
+        final_path = root / _safe_relative_path(final["path"])
+        if (
+            len(final_path.read_bytes()) != final.get("byte_size")
+            or _sha256(final_path.read_bytes()) != final.get("raw_sha256")
+        ):
+            raise ProductionPrerequisiteError("ACM final reconciliation bytes changed")
+        final_manifest = load_acm_final_reconciliation_manifest(
+            final_path, root=root, verify_artifacts=True
+        )
+        if final_manifest["manifest_hash"] != final.get("manifest_hash"):
+            raise ProductionPrerequisiteError("ACM final reconciliation hash changed")
+        if data["operator"].get("retrieval_completeness_affected") is not False:
+            raise ProductionPrerequisiteError("ACM operator limitation semantics changed")
+        if any(
+            item["citation_export_evidence"].get("production_import_performed")
+            for item in data["queries"]
+        ):
+            raise ProductionPrerequisiteError("ACM prerequisite performed production import")
 
 
 def _validate_seed(data: dict[str, Any], seed_set_id: str) -> None:
@@ -647,6 +777,15 @@ def _validate_windows(data: dict[str, Any], plan: dict[str, Any]) -> None:
         plan_item = _plan_query(plan, item["family_id"], item["source"])
         if item["variant_id"] != plan_item["variant_id"]:
             raise ProductionPrerequisiteError("source-window variant changed")
+
+
+def _load_final_acm_reconciliation(root: Path) -> dict[str, Any] | None:
+    path = root / ACM_FINAL_RECONCILIATION_PATH
+    if not path.is_file():
+        return None
+    return load_acm_final_reconciliation_manifest(
+        path, root=root, verify_artifacts=True
+    )
 
 
 def _validate_phase4a_compatibility(data: dict[str, Any]) -> None:

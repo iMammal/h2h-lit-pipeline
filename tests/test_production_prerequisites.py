@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from h2h_lit.production_prerequisites import (
+    ACM_FINAL_RECONCILIATION_PATH,
     EXPECTED_PLAN_HASH,
     EXPECTED_PLAN_RAW_SHA256,
     PRODUCTION_SELECTION,
@@ -57,7 +58,7 @@ def test_package_regenerates_deterministically_from_frozen_evidence() -> None:
             CHILD_ROOT / filename
         ).read_text(encoding="utf-8")
     assert tracked["package_hash"] == package.package_hash()
-    assert tracked["updated_at"] == "2026-09-02T03:15:09Z"
+    assert tracked["updated_at"] == "2026-09-03T18:29:49Z"
 
 
 def test_ieee_absent_credential_is_explicit_and_never_persisted() -> None:
@@ -97,7 +98,7 @@ def test_ieee_queries_are_exact_plan_queries_and_policy_is_unresolved() -> None:
 def test_acm_spec_is_human_only_and_has_required_operator_evidence_fields() -> None:
     plan = json.loads(PLAN_PATH.read_text())
     acm = json.loads((CHILD_ROOT / "acm_operator_spec.json").read_text())
-    assert acm["status"] == "REQUIRES_OPERATOR_INPUT"
+    assert acm["status"] == "RETRIEVAL_EVIDENCE_COMPLETE_NOT_IMPORTED"
     assert acm["operator"]["operator_id"] is None
     assert acm["operator"]["operator_id_required"] is True
     assert acm["workflow"]["scope"] == "ACM Publications"
@@ -111,16 +112,19 @@ def test_acm_spec_is_human_only_and_has_required_operator_evidence_fields() -> N
     assert [item["query"] for item in acm["queries"]] == [
         item["query_text"] for item in planned
     ]
+    assert acm["final_reconciliation"]["path"] == ACM_FINAL_RECONCILIATION_PATH
+    assert acm["operator"]["metadata_state"] == "LIMITED_NONBLOCKING_FOR_RETRIEVED_SET"
+    assert acm["operator"]["retrieval_completeness_affected"] is False
     for item in acm["queries"]:
         sizing = item["sizing_search_evidence"]
         export = item["citation_export_evidence"]
-        assert sizing["ui_reported_count"] is None
-        assert sizing["search_timestamp_utc"] is None
-        assert sizing["query_url"] is None
-        assert sizing["screenshot_relative_path"] is None
-        assert export["chunks"] == []
-        assert export["chunk_schema"]["relative_traversal_safe_paths_only"] is True
-        assert export["ui_total_reconciliation_required"] is True
+        assert sizing["status"] == "FIELD_CHILD_EXECUTION_OBSERVATIONS_PRESERVED"
+        assert set(sizing["field_counts"]) == {"title", "keyword", "abstract"}
+        assert sizing["later_verification_is_completeness_gate"] is False
+        assert export["status"] == "FIELD_CHILD_EXPORTS_RECONCILED_NOT_IMPORTED"
+        assert export["field_union_unique_count"] > 0
+        assert len(export["field_union_digest_sha256"]) == 64
+        assert export["production_import_performed"] is False
 
 
 @pytest.mark.parametrize("seed_id", ["EBK25", "FP19"])
@@ -153,17 +157,27 @@ def test_jfr25_seed_is_populated_but_not_imported() -> None:
 
 def test_source_windows_use_only_frozen_sizing_and_do_not_partition() -> None:
     windows = json.loads((CHILD_ROOT / "source_window_review.json").read_text())
-    assert windows["derivation"] == "frozen_v0_3_and_final_v0_4_sizing_observations_only"
+    assert windows["derivation"] == (
+        "frozen_v0_3_and_final_v0_4_sizing_plus_final_acm_retrieval_evidence"
+    )
     assert windows["automatic_partitioning"] is False
     assert windows["known_overflows"] == []
     assert len(windows["items"]) == 30
     clear = [item for item in windows["items"] if item["state"] == "RESOLVED_CLEAR"]
     unknown = [item for item in windows["items"] if item["state"] == "UNKNOWN_UNSIZED"]
+    acm = [
+        item
+        for item in windows["items"]
+        if item["state"] == "RESOLVED_RETRIEVAL_EVIDENCE"
+    ]
     assert len(clear) == 20
-    assert len(unknown) == 10
-    assert {item["source"] for item in unknown} == {"IEEEXplore", "ACMDigitalLibrary"}
+    assert len(acm) == 5
+    assert len(unknown) == 5
+    assert {item["source"] for item in unknown} == {"IEEEXplore"}
+    assert {item["source"] for item in acm} == {"ACMDigitalLibrary"}
     assert all(item["evidence_path"] is None for item in unknown)
     assert all(item["evidence_path"].startswith("outputs/query_sizing/") for item in clear)
+    assert all(item["evidence_path"] == ACM_FINAL_RECONCILIATION_PATH for item in acm)
     assert {
         (item["family_id"], item["variant_id"])
         for item in windows["items"]
@@ -192,6 +206,8 @@ def test_phase4a_contract_is_compatible_but_not_ready_and_crossref_is_support_on
     assert package["states"]["JFR25"] == "POPULATED_VALIDATED_NOT_IMPORTED"
     assert package["states"]["EBK25"] == "UNPOPULATED_REQUIRES_CURATOR_INPUT"
     assert package["states"]["FP19"] == "UNPOPULATED_REQUIRES_CURATOR_INPUT"
+    assert package["states"]["acm"] == "RETRIEVAL_EVIDENCE_COMPLETE_NOT_IMPORTED"
+    assert "ACM_OPERATOR_EVIDENCE_MISSING" not in phase4a["readiness_issues"]
     assert package["overall_status"] == "BLOCKED_EXTERNAL_INPUT"
 
 

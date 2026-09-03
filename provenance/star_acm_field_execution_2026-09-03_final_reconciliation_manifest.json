@@ -1,0 +1,2175 @@
+{
+  "bindings": {
+    "bulk_export_calibration_manifest": {
+      "byte_size": 2934,
+      "manifest_hash": "9cb70cb04b244a267d97ee0a58fb13061b4ef99b0ba1ed540e7983899b8efa70",
+      "manifest_id": "star-acm-field-execution-2026-09-02-bulk-export-calibration",
+      "manifest_version": "1.0.0",
+      "raw_sha256": "ff66dff17e68cdfd726f9828ce3e7fc999ee2c898cd18061d78a72e39718d036",
+      "relative_path": "provenance/star_acm_field_execution_2026-09-02_bulk_export_calibration_manifest.json"
+    },
+    "diagnostic_bibtex_parser_commit": "9f7c2e808631fe803e9b98050d77c54e23938f46",
+    "export_partition_contract": {
+      "byte_size": 27724,
+      "contract_hash": "643bcba25d8d71a5983b6eca8ae0edb00e2abe1eaf6be10a0e2e4667b416be5e",
+      "contract_id": "star-acm-publication-year-export-partition",
+      "contract_version": "1.0.0",
+      "raw_sha256": "3acaee2fbb1a8132bf75b2c597ccdff35b608c7c6262f7a0a223270d841cefda",
+      "relative_path": "config/star_acm_export_partition_contract_v1.json"
+    },
+    "field_execution_contract": {
+      "byte_size": 73287,
+      "contract_hash": "8626fc8e2dfe6e9b13bf6d2478b29c6f87e3864e9c8675dbd16c0de7a7466e8c",
+      "contract_id": "star-acm-field-decomposed-execution",
+      "contract_version": "1.0.0",
+      "raw_sha256": "6b20ae473b0b6fe9dcc684281949a88491130324365d5a3526891fb379e00401",
+      "relative_path": "config/star_acm_field_execution_contract_v1.json"
+    },
+    "production_query_plan": {
+      "byte_size": 205457,
+      "raw_sha256": "b887d638e42f4909c1c8461dde733d758e5176d528ddccee4370211e14ed7451",
+      "relative_path": "config/star_production_query_plan_v1.json"
+    },
+    "query_syntax_manifest": {
+      "byte_size": 32557,
+      "manifest_hash": "2dc4ce26e30750a93f47e4cc10ff581aacec660ce4f6abdb1184858f6b681f3d",
+      "manifest_id": "star-acm-field-execution-2026-09-02-query-syntax",
+      "manifest_version": "1.0.0",
+      "raw_sha256": "ab68255886de81aea95b6eae90113348740417ca574b913f10146f62ba7e08a8",
+      "relative_path": "provenance/star_acm_field_execution_2026-09-02_query_syntax_manifest.json"
+    }
+  },
+  "families": [
+    {
+      "children": [
+        {
+          "accepted_syntax_attempt_number": 1,
+          "child_query_id": "production:STAR-QF01-RELATIONAL-VIS:ACMDigitalLibrary:field:title",
+          "count_comparison": {
+            "blocks_retrieval_completeness": false,
+            "retrieved_minus_execution_observation": 0,
+            "state": "RECONCILES"
+          },
+          "execution_time_provider_observation": {
+            "count": 8,
+            "observed_at_utc": "2026-09-03T02:02:55Z",
+            "query_syntax_artifact_sha256": "682ca5628ff6b9b2d17024b926769954c354e9ca8e6e30b9b0835189f537b558"
+          },
+          "field_key": "title",
+          "field_label": "Title",
+          "frozen_child_query_sha256": "5349e9b56499fabafef90778ae7d0e81bc85ea54a4fc5384243877e3d63cabaf",
+          "retrieval_completeness_state": "COMPLETE_RETRIEVED_SET",
+          "retrieved_set": {
+            "cross_artifact_stable_identity_overlap_count": 0,
+            "malformed_record_count": 0,
+            "stable_identity_union_digest_sha256": "24f68dd01e2b5f0cfa5495500ac19f93d0e3784a6ef522a39b3625b123e41156",
+            "total_accounted_record_count": 8,
+            "unique_stable_identity_count": 8
+          },
+          "selected_artifacts": [
+            {
+              "byte_size": 13314,
+              "classification": "SELECTED_RETRIEVAL_ARTIFACT",
+              "malformed_entry_count": 0,
+              "missing_or_unparseable_year_count": 0,
+              "missing_stable_identity_count": 0,
+              "operator_label_not_authoritative": true,
+              "parse_issues": [],
+              "physical_header_count": 8,
+              "publication_year_counts": {
+                "2000": 1,
+                "2005": 1,
+                "2012": 1,
+                "2017": 2,
+                "2019": 1,
+                "2021": 1,
+                "2022": 1
+              },
+              "publication_year_maximum": 2022,
+              "publication_year_minimum": 2000,
+              "raw_sha256": "22cb6b5f47b881d141a5739005c4e602d9b31b888961e4fdb3552fb18ff3c045",
+              "relative_path": "artifacts/acm_field_execution/2026-09-02/bibtex/QF01/title/QF01_title_000001-000008.bib",
+              "stable_identity_digest_sha256": "24f68dd01e2b5f0cfa5495500ac19f93d0e3784a6ef522a39b3625b123e41156",
+              "successfully_parsed_entry_count": 8,
+              "total_accounted_entry_count": 8,
+              "unique_native_id_count": 8,
+              "unique_normalized_doi_count": 7,
+              "unique_stable_identity_count": 8
+            }
+          ]
+        },
+        {
+          "accepted_syntax_attempt_number": 2,
+          "child_query_id": "production:STAR-QF01-RELATIONAL-VIS:ACMDigitalLibrary:field:keyword",
+          "count_comparison": {
+            "blocks_retrieval_completeness": false,
+            "retrieved_minus_execution_observation": 0,
+            "state": "RECONCILES"
+          },
+          "execution_time_provider_observation": {
+            "count": 28,
+            "observed_at_utc": "2026-09-03T03:48:36Z",
+            "query_syntax_artifact_sha256": "c9ca2d46a89624c104f4f4c5a0344f9053bc62cba9043a9bd7a66dad3dcf0fd1"
+          },
+          "field_key": "keyword",
+          "field_label": "Keyword",
+          "frozen_child_query_sha256": "8e3d4a09ab66c4512dd829f2ace6d124fdbfbdf0f00e950ca559d3b3392f5a1f",
+          "retrieval_completeness_state": "COMPLETE_RETRIEVED_SET",
+          "retrieved_set": {
+            "cross_artifact_stable_identity_overlap_count": 0,
+            "malformed_record_count": 0,
+            "stable_identity_union_digest_sha256": "4b264e0fb5e2bd0128d708932845acceb34b687c44564cd42d28a86793b7009d",
+            "total_accounted_record_count": 28,
+            "unique_stable_identity_count": 28
+          },
+          "selected_artifacts": [
+            {
+              "byte_size": 48803,
+              "classification": "SELECTED_RETRIEVAL_ARTIFACT",
+              "malformed_entry_count": 0,
+              "missing_or_unparseable_year_count": 0,
+              "missing_stable_identity_count": 0,
+              "operator_label_not_authoritative": true,
+              "parse_issues": [],
+              "physical_header_count": 28,
+              "publication_year_counts": {
+                "1997": 1,
+                "2000": 1,
+                "2002": 1,
+                "2004": 3,
+                "2005": 1,
+                "2008": 1,
+                "2009": 1,
+                "2011": 1,
+                "2012": 1,
+                "2016": 1,
+                "2017": 3,
+                "2018": 1,
+                "2019": 5,
+                "2020": 1,
+                "2022": 2,
+                "2023": 2,
+                "2024": 2
+              },
+              "publication_year_maximum": 2024,
+              "publication_year_minimum": 1997,
+              "raw_sha256": "2080cd626e469fe545089e1ee5d8b4710bc8767c943092cbe2119ff4a3c90a68",
+              "relative_path": "artifacts/acm_field_execution/2026-09-02/bibtex/QF01/keyword/QF01_keyword_000001-000028.bib",
+              "stable_identity_digest_sha256": "4b264e0fb5e2bd0128d708932845acceb34b687c44564cd42d28a86793b7009d",
+              "successfully_parsed_entry_count": 28,
+              "total_accounted_entry_count": 28,
+              "unique_native_id_count": 28,
+              "unique_normalized_doi_count": 28,
+              "unique_stable_identity_count": 28
+            }
+          ]
+        },
+        {
+          "accepted_syntax_attempt_number": 1,
+          "child_query_id": "production:STAR-QF01-RELATIONAL-VIS:ACMDigitalLibrary:field:abstract",
+          "count_comparison": {
+            "blocks_retrieval_completeness": false,
+            "retrieved_minus_execution_observation": 1,
+            "state": "PROVIDER_INDEX_STATE_DISCREPANCY_NO_AFFIRMATIVE_FAILURE"
+          },
+          "execution_time_provider_observation": {
+            "count": 1931,
+            "observed_at_utc": "2026-09-03T02:04:29Z",
+            "query_syntax_artifact_sha256": "8807e8085d6f84d489922e4ed272da67698c1d521e95442453f7a4fee6a799ea"
+          },
+          "field_key": "abstract",
+          "field_label": "Abstract",
+          "frozen_child_query_sha256": "fb81b9c4e613ed9543ba55d37a716467821d809ba3759bedb1846dc0b9606ed1",
+          "retrieval_completeness_state": "COMPLETE_RETRIEVED_SET",
+          "retrieved_set": {
+            "cross_artifact_stable_identity_overlap_count": 0,
+            "malformed_record_count": 0,
+            "stable_identity_union_digest_sha256": "ddd2af73f6bab8e7c03993a0557ce5f84bb3db7b7f415b61d011c8a3d30a02c7",
+            "total_accounted_record_count": 1932,
+            "unique_stable_identity_count": 1932
+          },
+          "selected_artifacts": [
+            {
+              "byte_size": 1902155,
+              "classification": "SELECTED_RETRIEVAL_ARTIFACT",
+              "malformed_entry_count": 0,
+              "missing_or_unparseable_year_count": 0,
+              "missing_stable_identity_count": 0,
+              "operator_label_not_authoritative": true,
+              "operator_publication_date_filter": {
+                "from_year": 1974,
+                "inclusive": true,
+                "to_year": 2016
+              },
+              "parse_issues": [],
+              "physical_header_count": 950,
+              "publication_year_counts": {
+                "1974": 1,
+                "1976": 1,
+                "1979": 2,
+                "1980": 1,
+                "1983": 1,
+                "1984": 1,
+                "1985": 1,
+                "1986": 1,
+                "1987": 1,
+                "1988": 1,
+                "1989": 2,
+                "1990": 7,
+                "1991": 8,
+                "1992": 6,
+                "1993": 10,
+                "1994": 4,
+                "1995": 7,
+                "1996": 7,
+                "1997": 1,
+                "1998": 11,
+                "1999": 13,
+                "2000": 18,
+                "2001": 21,
+                "2002": 35,
+                "2003": 27,
+                "2004": 50,
+                "2005": 34,
+                "2006": 50,
+                "2007": 38,
+                "2008": 49,
+                "2009": 52,
+                "2010": 69,
+                "2011": 67,
+                "2012": 69,
+                "2013": 69,
+                "2014": 80,
+                "2015": 70,
+                "2016": 65
+              },
+              "publication_year_maximum": 2016,
+              "publication_year_minimum": 1974,
+              "raw_sha256": "8efbeeae2f852e6603ddda3469b3c67ed160a0b6cbc40e1e0067cee5a2347224",
+              "relative_path": "artifacts/acm_field_execution/2026-09-02/bibtex/QF01/abstract/QF01_abstract_1974-2016.bib",
+              "stable_identity_digest_sha256": "6cbe9c6cea83c7d824658bc1ec75c22cce29b112a87dfeee0bca6a2f0015951b",
+              "successfully_parsed_entry_count": 950,
+              "total_accounted_entry_count": 950,
+              "unique_native_id_count": 950,
+              "unique_normalized_doi_count": 780,
+              "unique_stable_identity_count": 950
+            },
+            {
+              "byte_size": 2066418,
+              "classification": "SELECTED_RETRIEVAL_ARTIFACT",
+              "malformed_entry_count": 0,
+              "missing_or_unparseable_year_count": 0,
+              "missing_stable_identity_count": 0,
+              "operator_label_not_authoritative": true,
+              "operator_publication_date_filter": {
+                "from_year": 2017,
+                "inclusive": true,
+                "to_year": 2026
+              },
+              "parse_issues": [],
+              "physical_header_count": 982,
+              "publication_year_counts": {
+                "2017": 70,
+                "2018": 101,
+                "2019": 77,
+                "2020": 90,
+                "2021": 78,
+                "2022": 92,
+                "2023": 103,
+                "2024": 115,
+                "2025": 112,
+                "2026": 144
+              },
+              "publication_year_maximum": 2026,
+              "publication_year_minimum": 2017,
+              "raw_sha256": "ec9867ff90b5aef08e1cfe367232f439f8338793f5112cae2711cb6001310af9",
+              "relative_path": "artifacts/acm_field_execution/2026-09-02/bibtex/QF01/abstract/QF01_abstract_2017-2026.bib",
+              "stable_identity_digest_sha256": "6b49d6960601b88888b653299316d6efc8061b34790723a04a5a85f52b39f71c",
+              "successfully_parsed_entry_count": 982,
+              "total_accounted_entry_count": 982,
+              "unique_native_id_count": 982,
+              "unique_normalized_doi_count": 957,
+              "unique_stable_identity_count": 982
+            }
+          ]
+        }
+      ],
+      "family_id": "STAR-QF01-RELATIONAL-VIS",
+      "field_union": {
+        "overlap_counts": {
+          "abstract_only": 1914,
+          "keyword_abstract": 13,
+          "keyword_only": 14,
+          "title_abstract": 5,
+          "title_keyword": 1,
+          "title_only": 2,
+          "triple_overlap": 0
+        },
+        "stable_identity_union_digest_sha256": "2dea57c9fbacddbb93204ef455a2e59368cbe5794bbb97bb4e4e3569c14ca433",
+        "state": "COMPLETE_SET_RECONCILED_NOT_IMPORTED",
+        "unique_stable_identity_count": 1949
+      },
+      "parent_query_id": "production:STAR-QF01-RELATIONAL-VIS:ACMDigitalLibrary"
+    },
+    {
+      "children": [
+        {
+          "accepted_syntax_attempt_number": 1,
+          "child_query_id": "production:STAR-QF02-ASSISTED-VIS:ACMDigitalLibrary:field:title",
+          "count_comparison": {
+            "blocks_retrieval_completeness": false,
+            "retrieved_minus_execution_observation": 0,
+            "state": "RECONCILES"
+          },
+          "execution_time_provider_observation": {
+            "count": 18,
+            "observed_at_utc": "2026-09-03T02:05:45Z",
+            "query_syntax_artifact_sha256": "db1edc08ad24141719828971e64516015cda19c9e5d0a73543f3cc6b03a77b6d"
+          },
+          "field_key": "title",
+          "field_label": "Title",
+          "frozen_child_query_sha256": "d4f7804d31682f6b84cd315009d4219763f6bc173da2f95a816e6737087e7c45",
+          "retrieval_completeness_state": "COMPLETE_RETRIEVED_SET",
+          "retrieved_set": {
+            "cross_artifact_stable_identity_overlap_count": 0,
+            "malformed_record_count": 0,
+            "stable_identity_union_digest_sha256": "6ea6f52a484980168fc88421815f5a943218c4c8454f8f6959826773447a45d0",
+            "total_accounted_record_count": 18,
+            "unique_stable_identity_count": 18
+          },
+          "selected_artifacts": [
+            {
+              "byte_size": 34237,
+              "classification": "SELECTED_RETRIEVAL_ARTIFACT",
+              "malformed_entry_count": 0,
+              "missing_or_unparseable_year_count": 0,
+              "missing_stable_identity_count": 0,
+              "operator_label_not_authoritative": true,
+              "parse_issues": [],
+              "physical_header_count": 18,
+              "publication_year_counts": {
+                "2017": 2,
+                "2018": 1,
+                "2019": 1,
+                "2020": 1,
+                "2021": 1,
+                "2022": 1,
+                "2023": 1,
+                "2024": 2,
+                "2025": 4,
+                "2026": 4
+              },
+              "publication_year_maximum": 2026,
+              "publication_year_minimum": 2017,
+              "raw_sha256": "d5caa4382c8ed79246d04ae990c40423154764b7952c58e8f9583075286c62f8",
+              "relative_path": "artifacts/acm_field_execution/2026-09-02/bibtex/QF02/title/QF02_title_000001-000018.bib",
+              "stable_identity_digest_sha256": "6ea6f52a484980168fc88421815f5a943218c4c8454f8f6959826773447a45d0",
+              "successfully_parsed_entry_count": 18,
+              "total_accounted_entry_count": 18,
+              "unique_native_id_count": 18,
+              "unique_normalized_doi_count": 18,
+              "unique_stable_identity_count": 18
+            }
+          ]
+        },
+        {
+          "accepted_syntax_attempt_number": 1,
+          "child_query_id": "production:STAR-QF02-ASSISTED-VIS:ACMDigitalLibrary:field:keyword",
+          "count_comparison": {
+            "blocks_retrieval_completeness": false,
+            "retrieved_minus_execution_observation": 0,
+            "state": "RECONCILES"
+          },
+          "execution_time_provider_observation": {
+            "count": 16,
+            "observed_at_utc": "2026-09-03T02:07:53Z",
+            "query_syntax_artifact_sha256": "dec43b59bb0ff72b30bb5c7779afcdf1c5c3c898487721a2c127f25ad4905f37"
+          },
+          "field_key": "keyword",
+          "field_label": "Keyword",
+          "frozen_child_query_sha256": "12943d0b7d44e37fd9cfea4bf81932a0f472780a4b9952ae3704f7dbd859d300",
+          "retrieval_completeness_state": "COMPLETE_RETRIEVED_SET",
+          "retrieved_set": {
+            "cross_artifact_stable_identity_overlap_count": 0,
+            "malformed_record_count": 0,
+            "stable_identity_union_digest_sha256": "e7958b6dc016168f0471e0b861a4cb321282acbd4b6362e3a776ead73c8e4c22",
+            "total_accounted_record_count": 16,
+            "unique_stable_identity_count": 16
+          },
+          "selected_artifacts": [
+            {
+              "byte_size": 29741,
+              "classification": "SELECTED_RETRIEVAL_ARTIFACT",
+              "malformed_entry_count": 0,
+              "missing_or_unparseable_year_count": 0,
+              "missing_stable_identity_count": 0,
+              "operator_label_not_authoritative": true,
+              "parse_issues": [],
+              "physical_header_count": 16,
+              "publication_year_counts": {
+                "2010": 1,
+                "2012": 1,
+                "2015": 2,
+                "2016": 1,
+                "2018": 2,
+                "2022": 1,
+                "2023": 3,
+                "2024": 1,
+                "2025": 1,
+                "2026": 3
+              },
+              "publication_year_maximum": 2026,
+              "publication_year_minimum": 2010,
+              "raw_sha256": "cf0d5eabd4b5def0552e1fb4858fc2b72aa62ac0bc63b374bee47b1a866b20df",
+              "relative_path": "artifacts/acm_field_execution/2026-09-02/bibtex/QF02/keyword/QF02_keyword_000001-000016.bib",
+              "stable_identity_digest_sha256": "e7958b6dc016168f0471e0b861a4cb321282acbd4b6362e3a776ead73c8e4c22",
+              "successfully_parsed_entry_count": 16,
+              "total_accounted_entry_count": 16,
+              "unique_native_id_count": 16,
+              "unique_normalized_doi_count": 16,
+              "unique_stable_identity_count": 16
+            }
+          ]
+        },
+        {
+          "accepted_syntax_attempt_number": 1,
+          "child_query_id": "production:STAR-QF02-ASSISTED-VIS:ACMDigitalLibrary:field:abstract",
+          "count_comparison": {
+            "blocks_retrieval_completeness": false,
+            "retrieved_minus_execution_observation": 0,
+            "state": "RECONCILES"
+          },
+          "execution_time_provider_observation": {
+            "count": 1673,
+            "observed_at_utc": "2026-09-03T02:11:15Z",
+            "query_syntax_artifact_sha256": "c0d00f388c5ba90d8a41cb8783f788bfb76e443999d02cce88543e9d51b54e3b"
+          },
+          "field_key": "abstract",
+          "field_label": "Abstract",
+          "frozen_child_query_sha256": "f853a75cbdb081511fee42e05de89d67aa78690928354579ad9418a298dbbca8",
+          "retrieval_completeness_state": "COMPLETE_RETRIEVED_SET",
+          "retrieved_set": {
+            "cross_artifact_stable_identity_overlap_count": 0,
+            "malformed_record_count": 1,
+            "stable_identity_union_digest_sha256": "62e4aa566352d6769357b3cc4a822c16b8a9abd65b509448d19bf622c4cbf4a0",
+            "total_accounted_record_count": 1673,
+            "unique_stable_identity_count": 1673
+          },
+          "selected_artifacts": [
+            {
+              "byte_size": 1905961,
+              "classification": "SELECTED_RETRIEVAL_ARTIFACT",
+              "malformed_entry_count": 0,
+              "missing_or_unparseable_year_count": 0,
+              "missing_stable_identity_count": 0,
+              "operator_label_not_authoritative": true,
+              "operator_publication_date_filter": {
+                "from_year": 1967,
+                "inclusive": true,
+                "to_year": 2024
+              },
+              "parse_issues": [],
+              "physical_header_count": 905,
+              "publication_year_counts": {
+                "1967": 1,
+                "1971": 1,
+                "1973": 1,
+                "1974": 2,
+                "1978": 1,
+                "1980": 1,
+                "1981": 1,
+                "1982": 1,
+                "1984": 2,
+                "1985": 2,
+                "1986": 2,
+                "1987": 1,
+                "1988": 2,
+                "1989": 1,
+                "1990": 1,
+                "1992": 1,
+                "1993": 4,
+                "1994": 3,
+                "1995": 1,
+                "1996": 1,
+                "1997": 1,
+                "1998": 2,
+                "1999": 1,
+                "2000": 6,
+                "2001": 8,
+                "2002": 10,
+                "2003": 8,
+                "2004": 19,
+                "2005": 7,
+                "2006": 20,
+                "2007": 15,
+                "2008": 21,
+                "2009": 12,
+                "2010": 19,
+                "2011": 20,
+                "2012": 30,
+                "2013": 20,
+                "2014": 28,
+                "2015": 19,
+                "2016": 28,
+                "2017": 30,
+                "2018": 51,
+                "2019": 37,
+                "2020": 40,
+                "2021": 47,
+                "2022": 41,
+                "2023": 74,
+                "2024": 261
+              },
+              "publication_year_maximum": 2024,
+              "publication_year_minimum": 1967,
+              "raw_sha256": "43888caaace8674b71f06d0463cab075566a5ca047e240938e10b647ea773233",
+              "relative_path": "artifacts/acm_field_execution/2026-09-02/bibtex/QF02/abstract/QF02_abstract_1967-2024.bib",
+              "stable_identity_digest_sha256": "5f95f51da12f7cf2a1d8595e9e50bdd96d2875ddcca72d44c5b49957344b4e98",
+              "successfully_parsed_entry_count": 905,
+              "total_accounted_entry_count": 905,
+              "unique_native_id_count": 905,
+              "unique_normalized_doi_count": 831,
+              "unique_stable_identity_count": 905
+            },
+            {
+              "byte_size": 1654533,
+              "classification": "SELECTED_RETRIEVAL_ARTIFACT",
+              "malformed_entry_count": 1,
+              "missing_or_unparseable_year_count": 0,
+              "missing_stable_identity_count": 0,
+              "operator_label_not_authoritative": true,
+              "operator_publication_date_filter": {
+                "from_year": 2025,
+                "inclusive": true,
+                "to_year": 2026
+              },
+              "parse_issues": [
+                {
+                  "brace_depth": 1,
+                  "code": "UNBALANCED_BRACES",
+                  "native_id": "10.1145/3805712.3808367",
+                  "ordinal": 459
+                }
+              ],
+              "physical_header_count": 768,
+              "publication_year_counts": {
+                "2025": 406,
+                "2026": 362
+              },
+              "publication_year_maximum": 2026,
+              "publication_year_minimum": 2025,
+              "raw_sha256": "a731d06b7089fedc524293ce2d797f4249e25e9f16de44a12ce3dc34f8a8b413",
+              "relative_path": "artifacts/acm_field_execution/2026-09-02/bibtex/QF02/abstract/QF02_abstract_2025-2026.bib",
+              "stable_identity_digest_sha256": "176a000fa5423b35fe63ef509344d5bda695b212df2a8ba026af3c332638e15b",
+              "successfully_parsed_entry_count": 767,
+              "total_accounted_entry_count": 768,
+              "unique_native_id_count": 768,
+              "unique_normalized_doi_count": 751,
+              "unique_stable_identity_count": 768
+            }
+          ]
+        }
+      ],
+      "family_id": "STAR-QF02-ASSISTED-VIS",
+      "field_union": {
+        "overlap_counts": {
+          "abstract_only": 1656,
+          "keyword_abstract": 6,
+          "keyword_only": 9,
+          "title_abstract": 10,
+          "title_keyword": 0,
+          "title_only": 7,
+          "triple_overlap": 1
+        },
+        "stable_identity_union_digest_sha256": "f77b4c5844f016192c3289572164595631bf98b1f9ae6e1ac17366bc03555f4a",
+        "state": "COMPLETE_SET_RECONCILED_NOT_IMPORTED",
+        "unique_stable_identity_count": 1689
+      },
+      "parent_query_id": "production:STAR-QF02-ASSISTED-VIS:ACMDigitalLibrary"
+    },
+    {
+      "children": [
+        {
+          "accepted_syntax_attempt_number": 1,
+          "child_query_id": "production:STAR-QF03-INTERACTIVE-SYSTEMS:ACMDigitalLibrary:field:title",
+          "count_comparison": {
+            "blocks_retrieval_completeness": false,
+            "retrieved_minus_execution_observation": 0,
+            "state": "RECONCILES"
+          },
+          "execution_time_provider_observation": {
+            "count": 4,
+            "observed_at_utc": "2026-09-03T02:13:01Z",
+            "query_syntax_artifact_sha256": "ea0b8fb2e134d5dd8c5721d6a4010483f40530c580644b78936150cffc48f308"
+          },
+          "field_key": "title",
+          "field_label": "Title",
+          "frozen_child_query_sha256": "1cdb781da32a917c081b366e7c0f40bf8ae43b6c437a031cca92b987d9c18de6",
+          "retrieval_completeness_state": "COMPLETE_RETRIEVED_SET",
+          "retrieved_set": {
+            "cross_artifact_stable_identity_overlap_count": 0,
+            "malformed_record_count": 0,
+            "stable_identity_union_digest_sha256": "7db031822fe8b3267ed205060182bd75437a8e4d62ff0c6cf7f041b7525b17d6",
+            "total_accounted_record_count": 4,
+            "unique_stable_identity_count": 4
+          },
+          "selected_artifacts": [
+            {
+              "byte_size": 6510,
+              "classification": "SELECTED_RETRIEVAL_ARTIFACT",
+              "malformed_entry_count": 0,
+              "missing_or_unparseable_year_count": 0,
+              "missing_stable_identity_count": 0,
+              "operator_label_not_authoritative": true,
+              "parse_issues": [],
+              "physical_header_count": 4,
+              "publication_year_counts": {
+                "2012": 1,
+                "2016": 1,
+                "2017": 1,
+                "2025": 1
+              },
+              "publication_year_maximum": 2025,
+              "publication_year_minimum": 2012,
+              "raw_sha256": "af63247bde487faa09e03ab98c4724d423e3ae1b2c6383bf5744a588c023493a",
+              "relative_path": "artifacts/acm_field_execution/2026-09-02/bibtex/QF03/title/QF03_title_000001-000004.bib",
+              "stable_identity_digest_sha256": "7db031822fe8b3267ed205060182bd75437a8e4d62ff0c6cf7f041b7525b17d6",
+              "successfully_parsed_entry_count": 4,
+              "total_accounted_entry_count": 4,
+              "unique_native_id_count": 4,
+              "unique_normalized_doi_count": 4,
+              "unique_stable_identity_count": 4
+            }
+          ]
+        },
+        {
+          "accepted_syntax_attempt_number": 1,
+          "child_query_id": "production:STAR-QF03-INTERACTIVE-SYSTEMS:ACMDigitalLibrary:field:keyword",
+          "count_comparison": {
+            "blocks_retrieval_completeness": false,
+            "retrieved_minus_execution_observation": 0,
+            "state": "RECONCILES"
+          },
+          "execution_time_provider_observation": {
+            "count": 12,
+            "observed_at_utc": "2026-09-03T02:13:58Z",
+            "query_syntax_artifact_sha256": "ebe91a54114999da6392118dbfd7bedf298aa1c456453bcede002018f1967bc3"
+          },
+          "field_key": "keyword",
+          "field_label": "Keyword",
+          "frozen_child_query_sha256": "bd043e7ae5e9af7a09c974d5bd7f198489d14c7fa2c48fb55de1a0bbcad8bf7b",
+          "retrieval_completeness_state": "COMPLETE_RETRIEVED_SET",
+          "retrieved_set": {
+            "cross_artifact_stable_identity_overlap_count": 0,
+            "malformed_record_count": 0,
+            "stable_identity_union_digest_sha256": "5e4b2a36166ca28f594146a2dd0165ab8a703e01af2eb9b9b7c4666fa737f9a5",
+            "total_accounted_record_count": 12,
+            "unique_stable_identity_count": 12
+          },
+          "selected_artifacts": [
+            {
+              "byte_size": 27146,
+              "classification": "SELECTED_RETRIEVAL_ARTIFACT",
+              "malformed_entry_count": 0,
+              "missing_or_unparseable_year_count": 0,
+              "missing_stable_identity_count": 0,
+              "operator_label_not_authoritative": true,
+              "parse_issues": [],
+              "physical_header_count": 12,
+              "publication_year_counts": {
+                "2002": 1,
+                "2006": 1,
+                "2010": 1,
+                "2011": 2,
+                "2012": 1,
+                "2013": 1,
+                "2015": 1,
+                "2018": 1,
+                "2021": 1,
+                "2023": 1,
+                "2024": 1
+              },
+              "publication_year_maximum": 2024,
+              "publication_year_minimum": 2002,
+              "raw_sha256": "84c8d8178f31cf007a9fc363020f465f3e59517913c990480f7125265f2194a2",
+              "relative_path": "artifacts/acm_field_execution/2026-09-02/bibtex/QF03/keyword/QF03_keyword_000001-000012.bib",
+              "stable_identity_digest_sha256": "5e4b2a36166ca28f594146a2dd0165ab8a703e01af2eb9b9b7c4666fa737f9a5",
+              "successfully_parsed_entry_count": 12,
+              "total_accounted_entry_count": 12,
+              "unique_native_id_count": 12,
+              "unique_normalized_doi_count": 12,
+              "unique_stable_identity_count": 12
+            }
+          ]
+        },
+        {
+          "accepted_syntax_attempt_number": 1,
+          "child_query_id": "production:STAR-QF03-INTERACTIVE-SYSTEMS:ACMDigitalLibrary:field:abstract",
+          "count_comparison": {
+            "blocks_retrieval_completeness": false,
+            "retrieved_minus_execution_observation": 1,
+            "state": "PROVIDER_INDEX_STATE_DISCREPANCY_NO_AFFIRMATIVE_FAILURE"
+          },
+          "execution_time_provider_observation": {
+            "count": 1983,
+            "observed_at_utc": "2026-09-03T02:15:05Z",
+            "query_syntax_artifact_sha256": "1476df7e871606e97a6d91551f34aadca8bf0106d02e74f9fa94f776443d1f7e"
+          },
+          "field_key": "abstract",
+          "field_label": "Abstract",
+          "frozen_child_query_sha256": "6d877d4d9cc5ab5818948e7c63bb9e71bafb8c145df7fb053dcd776e10f17d86",
+          "retrieval_completeness_state": "COMPLETE_RETRIEVED_SET",
+          "retrieved_set": {
+            "cross_artifact_stable_identity_overlap_count": 0,
+            "malformed_record_count": 1,
+            "stable_identity_union_digest_sha256": "0df388160978c6239aa2354e1a5cee233b39757a993e3c94a8867bbb5e702cd7",
+            "total_accounted_record_count": 1984,
+            "unique_stable_identity_count": 1984
+          },
+          "selected_artifacts": [
+            {
+              "byte_size": 2197305,
+              "classification": "SELECTED_RETRIEVAL_ARTIFACT",
+              "malformed_entry_count": 0,
+              "missing_or_unparseable_year_count": 0,
+              "missing_stable_identity_count": 0,
+              "operator_label_not_authoritative": true,
+              "operator_publication_date_filter": {
+                "from_year": 1971,
+                "inclusive": true,
+                "to_year": 2018
+              },
+              "parse_issues": [],
+              "physical_header_count": 951,
+              "publication_year_counts": {
+                "1971": 1,
+                "1974": 1,
+                "1977": 2,
+                "1978": 2,
+                "1979": 2,
+                "1980": 2,
+                "1981": 3,
+                "1982": 3,
+                "1983": 4,
+                "1984": 1,
+                "1985": 5,
+                "1986": 3,
+                "1987": 7,
+                "1988": 3,
+                "1989": 5,
+                "1990": 9,
+                "1991": 2,
+                "1992": 4,
+                "1993": 4,
+                "1994": 6,
+                "1996": 5,
+                "1997": 1,
+                "1998": 6,
+                "1999": 2,
+                "2000": 13,
+                "2001": 15,
+                "2002": 37,
+                "2003": 22,
+                "2004": 31,
+                "2005": 32,
+                "2006": 39,
+                "2007": 45,
+                "2008": 33,
+                "2009": 48,
+                "2010": 68,
+                "2011": 62,
+                "2012": 67,
+                "2013": 65,
+                "2014": 58,
+                "2015": 43,
+                "2016": 59,
+                "2017": 58,
+                "2018": 73
+              },
+              "publication_year_maximum": 2018,
+              "publication_year_minimum": 1971,
+              "raw_sha256": "99b958d9d9eab6d6cc0c88c8003061d085742d369f42c5172ff2af89fb6902fe",
+              "relative_path": "artifacts/acm_field_execution/2026-09-02/bibtex/QF03/abstract/QF03_abstract_1971-2018.bib",
+              "stable_identity_digest_sha256": "8bd4995249ba765dd12bfa5ff20da55d5a7c0090734205b6ebc28e1d36490eee",
+              "successfully_parsed_entry_count": 951,
+              "total_accounted_entry_count": 951,
+              "unique_native_id_count": 951,
+              "unique_normalized_doi_count": 801,
+              "unique_stable_identity_count": 951
+            },
+            {
+              "byte_size": 169238,
+              "classification": "SELECTED_RETRIEVAL_ARTIFACT",
+              "malformed_entry_count": 0,
+              "missing_or_unparseable_year_count": 0,
+              "missing_stable_identity_count": 0,
+              "operator_label_not_authoritative": true,
+              "operator_publication_date_filter": {
+                "from_year": 2019,
+                "inclusive": true,
+                "to_year": 2019
+              },
+              "parse_issues": [],
+              "physical_header_count": 78,
+              "publication_year_counts": {
+                "2019": 78
+              },
+              "publication_year_maximum": 2019,
+              "publication_year_minimum": 2019,
+              "raw_sha256": "2986f419b44782162dbcc66d134fbeb2899c240b116001a448107da9010ffa80",
+              "relative_path": "artifacts/acm_field_execution/2026-09-02/bibtex/QF03/abstract/QF03_abstract_2019-2019.bib",
+              "stable_identity_digest_sha256": "78db6f9f5110c88a05ab658e494ee790f4f45690f42b1cc8577e0a085973a7d6",
+              "successfully_parsed_entry_count": 78,
+              "total_accounted_entry_count": 78,
+              "unique_native_id_count": 78,
+              "unique_normalized_doi_count": 77,
+              "unique_stable_identity_count": 78
+            },
+            {
+              "byte_size": 2158882,
+              "classification": "SELECTED_RETRIEVAL_ARTIFACT",
+              "malformed_entry_count": 1,
+              "missing_or_unparseable_year_count": 0,
+              "missing_stable_identity_count": 0,
+              "operator_label_not_authoritative": true,
+              "operator_publication_date_filter": {
+                "from_year": 2020,
+                "inclusive": true,
+                "to_year": 2026
+              },
+              "parse_issues": [
+                {
+                  "brace_depth": 1,
+                  "code": "UNBALANCED_BRACES",
+                  "native_id": "10.1145/3664647.3681562",
+                  "ordinal": 640
+                }
+              ],
+              "physical_header_count": 955,
+              "publication_year_counts": {
+                "2020": 100,
+                "2021": 98,
+                "2022": 93,
+                "2023": 109,
+                "2024": 140,
+                "2025": 217,
+                "2026": 198
+              },
+              "publication_year_maximum": 2026,
+              "publication_year_minimum": 2020,
+              "raw_sha256": "c3a971cdb490856001ef8695dec8ad2363e88f7cbfa47daa0b080398dfcefa61",
+              "relative_path": "artifacts/acm_field_execution/2026-09-02/bibtex/QF03/abstract/QF03_abstract_2020-2026.bib",
+              "stable_identity_digest_sha256": "cc9906fd6cc013e6474dc0d9d1b3f1688cf66f676294aa22c87a69b4b10376e5",
+              "successfully_parsed_entry_count": 954,
+              "total_accounted_entry_count": 955,
+              "unique_native_id_count": 955,
+              "unique_normalized_doi_count": 933,
+              "unique_stable_identity_count": 955
+            }
+          ]
+        }
+      ],
+      "family_id": "STAR-QF03-INTERACTIVE-SYSTEMS",
+      "field_union": {
+        "overlap_counts": {
+          "abstract_only": 1979,
+          "keyword_abstract": 3,
+          "keyword_only": 9,
+          "title_abstract": 2,
+          "title_keyword": 0,
+          "title_only": 2,
+          "triple_overlap": 0
+        },
+        "stable_identity_union_digest_sha256": "21885c632ce0374e582584647d59e0e1e953f46244638317b0026b77c221c6c1",
+        "state": "COMPLETE_SET_RECONCILED_NOT_IMPORTED",
+        "unique_stable_identity_count": 1995
+      },
+      "parent_query_id": "production:STAR-QF03-INTERACTIVE-SYSTEMS:ACMDigitalLibrary"
+    },
+    {
+      "children": [
+        {
+          "accepted_syntax_attempt_number": 1,
+          "child_query_id": "production:STAR-QF04-NONDESKTOP-ENV:ACMDigitalLibrary:field:title",
+          "count_comparison": {
+            "blocks_retrieval_completeness": false,
+            "retrieved_minus_execution_observation": 0,
+            "state": "RECONCILES"
+          },
+          "execution_time_provider_observation": {
+            "count": 23,
+            "observed_at_utc": "2026-09-03T02:16:21Z",
+            "query_syntax_artifact_sha256": "0beb2636e81cc4fff25d2b046bd1c74d0d9f34482283bc8b1069b6d6e8950733"
+          },
+          "field_key": "title",
+          "field_label": "Title",
+          "frozen_child_query_sha256": "d4a450fbcd39a186e8843efdcd6622c693d01a0df20749523a5acf9ee4145415",
+          "retrieval_completeness_state": "COMPLETE_RETRIEVED_SET",
+          "retrieved_set": {
+            "cross_artifact_stable_identity_overlap_count": 0,
+            "malformed_record_count": 0,
+            "stable_identity_union_digest_sha256": "f84580b29b81b907c3ba435dc02374ae196449df47a506e0e91b6c19467f9b08",
+            "total_accounted_record_count": 23,
+            "unique_stable_identity_count": 23
+          },
+          "selected_artifacts": [
+            {
+              "byte_size": 41308,
+              "classification": "SELECTED_RETRIEVAL_ARTIFACT",
+              "malformed_entry_count": 0,
+              "missing_or_unparseable_year_count": 0,
+              "missing_stable_identity_count": 0,
+              "operator_label_not_authoritative": true,
+              "parse_issues": [],
+              "physical_header_count": 23,
+              "publication_year_counts": {
+                "1999": 1,
+                "2001": 1,
+                "2009": 1,
+                "2012": 1,
+                "2015": 1,
+                "2016": 1,
+                "2017": 1,
+                "2018": 2,
+                "2019": 4,
+                "2020": 2,
+                "2021": 1,
+                "2022": 4,
+                "2024": 2,
+                "2026": 1
+              },
+              "publication_year_maximum": 2026,
+              "publication_year_minimum": 1999,
+              "raw_sha256": "6facbb0cc217e6219024d35924124558e5f4824e54c4dedb68bb562564e4a850",
+              "relative_path": "artifacts/acm_field_execution/2026-09-02/bibtex/QF04/title/QF04_title_000001-000023.bib",
+              "stable_identity_digest_sha256": "f84580b29b81b907c3ba435dc02374ae196449df47a506e0e91b6c19467f9b08",
+              "successfully_parsed_entry_count": 23,
+              "total_accounted_entry_count": 23,
+              "unique_native_id_count": 23,
+              "unique_normalized_doi_count": 23,
+              "unique_stable_identity_count": 23
+            }
+          ]
+        },
+        {
+          "accepted_syntax_attempt_number": 1,
+          "child_query_id": "production:STAR-QF04-NONDESKTOP-ENV:ACMDigitalLibrary:field:keyword",
+          "count_comparison": {
+            "blocks_retrieval_completeness": false,
+            "retrieved_minus_execution_observation": 0,
+            "state": "RECONCILES"
+          },
+          "execution_time_provider_observation": {
+            "count": 34,
+            "observed_at_utc": "2026-09-03T02:19:18Z",
+            "query_syntax_artifact_sha256": "89177437e377614ba0234a12cd8aa205ba1c41b6392492a4a8da2cba265f393f"
+          },
+          "field_key": "keyword",
+          "field_label": "Keyword",
+          "frozen_child_query_sha256": "ac1537509a6def06de6019fa930055df8bee5d4e48daa20ade76fc1ce105df36",
+          "retrieval_completeness_state": "COMPLETE_RETRIEVED_SET",
+          "retrieved_set": {
+            "cross_artifact_stable_identity_overlap_count": 0,
+            "malformed_record_count": 0,
+            "stable_identity_union_digest_sha256": "0a5146ecfb1c78f1203ccb1c689fd4f53214d13769c5d28b5688619fb8bae03d",
+            "total_accounted_record_count": 34,
+            "unique_stable_identity_count": 34
+          },
+          "selected_artifacts": [
+            {
+              "byte_size": 62957,
+              "classification": "SELECTED_RETRIEVAL_ARTIFACT",
+              "malformed_entry_count": 0,
+              "missing_or_unparseable_year_count": 0,
+              "missing_stable_identity_count": 0,
+              "operator_label_not_authoritative": true,
+              "parse_issues": [],
+              "physical_header_count": 34,
+              "publication_year_counts": {
+                "1997": 1,
+                "2004": 3,
+                "2005": 2,
+                "2008": 1,
+                "2009": 1,
+                "2010": 1,
+                "2015": 1,
+                "2016": 2,
+                "2017": 1,
+                "2018": 2,
+                "2019": 3,
+                "2020": 2,
+                "2021": 2,
+                "2022": 3,
+                "2023": 3,
+                "2024": 3,
+                "2025": 2,
+                "2026": 1
+              },
+              "publication_year_maximum": 2026,
+              "publication_year_minimum": 1997,
+              "raw_sha256": "e0ac2690a39aebe4901ace7e8c0d8ff7ae8ce7314527d20e61da5293d07f8210",
+              "relative_path": "artifacts/acm_field_execution/2026-09-02/bibtex/QF04/keyword/QF04_keyword_000001-000034.bib",
+              "stable_identity_digest_sha256": "0a5146ecfb1c78f1203ccb1c689fd4f53214d13769c5d28b5688619fb8bae03d",
+              "successfully_parsed_entry_count": 34,
+              "total_accounted_entry_count": 34,
+              "unique_native_id_count": 34,
+              "unique_normalized_doi_count": 33,
+              "unique_stable_identity_count": 34
+            }
+          ]
+        },
+        {
+          "accepted_syntax_attempt_number": 1,
+          "child_query_id": "production:STAR-QF04-NONDESKTOP-ENV:ACMDigitalLibrary:field:abstract",
+          "count_comparison": {
+            "blocks_retrieval_completeness": false,
+            "retrieved_minus_execution_observation": 1,
+            "state": "PROVIDER_INDEX_STATE_DISCREPANCY_NO_AFFIRMATIVE_FAILURE"
+          },
+          "execution_time_provider_observation": {
+            "count": 2432,
+            "observed_at_utc": "2026-09-03T02:20:19Z",
+            "query_syntax_artifact_sha256": "f6535ed358beae8bfb5eb514a68741108034055368477a3050a012dfaf411100"
+          },
+          "field_key": "abstract",
+          "field_label": "Abstract",
+          "frozen_child_query_sha256": "05b21446a9e13987f59438f1d07f20f073a3a07931cf95af5ddab504f9b1a046",
+          "retrieval_completeness_state": "COMPLETE_RETRIEVED_SET",
+          "retrieved_set": {
+            "cross_artifact_stable_identity_overlap_count": 0,
+            "malformed_record_count": 0,
+            "stable_identity_union_digest_sha256": "c641c11d44092e2a56c0b5c994fc474fddc59902fdabe152c3bae7317eaf5579",
+            "total_accounted_record_count": 2433,
+            "unique_stable_identity_count": 2433
+          },
+          "selected_artifacts": [
+            {
+              "byte_size": 1938261,
+              "classification": "SELECTED_RETRIEVAL_ARTIFACT",
+              "malformed_entry_count": 0,
+              "missing_or_unparseable_year_count": 0,
+              "missing_stable_identity_count": 0,
+              "operator_label_not_authoritative": true,
+              "operator_publication_date_filter": {
+                "from_year": 1978,
+                "inclusive": true,
+                "to_year": 2018
+              },
+              "parse_issues": [],
+              "physical_header_count": 999,
+              "publication_year_counts": {
+                "1978": 1,
+                "1980": 1,
+                "1987": 1,
+                "1989": 1,
+                "1990": 2,
+                "1993": 2,
+                "1994": 2,
+                "1995": 2,
+                "1996": 4,
+                "1997": 3,
+                "1998": 4,
+                "1999": 12,
+                "2000": 13,
+                "2001": 20,
+                "2002": 22,
+                "2003": 16,
+                "2004": 46,
+                "2005": 41,
+                "2006": 34,
+                "2007": 33,
+                "2008": 46,
+                "2009": 38,
+                "2010": 40,
+                "2011": 41,
+                "2012": 57,
+                "2013": 51,
+                "2014": 48,
+                "2015": 65,
+                "2016": 96,
+                "2017": 103,
+                "2018": 154
+              },
+              "publication_year_maximum": 2018,
+              "publication_year_minimum": 1978,
+              "raw_sha256": "eef8acf0c18f5e484632386d5433350341edbba97c7714980bb525a445457b2c",
+              "relative_path": "artifacts/acm_field_execution/2026-09-02/bibtex/QF04/abstract/QF04_abstract_1978-2018.bib",
+              "stable_identity_digest_sha256": "49cbe631e6085be245629e36bb1401b4705c66bce7130d9811b0afa2e6ae764c",
+              "successfully_parsed_entry_count": 999,
+              "total_accounted_entry_count": 999,
+              "unique_native_id_count": 999,
+              "unique_normalized_doi_count": 874,
+              "unique_stable_identity_count": 999
+            },
+            {
+              "byte_size": 1966680,
+              "classification": "SELECTED_RETRIEVAL_ARTIFACT",
+              "malformed_entry_count": 0,
+              "missing_or_unparseable_year_count": 0,
+              "missing_stable_identity_count": 0,
+              "operator_label_not_authoritative": true,
+              "operator_publication_date_filter": {
+                "from_year": 2019,
+                "inclusive": true,
+                "to_year": 2024
+              },
+              "parse_issues": [],
+              "physical_header_count": 988,
+              "publication_year_counts": {
+                "2019": 148,
+                "2020": 119,
+                "2021": 124,
+                "2022": 169,
+                "2023": 201,
+                "2024": 227
+              },
+              "publication_year_maximum": 2024,
+              "publication_year_minimum": 2019,
+              "raw_sha256": "ab985f6f85c10b2d1ba3e9002249e964583ff1dbe4cf8c061d3677afe7c2f39d",
+              "relative_path": "artifacts/acm_field_execution/2026-09-02/bibtex/QF04/abstract/QF04_abstract_2019-2024.bib",
+              "stable_identity_digest_sha256": "7d7f1eaf827cbde321287f984420ee696d00641bbe25abade5c84006e4521db5",
+              "successfully_parsed_entry_count": 988,
+              "total_accounted_entry_count": 988,
+              "unique_native_id_count": 988,
+              "unique_normalized_doi_count": 971,
+              "unique_stable_identity_count": 988
+            },
+            {
+              "byte_size": 924568,
+              "classification": "SELECTED_RETRIEVAL_ARTIFACT",
+              "malformed_entry_count": 0,
+              "missing_or_unparseable_year_count": 0,
+              "missing_stable_identity_count": 0,
+              "operator_label_not_authoritative": true,
+              "operator_publication_date_filter": {
+                "from_year": 2025,
+                "inclusive": true,
+                "to_year": 2026
+              },
+              "parse_issues": [],
+              "physical_header_count": 446,
+              "publication_year_counts": {
+                "2025": 256,
+                "2026": 190
+              },
+              "publication_year_maximum": 2026,
+              "publication_year_minimum": 2025,
+              "raw_sha256": "99e43a76624d2bedca6d0e1a9f14d197fbd4acfc76ba0d7ce84e9c5effd3bc74",
+              "relative_path": "artifacts/acm_field_execution/2026-09-02/bibtex/QF04/abstract/QF04_abstract_2025-2026.bib",
+              "stable_identity_digest_sha256": "02bff18e8f55569501a62f80a00fc0a4b365a767b0167e6327278a497494e7f0",
+              "successfully_parsed_entry_count": 446,
+              "total_accounted_entry_count": 446,
+              "unique_native_id_count": 446,
+              "unique_normalized_doi_count": 442,
+              "unique_stable_identity_count": 446
+            }
+          ]
+        }
+      ],
+      "family_id": "STAR-QF04-NONDESKTOP-ENV",
+      "field_union": {
+        "overlap_counts": {
+          "abstract_only": 2404,
+          "keyword_abstract": 13,
+          "keyword_only": 16,
+          "title_abstract": 12,
+          "title_keyword": 1,
+          "title_only": 6,
+          "triple_overlap": 4
+        },
+        "stable_identity_union_digest_sha256": "870734a26ccd16de1a1592e541ea774b554ddeb418fb7706b66c17afbdef68bc",
+        "state": "COMPLETE_SET_RECONCILED_NOT_IMPORTED",
+        "unique_stable_identity_count": 2456
+      },
+      "parent_query_id": "production:STAR-QF04-NONDESKTOP-ENV:ACMDigitalLibrary"
+    },
+    {
+      "children": [
+        {
+          "accepted_syntax_attempt_number": 1,
+          "child_query_id": "production:STAR-QF05-CONVERSATIONAL:ACMDigitalLibrary:field:title",
+          "count_comparison": {
+            "blocks_retrieval_completeness": false,
+            "retrieved_minus_execution_observation": 0,
+            "state": "RECONCILES"
+          },
+          "execution_time_provider_observation": {
+            "count": 19,
+            "observed_at_utc": "2026-09-03T02:21:36Z",
+            "query_syntax_artifact_sha256": "b7de6f005668a5604d3f77ed5395f2f754e61fa6119268334cf508c2e386a58e"
+          },
+          "field_key": "title",
+          "field_label": "Title",
+          "frozen_child_query_sha256": "5dcc0721bc7683b30ee051dc6a95b26428aa5ebd283a92bd7b03e141fb1eea92",
+          "retrieval_completeness_state": "COMPLETE_RETRIEVED_SET",
+          "retrieved_set": {
+            "cross_artifact_stable_identity_overlap_count": 0,
+            "malformed_record_count": 0,
+            "stable_identity_union_digest_sha256": "0a4433585ea520f2a45fe62f938ee42409202c622a019b38faf1d1c44aecf1bd",
+            "total_accounted_record_count": 19,
+            "unique_stable_identity_count": 19
+          },
+          "selected_artifacts": [
+            {
+              "byte_size": 37393,
+              "classification": "SELECTED_RETRIEVAL_ARTIFACT",
+              "malformed_entry_count": 0,
+              "missing_or_unparseable_year_count": 0,
+              "missing_stable_identity_count": 0,
+              "operator_label_not_authoritative": true,
+              "parse_issues": [],
+              "physical_header_count": 19,
+              "publication_year_counts": {
+                "2018": 1,
+                "2020": 1,
+                "2022": 1,
+                "2023": 3,
+                "2024": 1,
+                "2025": 6,
+                "2026": 6
+              },
+              "publication_year_maximum": 2026,
+              "publication_year_minimum": 2018,
+              "raw_sha256": "ea947d42bf4bd4c2552be8e6fa6f746dffbd75d2bb3d49b7d1251c4a44131165",
+              "relative_path": "artifacts/acm_field_execution/2026-09-02/bibtex/QF05/title/QF05_title_000001-000019.bib",
+              "stable_identity_digest_sha256": "0a4433585ea520f2a45fe62f938ee42409202c622a019b38faf1d1c44aecf1bd",
+              "successfully_parsed_entry_count": 19,
+              "total_accounted_entry_count": 19,
+              "unique_native_id_count": 19,
+              "unique_normalized_doi_count": 19,
+              "unique_stable_identity_count": 19
+            }
+          ]
+        },
+        {
+          "accepted_syntax_attempt_number": 1,
+          "child_query_id": "production:STAR-QF05-CONVERSATIONAL:ACMDigitalLibrary:field:keyword",
+          "count_comparison": {
+            "blocks_retrieval_completeness": false,
+            "retrieved_minus_execution_observation": 0,
+            "state": "RECONCILES"
+          },
+          "execution_time_provider_observation": {
+            "count": 24,
+            "observed_at_utc": "2026-09-03T02:22:37Z",
+            "query_syntax_artifact_sha256": "4b75c28758745f3b7a0b9af2d8a0432c7cb747714a368054177638cdcae7ea42"
+          },
+          "field_key": "keyword",
+          "field_label": "Keyword",
+          "frozen_child_query_sha256": "fec621fa7e1471b32b205f590fc2ece1b4d43958ef1faadb2a365a6612ff4e6b",
+          "retrieval_completeness_state": "COMPLETE_RETRIEVED_SET",
+          "retrieved_set": {
+            "cross_artifact_stable_identity_overlap_count": 0,
+            "malformed_record_count": 0,
+            "stable_identity_union_digest_sha256": "d1e3cbce6328033de96e184b11e8013d07dc763e31ecdcf212824db18023dfb0",
+            "total_accounted_record_count": 24,
+            "unique_stable_identity_count": 24
+          },
+          "selected_artifacts": [
+            {
+              "byte_size": 48617,
+              "classification": "SELECTED_RETRIEVAL_ARTIFACT",
+              "malformed_entry_count": 0,
+              "missing_or_unparseable_year_count": 0,
+              "missing_stable_identity_count": 0,
+              "operator_label_not_authoritative": true,
+              "parse_issues": [],
+              "physical_header_count": 24,
+              "publication_year_counts": {
+                "2005": 1,
+                "2010": 1,
+                "2013": 1,
+                "2016": 1,
+                "2020": 1,
+                "2021": 2,
+                "2022": 2,
+                "2023": 3,
+                "2024": 1,
+                "2025": 3,
+                "2026": 8
+              },
+              "publication_year_maximum": 2026,
+              "publication_year_minimum": 2005,
+              "raw_sha256": "0bea85413cebcb0184e563441a10b99a48d8f700041fe648afa1ff53976d1c86",
+              "relative_path": "artifacts/acm_field_execution/2026-09-02/bibtex/QF05/keyword/QF05_keyword_000001-000024.bib",
+              "stable_identity_digest_sha256": "d1e3cbce6328033de96e184b11e8013d07dc763e31ecdcf212824db18023dfb0",
+              "successfully_parsed_entry_count": 24,
+              "total_accounted_entry_count": 24,
+              "unique_native_id_count": 24,
+              "unique_normalized_doi_count": 21,
+              "unique_stable_identity_count": 24
+            }
+          ]
+        },
+        {
+          "accepted_syntax_attempt_number": 1,
+          "child_query_id": "production:STAR-QF05-CONVERSATIONAL:ACMDigitalLibrary:field:abstract",
+          "count_comparison": {
+            "blocks_retrieval_completeness": false,
+            "retrieved_minus_execution_observation": 2,
+            "state": "PROVIDER_INDEX_STATE_DISCREPANCY_NO_AFFIRMATIVE_FAILURE"
+          },
+          "execution_time_provider_observation": {
+            "count": 3454,
+            "observed_at_utc": "2026-09-03T02:23:26Z",
+            "query_syntax_artifact_sha256": "d5bc5f7d01ebbbed5a6fde02e229bf490d66d2523a1ff1f43a65421776ee844f"
+          },
+          "field_key": "abstract",
+          "field_label": "Abstract",
+          "frozen_child_query_sha256": "aa10bc34ae896393c2d4ad42f2df1d2c6de3a794f51c99d35ad09f9bdd431a86",
+          "retrieval_completeness_state": "COMPLETE_RETRIEVED_SET",
+          "retrieved_set": {
+            "cross_artifact_stable_identity_overlap_count": 0,
+            "malformed_record_count": 1,
+            "stable_identity_union_digest_sha256": "d6b2975c3bc7383f996179e0f968e7e9480055eff7bf556057599ce87c1925bd",
+            "total_accounted_record_count": 3456,
+            "unique_stable_identity_count": 3456
+          },
+          "selected_artifacts": [
+            {
+              "byte_size": 2392351,
+              "classification": "SELECTED_RETRIEVAL_ARTIFACT",
+              "malformed_entry_count": 0,
+              "missing_or_unparseable_year_count": 0,
+              "missing_stable_identity_count": 0,
+              "operator_label_not_authoritative": true,
+              "operator_publication_date_filter": {
+                "from_year": 1972,
+                "inclusive": true,
+                "to_year": 2017
+              },
+              "parse_issues": [],
+              "physical_header_count": 908,
+              "publication_year_counts": {
+                "1972": 1,
+                "1973": 3,
+                "1976": 3,
+                "1977": 2,
+                "1978": 1,
+                "1979": 1,
+                "1980": 1,
+                "1981": 1,
+                "1982": 4,
+                "1983": 1,
+                "1985": 9,
+                "1986": 7,
+                "1987": 9,
+                "1988": 7,
+                "1989": 8,
+                "1990": 9,
+                "1991": 3,
+                "1992": 7,
+                "1993": 8,
+                "1994": 4,
+                "1995": 3,
+                "1996": 7,
+                "1997": 2,
+                "1998": 7,
+                "1999": 3,
+                "2000": 11,
+                "2001": 10,
+                "2002": 34,
+                "2003": 25,
+                "2004": 25,
+                "2005": 35,
+                "2006": 34,
+                "2007": 38,
+                "2008": 47,
+                "2009": 48,
+                "2010": 64,
+                "2011": 44,
+                "2012": 61,
+                "2013": 60,
+                "2014": 57,
+                "2015": 55,
+                "2016": 73,
+                "2017": 76
+              },
+              "publication_year_maximum": 2017,
+              "publication_year_minimum": 1972,
+              "raw_sha256": "81f1b215d38c4c4dbf80a53954fff0c71b109bd330bca99897ec8b5b3c0e1e8d",
+              "relative_path": "artifacts/acm_field_execution/2026-09-02/bibtex/QF05/abstract/QF05_abstract_1972-2017.bib",
+              "stable_identity_digest_sha256": "dcfb2e6a914fb0a097bad215ad9d276b01e1fac1102426ed544777389a42406d",
+              "successfully_parsed_entry_count": 908,
+              "total_accounted_entry_count": 908,
+              "unique_native_id_count": 908,
+              "unique_normalized_doi_count": 672,
+              "unique_stable_identity_count": 908
+            },
+            {
+              "byte_size": 1895489,
+              "classification": "SELECTED_RETRIEVAL_ARTIFACT",
+              "malformed_entry_count": 0,
+              "missing_or_unparseable_year_count": 0,
+              "missing_stable_identity_count": 0,
+              "operator_label_not_authoritative": true,
+              "operator_publication_date_filter": {
+                "from_year": 2018,
+                "inclusive": true,
+                "to_year": 2023
+              },
+              "parse_issues": [],
+              "physical_header_count": 858,
+              "publication_year_counts": {
+                "2018": 100,
+                "2019": 102,
+                "2020": 126,
+                "2021": 160,
+                "2022": 151,
+                "2023": 219
+              },
+              "publication_year_maximum": 2023,
+              "publication_year_minimum": 2018,
+              "raw_sha256": "0f932452d66a341e862b849cd7651d5b1fe4c88a1e2d840475b6ecf70d1d26f8",
+              "relative_path": "artifacts/acm_field_execution/2026-09-02/bibtex/QF05/abstract/QF05_abstract_2018-2023.bib",
+              "stable_identity_digest_sha256": "28f5c107519eed3bbd665f0001a92b38a5b7c8b5f8ade23983209d08e3a22591",
+              "successfully_parsed_entry_count": 858,
+              "total_accounted_entry_count": 858,
+              "unique_native_id_count": 858,
+              "unique_normalized_doi_count": 801,
+              "unique_stable_identity_count": 858
+            },
+            {
+              "byte_size": 1006846,
+              "classification": "SELECTED_RETRIEVAL_ARTIFACT",
+              "malformed_entry_count": 0,
+              "missing_or_unparseable_year_count": 0,
+              "missing_stable_identity_count": 0,
+              "operator_label_not_authoritative": true,
+              "operator_publication_date_filter": {
+                "from_year": 2024,
+                "inclusive": true,
+                "to_year": 2024
+              },
+              "parse_issues": [],
+              "physical_header_count": 459,
+              "publication_year_counts": {
+                "2024": 458,
+                "2025": 1
+              },
+              "publication_year_maximum": 2025,
+              "publication_year_minimum": 2024,
+              "raw_sha256": "333659b923367818b4906e040f18af61f55a98fa4d10a0e0bc68c452407d4788",
+              "relative_path": "artifacts/acm_field_execution/2026-09-02/bibtex/QF05/abstract/QF05_abstract_2024-2024.bib",
+              "stable_identity_digest_sha256": "cac71e1f4729699ed24b8aab3d62afb50511e88a59d53322ae42eb03618d7cb9",
+              "successfully_parsed_entry_count": 459,
+              "total_accounted_entry_count": 459,
+              "unique_native_id_count": 459,
+              "unique_normalized_doi_count": 447,
+              "unique_stable_identity_count": 459
+            },
+            {
+              "byte_size": 1425268,
+              "classification": "SELECTED_RETRIEVAL_ARTIFACT",
+              "malformed_entry_count": 0,
+              "missing_or_unparseable_year_count": 0,
+              "missing_stable_identity_count": 0,
+              "operator_label_not_authoritative": true,
+              "operator_publication_date_filter": {
+                "from_year": 2025,
+                "inclusive": true,
+                "to_year": 2025
+              },
+              "parse_issues": [],
+              "physical_header_count": 668,
+              "publication_year_counts": {
+                "2025": 649,
+                "2026": 19
+              },
+              "publication_year_maximum": 2026,
+              "publication_year_minimum": 2025,
+              "raw_sha256": "f209cdd7131990af6d0447188bb3e890176b0236bbf0ee33f8f494832f8aa3a7",
+              "relative_path": "artifacts/acm_field_execution/2026-09-02/bibtex/QF05/abstract/QF05_abstract_2025-2025.bib",
+              "stable_identity_digest_sha256": "79b449eef730e4e9f5d68bdc7073727cdb745883d55e07e4328a89b1a0a5d096",
+              "successfully_parsed_entry_count": 668,
+              "total_accounted_entry_count": 668,
+              "unique_native_id_count": 668,
+              "unique_normalized_doi_count": 638,
+              "unique_stable_identity_count": 668
+            },
+            {
+              "byte_size": 1223765,
+              "classification": "SELECTED_RETRIEVAL_ARTIFACT",
+              "malformed_entry_count": 1,
+              "missing_or_unparseable_year_count": 0,
+              "missing_stable_identity_count": 0,
+              "operator_label_not_authoritative": true,
+              "operator_publication_date_filter": {
+                "from_year": 2026,
+                "inclusive": true,
+                "to_year": 2026
+              },
+              "parse_issues": [
+                {
+                  "brace_depth": 1,
+                  "code": "UNBALANCED_BRACES",
+                  "native_id": "10.1145/3805712.3808367",
+                  "ordinal": 461
+                }
+              ],
+              "physical_header_count": 563,
+              "publication_year_counts": {
+                "2026": 563
+              },
+              "publication_year_maximum": 2026,
+              "publication_year_minimum": 2026,
+              "raw_sha256": "bbe5ed23bcf29544c4092a6368ba27d2d575174cbf1d8a6fcbbce774636efb5e",
+              "relative_path": "artifacts/acm_field_execution/2026-09-02/bibtex/QF05/abstract/QF05_abstract_2026-2026.bib",
+              "stable_identity_digest_sha256": "955a6b2f000891f260e763fdd59c9f724e529c9670c75f5bc862c917b56c633b",
+              "successfully_parsed_entry_count": 562,
+              "total_accounted_entry_count": 563,
+              "unique_native_id_count": 563,
+              "unique_normalized_doi_count": 547,
+              "unique_stable_identity_count": 563
+            }
+          ]
+        }
+      ],
+      "family_id": "STAR-QF05-CONVERSATIONAL",
+      "field_union": {
+        "overlap_counts": {
+          "abstract_only": 3435,
+          "keyword_abstract": 7,
+          "keyword_only": 16,
+          "title_abstract": 13,
+          "title_keyword": 0,
+          "title_only": 5,
+          "triple_overlap": 1
+        },
+        "stable_identity_union_digest_sha256": "6f3c70f13969ef00093cb5b35304509cd7a25ae6d9decb36775e93eca07248fd",
+        "state": "COMPLETE_SET_RECONCILED_NOT_IMPORTED",
+        "unique_stable_identity_count": 3477
+      },
+      "parent_query_id": "production:STAR-QF05-CONVERSATIONAL:ACMDigitalLibrary"
+    }
+  ],
+  "limitations": {
+    "ambiguous_screenshot_family_count": 4,
+    "exact_bibtex_export_timestamps": "NOT_RECOVERABLE",
+    "institutional_access_tier": "NOT_RECORDED",
+    "limitations_block_retrieved_set_completeness": false,
+    "operator_identity": "NOT_RECORDED"
+  },
+  "manifest_hash": "c159e0b2b6dc7991d0eab55ed5b395817d524c0b8245011db3d083870f3f4e12",
+  "manifest_id": "star-acm-field-execution-2026-09-03-final-reconciliation",
+  "manifest_version": "1.0.0",
+  "methodology": {
+    "affirmative_operator_or_export_failure_blocks_selection": true,
+    "count_differences_without_affirmative_failure": "documented provider/index-state discrepancies",
+    "export_order_used_for_completeness": false,
+    "later_provider_observations_are_completeness_gates": false,
+    "prospective_same_snapshot_partition_gates_preserved": true,
+    "provider_index_temporal_invariance_required": false,
+    "retrieved_record_set": "selected raw BibTeX artifacts reconciled by stable identity",
+    "search_specification": "frozen production query expressions plus accepted ACM field syntax"
+  },
+  "nonselected_preserved_bibtex_artifacts": [
+    {
+      "affirmative_operator_or_export_failure": false,
+      "byte_size": 2101534,
+      "classification": "CALIBRATION_ONLY",
+      "malformed_entry_count": 0,
+      "missing_or_unparseable_year_count": 0,
+      "missing_stable_identity_count": 0,
+      "parse_issues": [],
+      "physical_header_count": 1000,
+      "publication_year_counts": {
+        "1990": 1,
+        "1991": 3,
+        "1992": 3,
+        "1993": 3,
+        "1995": 1,
+        "1997": 1,
+        "1998": 2,
+        "1999": 2,
+        "2000": 7,
+        "2001": 6,
+        "2002": 7,
+        "2003": 6,
+        "2004": 11,
+        "2005": 12,
+        "2006": 12,
+        "2007": 9,
+        "2008": 9,
+        "2009": 18,
+        "2010": 21,
+        "2011": 18,
+        "2012": 26,
+        "2013": 21,
+        "2014": 34,
+        "2015": 28,
+        "2016": 31,
+        "2017": 34,
+        "2018": 54,
+        "2019": 47,
+        "2020": 43,
+        "2021": 41,
+        "2022": 62,
+        "2023": 80,
+        "2024": 104,
+        "2025": 103,
+        "2026": 140
+      },
+      "publication_year_maximum": 2026,
+      "publication_year_minimum": 1990,
+      "raw_sha256": "f14da73ed600fdb9589732bffa61924efdc4bb5351721af08319eb150db35e5a",
+      "reason": "ACM Export All ceiling calibration; never eligible for the partition union",
+      "relative_path": "artifacts/acm_field_execution/2026-09-02/bibtex/QF01/abstract/QF01_abstract_000001-001931.bib",
+      "stable_identity_digest_sha256": "120690ad12dfb0f0070825132f4d3e8505f31c6e6962194c8bbe6b36a8281fb1",
+      "successfully_parsed_entry_count": 1000,
+      "total_accounted_entry_count": 1000,
+      "unique_native_id_count": 1000,
+      "unique_normalized_doi_count": 931,
+      "unique_stable_identity_count": 1000
+    },
+    {
+      "affirmative_operator_or_export_failure": true,
+      "byte_size": 35820,
+      "classification": "SUPERSEDED_INCOMPLETE_OPERATOR_EXPORT",
+      "failure_resolved_by_superseding_artifact": true,
+      "malformed_entry_count": 0,
+      "missing_or_unparseable_year_count": 0,
+      "missing_stable_identity_count": 0,
+      "parse_issues": [],
+      "physical_header_count": 20,
+      "publication_year_counts": {
+        "2002": 1,
+        "2008": 1,
+        "2011": 1,
+        "2016": 1,
+        "2017": 3,
+        "2018": 1,
+        "2019": 5,
+        "2020": 1,
+        "2022": 2,
+        "2023": 2,
+        "2024": 2
+      },
+      "publication_year_maximum": 2024,
+      "publication_year_minimum": 2002,
+      "raw_sha256": "b9b4ce31a47822dd81d86ee77cc51804f75329a85221a58276cf133e9d6ee7ba",
+      "reason": "affirmative first-page-only export error superseded by the 28-record Export All artifact",
+      "relative_path": "artifacts/acm_field_execution/2026-09-02/bibtex/QF01/keyword/QF01_keyword_000001-000020.bib",
+      "selected_export_additional_identity_count": 8,
+      "stable_identity_digest_sha256": "10506fc8263a068a7b5b2da9e6250425badbbc7dd02599c708e0deddc27fdd43",
+      "stable_identity_set_relationship": "STRICT_SUBSET_OF_SELECTED_EXPORT",
+      "successfully_parsed_entry_count": 20,
+      "total_accounted_entry_count": 20,
+      "unique_native_id_count": 20,
+      "unique_normalized_doi_count": 20,
+      "unique_stable_identity_count": 20
+    },
+    {
+      "affirmative_operator_or_export_failure": false,
+      "byte_size": 1654533,
+      "classification": "SUPERSEDED_DUPLICATE_EXPORT",
+      "malformed_entry_count": 1,
+      "missing_or_unparseable_year_count": 0,
+      "missing_stable_identity_count": 0,
+      "parse_issues": [
+        {
+          "brace_depth": 1,
+          "code": "UNBALANCED_BRACES",
+          "native_id": "10.1145/3805712.3808367",
+          "ordinal": 457
+        }
+      ],
+      "physical_header_count": 768,
+      "publication_year_counts": {
+        "2025": 406,
+        "2026": 362
+      },
+      "publication_year_maximum": 2026,
+      "publication_year_minimum": 2025,
+      "raw_sha256": "7864cdc1e00b95a1a3626ab0faab34572f8f7e6c5cef6c4117de588d40d514d1",
+      "reason": "same 768-record stable-identity set as the selected 2025-2026 operator-labeled artifact",
+      "relative_path": "artifacts/acm_field_execution/2026-09-02/bibtex/QF02/abstract/QF02_abstract_2025-2025_SHORT.bib",
+      "stable_identity_digest_sha256": "176a000fa5423b35fe63ef509344d5bda695b212df2a8ba026af3c332638e15b",
+      "stable_identity_set_relationship": "IDENTICAL_TO_SELECTED_EXPORT",
+      "successfully_parsed_entry_count": 767,
+      "total_accounted_entry_count": 768,
+      "unique_native_id_count": 768,
+      "unique_normalized_doi_count": 751,
+      "unique_stable_identity_count": 768
+    },
+    {
+      "affirmative_operator_or_export_failure": false,
+      "byte_size": 1490832,
+      "classification": "SUPERSEDED_OVERLAPPING_EXPLORATORY_EXPORT",
+      "malformed_entry_count": 0,
+      "missing_or_unparseable_year_count": 0,
+      "missing_stable_identity_count": 0,
+      "parse_issues": [],
+      "physical_header_count": 678,
+      "publication_year_counts": {
+        "2023": 219,
+        "2024": 458,
+        "2025": 1
+      },
+      "publication_year_maximum": 2025,
+      "publication_year_minimum": 2023,
+      "raw_sha256": "9d883e03ceaf46992f897ad00fad140d0169904c168cde317a7382bff4b1ec59",
+      "reason": "overlaps the selected single-year artifacts and is preserved outside the production union",
+      "relative_path": "artifacts/acm_field_execution/2026-09-02/bibtex/QF05/abstract/QF05_abstract_2024-2025.bib",
+      "stable_identity_digest_sha256": "6309435f7399f7936c489cdbc846e48dbbfc9448fac139d6a5751036d635873f",
+      "successfully_parsed_entry_count": 678,
+      "total_accounted_entry_count": 678,
+      "unique_native_id_count": 678,
+      "unique_normalized_doi_count": 656,
+      "unique_stable_identity_count": 678
+    }
+  ],
+  "production_side_effects": {
+    "corpus_membership_created": false,
+    "e6_derived": false,
+    "llm_executed": false,
+    "prisma_generated": false,
+    "record_occurrence_created": false,
+    "retrieval_run_created": false,
+    "screening_executed": false
+  },
+  "readiness": {
+    "acm_retrieval_evidence_complete": true,
+    "global_production_wave_ready": false,
+    "manual_acm_interaction_required": false,
+    "next_acm_transition": "PRODUCTION_ARTIFACT_IMPORT_WHEN_AUTHORIZED",
+    "production_import_performed": false
+  },
+  "reconciled_at_utc": "2026-09-03T18:29:49Z",
+  "schema_version": "1.0.0",
+  "status": "RETRIEVAL_EVIDENCE_COMPLETE_NOT_IMPORTED",
+  "subsequent_verification_screenshots": [
+    {
+      "byte_size": 644401,
+      "candidate_family_codes": [],
+      "classification_method": "manual_visual_inspection",
+      "displayed_result_count": 950,
+      "evidence_role": "SUBSEQUENT_PROVIDER_VERIFICATION_OBSERVATION",
+      "family_id": "STAR-QF01-RELATIONAL-VIS",
+      "family_mapping_state": "UNAMBIGUOUS",
+      "field_key": "abstract",
+      "filename_used_as_authoritative_metadata": false,
+      "observed_at_utc": "2026-09-03T17:23:20Z",
+      "publication_date_filter": {
+        "from_year": 1974,
+        "state": "FILTERED_INCLUSIVE",
+        "to_year": 2016
+      },
+      "raw_sha256": "b3a2527fbdea08d77318267a1086578d22eff23aea877a5e8841b1d83eeebfb7",
+      "relative_path": "artifacts/acm_field_execution/2026-09-03/ui_count_evidence/QF01/QF01_abstract_1974-2016.png",
+      "used_as_retrieval_completeness_gate": false
+    },
+    {
+      "byte_size": 682797,
+      "candidate_family_codes": [],
+      "classification_method": "manual_visual_inspection",
+      "displayed_result_count": 982,
+      "evidence_role": "SUBSEQUENT_PROVIDER_VERIFICATION_OBSERVATION",
+      "family_id": "STAR-QF01-RELATIONAL-VIS",
+      "family_mapping_state": "UNAMBIGUOUS",
+      "field_key": "abstract",
+      "filename_used_as_authoritative_metadata": false,
+      "observed_at_utc": "2026-09-03T17:24:11Z",
+      "publication_date_filter": {
+        "from_year": 2017,
+        "state": "FILTERED_INCLUSIVE",
+        "to_year": 2026
+      },
+      "raw_sha256": "367f2f08785107121eb3c11667859d9213af5323cd30fecb76da803232bf536c",
+      "relative_path": "artifacts/acm_field_execution/2026-09-03/ui_count_evidence/QF01/QF01_abstract_2017-2026.png",
+      "used_as_retrieval_completeness_gate": false
+    },
+    {
+      "byte_size": 672128,
+      "candidate_family_codes": [],
+      "classification_method": "manual_visual_inspection",
+      "displayed_result_count": 951,
+      "evidence_role": "SUBSEQUENT_PROVIDER_VERIFICATION_OBSERVATION",
+      "family_id": "STAR-QF03-INTERACTIVE-SYSTEMS",
+      "family_mapping_state": "UNAMBIGUOUS",
+      "field_key": "abstract",
+      "filename_used_as_authoritative_metadata": false,
+      "observed_at_utc": "2026-09-03T17:19:36Z",
+      "publication_date_filter": {
+        "from_year": 1971,
+        "state": "FILTERED_INCLUSIVE",
+        "to_year": 2018
+      },
+      "raw_sha256": "2a8d0370cdd26360e961abd04bc99e061f7828bbb9c78976e4d947e79dddad27",
+      "relative_path": "artifacts/acm_field_execution/2026-09-03/ui_count_evidence/QF03/QF03_abstract_1971-2018.png",
+      "used_as_retrieval_completeness_gate": false
+    },
+    {
+      "byte_size": 618820,
+      "candidate_family_codes": [],
+      "classification_method": "manual_visual_inspection",
+      "displayed_result_count": 78,
+      "evidence_role": "SUBSEQUENT_PROVIDER_VERIFICATION_OBSERVATION",
+      "family_id": "STAR-QF03-INTERACTIVE-SYSTEMS",
+      "family_mapping_state": "UNAMBIGUOUS",
+      "field_key": "abstract",
+      "filename_used_as_authoritative_metadata": false,
+      "observed_at_utc": "2026-09-03T17:14:53Z",
+      "publication_date_filter": {
+        "from_year": 2019,
+        "state": "FILTERED_INCLUSIVE",
+        "to_year": 2019
+      },
+      "raw_sha256": "7c185c99bfb94c80067234a3c7459f83da3cdc63834f730eb45351664e3b190f",
+      "relative_path": "artifacts/acm_field_execution/2026-09-03/ui_count_evidence/QF03/QF03_abstract_2019-2019.png",
+      "used_as_retrieval_completeness_gate": false
+    },
+    {
+      "byte_size": 690272,
+      "candidate_family_codes": [],
+      "classification_method": "manual_visual_inspection",
+      "displayed_result_count": 955,
+      "evidence_role": "SUBSEQUENT_PROVIDER_VERIFICATION_OBSERVATION",
+      "family_id": "STAR-QF03-INTERACTIVE-SYSTEMS",
+      "family_mapping_state": "UNAMBIGUOUS",
+      "field_key": "abstract",
+      "filename_used_as_authoritative_metadata": false,
+      "observed_at_utc": "2026-09-03T17:20:49Z",
+      "publication_date_filter": {
+        "from_year": 2020,
+        "state": "FILTERED_INCLUSIVE",
+        "to_year": 2026
+      },
+      "raw_sha256": "f8b349700659a27ddb1fa4e84ba0bc5424a669b0c080de9df4406b1e5c022bc4",
+      "relative_path": "artifacts/acm_field_execution/2026-09-03/ui_count_evidence/QF03/QF03_abstract_2020-2026.png",
+      "used_as_retrieval_completeness_gate": false
+    },
+    {
+      "byte_size": 611201,
+      "candidate_family_codes": [],
+      "classification_method": "manual_visual_inspection",
+      "displayed_result_count": 1983,
+      "evidence_role": "SUBSEQUENT_PROVIDER_VERIFICATION_OBSERVATION",
+      "family_id": "STAR-QF03-INTERACTIVE-SYSTEMS",
+      "family_mapping_state": "UNAMBIGUOUS",
+      "field_key": "abstract",
+      "filename_used_as_authoritative_metadata": false,
+      "observed_at_utc": "2026-09-03T18:27:50Z",
+      "publication_date_filter": {
+        "from_year": null,
+        "state": "ALL_DATES",
+        "to_year": null
+      },
+      "raw_sha256": "c35e9767b364651c2d74b962d6cf2697f9e0d8f73a1f0dd6ecc5004dff6259cb",
+      "relative_path": "artifacts/acm_field_execution/2026-09-03/ui_count_evidence/QF03/QF03_abstract_all_dates.png",
+      "used_as_retrieval_completeness_gate": false
+    },
+    {
+      "byte_size": 634352,
+      "candidate_family_codes": [],
+      "classification_method": "manual_visual_inspection",
+      "displayed_result_count": 999,
+      "evidence_role": "SUBSEQUENT_PROVIDER_VERIFICATION_OBSERVATION",
+      "family_id": "STAR-QF04-NONDESKTOP-ENV",
+      "family_mapping_state": "UNAMBIGUOUS",
+      "field_key": "abstract",
+      "filename_used_as_authoritative_metadata": false,
+      "observed_at_utc": "2026-09-03T17:13:17Z",
+      "publication_date_filter": {
+        "from_year": 1978,
+        "state": "FILTERED_INCLUSIVE",
+        "to_year": 2018
+      },
+      "raw_sha256": "1c2c32b3c1695135dc1a3e9417afb7c35ceac343cea8d53259e1674d19265657",
+      "relative_path": "artifacts/acm_field_execution/2026-09-03/ui_count_evidence/QF04/QF04_abstract_1978-2018.png",
+      "used_as_retrieval_completeness_gate": false
+    },
+    {
+      "byte_size": 663194,
+      "candidate_family_codes": [],
+      "classification_method": "manual_visual_inspection",
+      "displayed_result_count": 988,
+      "evidence_role": "SUBSEQUENT_PROVIDER_VERIFICATION_OBSERVATION",
+      "family_id": "STAR-QF04-NONDESKTOP-ENV",
+      "family_mapping_state": "UNAMBIGUOUS",
+      "field_key": "abstract",
+      "filename_used_as_authoritative_metadata": false,
+      "observed_at_utc": "2026-09-03T17:12:38Z",
+      "publication_date_filter": {
+        "from_year": 2019,
+        "state": "FILTERED_INCLUSIVE",
+        "to_year": 2024
+      },
+      "raw_sha256": "5a879fbad0205fd1a7b7c145766948ec521189f1a5d8e9ba73707be4805085d3",
+      "relative_path": "artifacts/acm_field_execution/2026-09-03/ui_count_evidence/QF04/QF04_abstract_2019-2024.png",
+      "used_as_retrieval_completeness_gate": false
+    },
+    {
+      "byte_size": 677065,
+      "candidate_family_codes": [],
+      "classification_method": "manual_visual_inspection",
+      "displayed_result_count": 446,
+      "evidence_role": "SUBSEQUENT_PROVIDER_VERIFICATION_OBSERVATION",
+      "family_id": "STAR-QF04-NONDESKTOP-ENV",
+      "family_mapping_state": "UNAMBIGUOUS",
+      "field_key": "abstract",
+      "filename_used_as_authoritative_metadata": false,
+      "observed_at_utc": "2026-09-03T17:12:03Z",
+      "publication_date_filter": {
+        "from_year": 2025,
+        "state": "FILTERED_INCLUSIVE",
+        "to_year": 2026
+      },
+      "raw_sha256": "83b35e514507a492ceb2de0378dc895c910e634b31565d6a1bdce035c7157092",
+      "relative_path": "artifacts/acm_field_execution/2026-09-03/ui_count_evidence/QF04/QF04_abstract_2025-2026.png",
+      "used_as_retrieval_completeness_gate": false
+    },
+    {
+      "byte_size": 586981,
+      "candidate_family_codes": [],
+      "classification_method": "manual_visual_inspection",
+      "displayed_result_count": 2433,
+      "evidence_role": "SUBSEQUENT_PROVIDER_VERIFICATION_OBSERVATION",
+      "family_id": "STAR-QF04-NONDESKTOP-ENV",
+      "family_mapping_state": "UNAMBIGUOUS",
+      "field_key": "abstract",
+      "filename_used_as_authoritative_metadata": false,
+      "observed_at_utc": "2026-09-03T18:28:43Z",
+      "publication_date_filter": {
+        "from_year": null,
+        "state": "ALL_DATES",
+        "to_year": null
+      },
+      "raw_sha256": "f467e177484c151665a52adb65e3b7d93693c3742875df5e9542583c8be628d2",
+      "relative_path": "artifacts/acm_field_execution/2026-09-03/ui_count_evidence/QF04/QF04_abstract_all_dates.png",
+      "used_as_retrieval_completeness_gate": false
+    },
+    {
+      "byte_size": 604965,
+      "candidate_family_codes": [],
+      "classification_method": "manual_visual_inspection",
+      "displayed_result_count": 908,
+      "evidence_role": "SUBSEQUENT_PROVIDER_VERIFICATION_OBSERVATION",
+      "family_id": "STAR-QF05-CONVERSATIONAL",
+      "family_mapping_state": "UNAMBIGUOUS",
+      "field_key": "abstract",
+      "filename_used_as_authoritative_metadata": false,
+      "observed_at_utc": "2026-09-03T17:10:10Z",
+      "publication_date_filter": {
+        "from_year": 1972,
+        "state": "FILTERED_INCLUSIVE",
+        "to_year": 2017
+      },
+      "raw_sha256": "65d6da18f8595bf0315f1ceef7e17ee84ab2e8752efe9c8e4a19cbd8d253c986",
+      "relative_path": "artifacts/acm_field_execution/2026-09-03/ui_count_evidence/QF05/QF05_abstract_1972-2017.png",
+      "used_as_retrieval_completeness_gate": false
+    },
+    {
+      "byte_size": 650749,
+      "candidate_family_codes": [],
+      "classification_method": "manual_visual_inspection",
+      "displayed_result_count": 858,
+      "evidence_role": "SUBSEQUENT_PROVIDER_VERIFICATION_OBSERVATION",
+      "family_id": "STAR-QF05-CONVERSATIONAL",
+      "family_mapping_state": "UNAMBIGUOUS",
+      "field_key": "abstract",
+      "filename_used_as_authoritative_metadata": false,
+      "observed_at_utc": "2026-09-03T17:06:03Z",
+      "publication_date_filter": {
+        "from_year": 2018,
+        "state": "FILTERED_INCLUSIVE",
+        "to_year": 2023
+      },
+      "raw_sha256": "05dbc4363cab5b3a8437c799947f806f2d071c40f4d8d35671f3a9520112e3a0",
+      "relative_path": "artifacts/acm_field_execution/2026-09-03/ui_count_evidence/QF05/QF05_abstract_2018-2023.png",
+      "used_as_retrieval_completeness_gate": false
+    },
+    {
+      "byte_size": 720592,
+      "candidate_family_codes": [],
+      "classification_method": "manual_visual_inspection",
+      "displayed_result_count": 678,
+      "evidence_role": "SUBSEQUENT_PROVIDER_VERIFICATION_OBSERVATION",
+      "family_id": "STAR-QF05-CONVERSATIONAL",
+      "family_mapping_state": "UNAMBIGUOUS",
+      "field_key": "abstract",
+      "filename_used_as_authoritative_metadata": false,
+      "observed_at_utc": "2026-09-03T17:05:38Z",
+      "publication_date_filter": {
+        "from_year": 2023,
+        "state": "FILTERED_INCLUSIVE",
+        "to_year": 2024
+      },
+      "raw_sha256": "3dd132bdd9ce9c6ffa7e3b00d709e13b730ea591d546b136f3dde6609e52f860",
+      "relative_path": "artifacts/acm_field_execution/2026-09-03/ui_count_evidence/QF05/QF05_abstract_2023-2024.png",
+      "used_as_retrieval_completeness_gate": false
+    },
+    {
+      "byte_size": 659597,
+      "candidate_family_codes": [],
+      "classification_method": "manual_visual_inspection",
+      "displayed_result_count": 459,
+      "evidence_role": "SUBSEQUENT_PROVIDER_VERIFICATION_OBSERVATION",
+      "family_id": "STAR-QF05-CONVERSATIONAL",
+      "family_mapping_state": "UNAMBIGUOUS",
+      "field_key": "abstract",
+      "filename_used_as_authoritative_metadata": false,
+      "observed_at_utc": "2026-09-03T17:05:11Z",
+      "publication_date_filter": {
+        "from_year": 2024,
+        "state": "FILTERED_INCLUSIVE",
+        "to_year": 2024
+      },
+      "raw_sha256": "2ecd2d98b96831013de1a2312df367944202c15f8234d4a10542c39dda977dde",
+      "relative_path": "artifacts/acm_field_execution/2026-09-03/ui_count_evidence/QF05/QF05_abstract_2024-2024.png",
+      "used_as_retrieval_completeness_gate": false
+    },
+    {
+      "byte_size": 694233,
+      "candidate_family_codes": [],
+      "classification_method": "manual_visual_inspection",
+      "displayed_result_count": 668,
+      "evidence_role": "SUBSEQUENT_PROVIDER_VERIFICATION_OBSERVATION",
+      "family_id": "STAR-QF05-CONVERSATIONAL",
+      "family_mapping_state": "UNAMBIGUOUS",
+      "field_key": "abstract",
+      "filename_used_as_authoritative_metadata": false,
+      "observed_at_utc": "2026-09-03T17:04:27Z",
+      "publication_date_filter": {
+        "from_year": 2025,
+        "state": "FILTERED_INCLUSIVE",
+        "to_year": 2025
+      },
+      "raw_sha256": "852cdb27cecd50e91734a38f7aa1dddfa4e7e7c3544746f0a4956ce32555751e",
+      "relative_path": "artifacts/acm_field_execution/2026-09-03/ui_count_evidence/QF05/QF05_abstract_2025-2025.png",
+      "used_as_retrieval_completeness_gate": false
+    },
+    {
+      "byte_size": 450949,
+      "candidate_family_codes": [],
+      "classification_method": "manual_visual_inspection",
+      "displayed_result_count": 563,
+      "evidence_role": "SUBSEQUENT_PROVIDER_VERIFICATION_OBSERVATION",
+      "family_id": "STAR-QF05-CONVERSATIONAL",
+      "family_mapping_state": "UNAMBIGUOUS",
+      "field_key": "abstract",
+      "filename_used_as_authoritative_metadata": false,
+      "observed_at_utc": "2026-09-03T17:00:52Z",
+      "publication_date_filter": {
+        "from_year": 2026,
+        "state": "FILTERED_INCLUSIVE",
+        "to_year": 2026
+      },
+      "raw_sha256": "d584f4fa803f431bf4f744dee432158063df0fa91511de55c18d1b7c2df66392",
+      "relative_path": "artifacts/acm_field_execution/2026-09-03/ui_count_evidence/QF05/QF05_abstract_2026-2026.png",
+      "used_as_retrieval_completeness_gate": false
+    },
+    {
+      "byte_size": 605178,
+      "candidate_family_codes": [],
+      "classification_method": "manual_visual_inspection",
+      "displayed_result_count": 3456,
+      "evidence_role": "SUBSEQUENT_PROVIDER_VERIFICATION_OBSERVATION",
+      "family_id": "STAR-QF05-CONVERSATIONAL",
+      "family_mapping_state": "UNAMBIGUOUS",
+      "field_key": "abstract",
+      "filename_used_as_authoritative_metadata": false,
+      "observed_at_utc": "2026-09-03T18:29:49Z",
+      "publication_date_filter": {
+        "from_year": null,
+        "state": "ALL_DATES",
+        "to_year": null
+      },
+      "raw_sha256": "d434000e67a232fb9629725c3bdeb8e014e0b4c33524800e9a3821fd50d627cb",
+      "relative_path": "artifacts/acm_field_execution/2026-09-03/ui_count_evidence/QF05/QF05_abstract_all_dates.png",
+      "used_as_retrieval_completeness_gate": false
+    },
+    {
+      "byte_size": 594633,
+      "candidate_family_codes": [
+        "QF01",
+        "QF02"
+      ],
+      "classification_method": "manual_visual_inspection",
+      "displayed_result_count": 905,
+      "evidence_role": "SUBSEQUENT_PROVIDER_VERIFICATION_OBSERVATION",
+      "family_id": null,
+      "family_mapping_state": "AMBIGUOUS",
+      "field_key": "abstract",
+      "filename_used_as_authoritative_metadata": false,
+      "observed_at_utc": "2026-09-03T18:18:21Z",
+      "publication_date_filter": {
+        "from_year": 1967,
+        "state": "FILTERED_INCLUSIVE",
+        "to_year": 2024
+      },
+      "raw_sha256": "b0a077ac06350078aaafc366bf93dad82a84675899054f27f9ae529a6466ecce",
+      "relative_path": "artifacts/acm_field_execution/2026-09-03/ui_count_evidence/ambiguous/abstract_1967-2024_count_000905_attempt_001.png",
+      "used_as_retrieval_completeness_gate": false
+    },
+    {
+      "byte_size": 604187,
+      "candidate_family_codes": [
+        "QF01",
+        "QF02"
+      ],
+      "classification_method": "manual_visual_inspection",
+      "displayed_result_count": 769,
+      "evidence_role": "SUBSEQUENT_PROVIDER_VERIFICATION_OBSERVATION",
+      "family_id": null,
+      "family_mapping_state": "AMBIGUOUS",
+      "field_key": "abstract",
+      "filename_used_as_authoritative_metadata": false,
+      "observed_at_utc": "2026-09-03T18:19:24Z",
+      "publication_date_filter": {
+        "from_year": 2025,
+        "state": "FILTERED_INCLUSIVE",
+        "to_year": 2026
+      },
+      "raw_sha256": "d66a69904135f7165f841f06be2c931bdc32d88215414a2e12f952797a1864ed",
+      "relative_path": "artifacts/acm_field_execution/2026-09-03/ui_count_evidence/ambiguous/abstract_2025-2026_count_000769_attempt_001.png",
+      "used_as_retrieval_completeness_gate": false
+    },
+    {
+      "byte_size": 643105,
+      "candidate_family_codes": [
+        "QF01",
+        "QF02"
+      ],
+      "classification_method": "manual_visual_inspection",
+      "displayed_result_count": 1674,
+      "evidence_role": "SUBSEQUENT_PROVIDER_VERIFICATION_OBSERVATION",
+      "family_id": null,
+      "family_mapping_state": "AMBIGUOUS",
+      "field_key": "abstract",
+      "filename_used_as_authoritative_metadata": false,
+      "observed_at_utc": "2026-09-03T18:17:17Z",
+      "publication_date_filter": {
+        "from_year": null,
+        "state": "ALL_DATES",
+        "to_year": null
+      },
+      "raw_sha256": "884bd4f4e2ac3828a300f99bece7ad6580046a107100e4d2e15c70fc5417755f",
+      "relative_path": "artifacts/acm_field_execution/2026-09-03/ui_count_evidence/ambiguous/abstract_all_dates_count_001674_attempt_001.png",
+      "used_as_retrieval_completeness_gate": false
+    },
+    {
+      "byte_size": 606932,
+      "candidate_family_codes": [
+        "QF01",
+        "QF02"
+      ],
+      "classification_method": "manual_visual_inspection",
+      "displayed_result_count": 1931,
+      "evidence_role": "SUBSEQUENT_PROVIDER_VERIFICATION_OBSERVATION",
+      "family_id": null,
+      "family_mapping_state": "AMBIGUOUS",
+      "field_key": "abstract",
+      "filename_used_as_authoritative_metadata": false,
+      "observed_at_utc": "2026-09-03T18:20:30Z",
+      "publication_date_filter": {
+        "from_year": null,
+        "state": "ALL_DATES",
+        "to_year": null
+      },
+      "raw_sha256": "101f785f0a263d3f4079eca6a3d5014ef6473add0050aaedaf579ecaf3100fbc",
+      "relative_path": "artifacts/acm_field_execution/2026-09-03/ui_count_evidence/ambiguous/abstract_all_dates_count_001931_attempt_001.png",
+      "used_as_retrieval_completeness_gate": false
+    }
+  ]
+}

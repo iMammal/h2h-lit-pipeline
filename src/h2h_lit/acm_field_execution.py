@@ -14,9 +14,11 @@ import re
 from collections.abc import Iterable
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime, timedelta, timezone
+from itertools import pairwise
 from pathlib import Path
 from typing import Any
 
+from h2h_lit.bibtex_io import BibtexParseResult, parse_bibtex_with_diagnostics
 from h2h_lit.normalize import normalize_doi
 from h2h_lit.production_query_plan import load_production_query_plan
 
@@ -42,6 +44,13 @@ QUERY_SYNTAX_VALID = "VALID"
 QUERY_SYNTAX_INVALID = "INVALID"
 QUERY_SYNTAX_COMPLETE = "SYNTAX_COUNT_EVIDENCE_VALIDATED"
 QUERY_SYNTAX_INCOMPLETE = "COMPLETED_CAPTURE_WITH_VALIDATION_FAILURE"
+FINAL_RECONCILIATION_SCHEMA_VERSION = "1.0.0"
+FINAL_RECONCILIATION_MANIFEST_VERSION = "1.0.0"
+FINAL_RECONCILIATION_MANIFEST_ID = (
+    "star-acm-field-execution-2026-09-03-final-reconciliation"
+)
+ACM_RETRIEVAL_EVIDENCE_COMPLETE = "RETRIEVAL_EVIDENCE_COMPLETE_NOT_IMPORTED"
+ACM_FINAL_RECONCILIATION_AT_UTC = "2026-09-03T18:29:49Z"
 QUERY_SYNTAX_FILENAME = re.compile(
     r"(?P<family>QF[0-9]{2})_(?P<field>title|keyword|abstract)_query_syntax_csv"
 )
@@ -67,6 +76,109 @@ QUERY_SYNTAX_PRODUCTION_SIDE_EFFECTS = {
     "llm_executed": False,
     "corpus_membership_created": False,
 }
+
+FINAL_SELECTED_EXPORTS = {
+    "QF01": {
+        "title": ("QF01/title/QF01_title_000001-000008.bib",),
+        "keyword": ("QF01/keyword/QF01_keyword_000001-000028.bib",),
+        "abstract": (
+            "QF01/abstract/QF01_abstract_1974-2016.bib",
+            "QF01/abstract/QF01_abstract_2017-2026.bib",
+        ),
+    },
+    "QF02": {
+        "title": ("QF02/title/QF02_title_000001-000018.bib",),
+        "keyword": ("QF02/keyword/QF02_keyword_000001-000016.bib",),
+        "abstract": (
+            "QF02/abstract/QF02_abstract_1967-2024.bib",
+            "QF02/abstract/QF02_abstract_2025-2026.bib",
+        ),
+    },
+    "QF03": {
+        "title": ("QF03/title/QF03_title_000001-000004.bib",),
+        "keyword": ("QF03/keyword/QF03_keyword_000001-000012.bib",),
+        "abstract": (
+            "QF03/abstract/QF03_abstract_1971-2018.bib",
+            "QF03/abstract/QF03_abstract_2019-2019.bib",
+            "QF03/abstract/QF03_abstract_2020-2026.bib",
+        ),
+    },
+    "QF04": {
+        "title": ("QF04/title/QF04_title_000001-000023.bib",),
+        "keyword": ("QF04/keyword/QF04_keyword_000001-000034.bib",),
+        "abstract": (
+            "QF04/abstract/QF04_abstract_1978-2018.bib",
+            "QF04/abstract/QF04_abstract_2019-2024.bib",
+            "QF04/abstract/QF04_abstract_2025-2026.bib",
+        ),
+    },
+    "QF05": {
+        "title": ("QF05/title/QF05_title_000001-000019.bib",),
+        "keyword": ("QF05/keyword/QF05_keyword_000001-000024.bib",),
+        "abstract": (
+            "QF05/abstract/QF05_abstract_1972-2017.bib",
+            "QF05/abstract/QF05_abstract_2018-2023.bib",
+            "QF05/abstract/QF05_abstract_2024-2024.bib",
+            "QF05/abstract/QF05_abstract_2025-2025.bib",
+            "QF05/abstract/QF05_abstract_2026-2026.bib",
+        ),
+    },
+}
+
+FINAL_ABSTRACT_RANGES = {
+    "QF01": ((1974, 2016), (2017, 2026)),
+    "QF02": ((1967, 2024), (2025, 2026)),
+    "QF03": ((1971, 2018), (2019, 2019), (2020, 2026)),
+    "QF04": ((1978, 2018), (2019, 2024), (2025, 2026)),
+    "QF05": ((1972, 2017), (2018, 2023), (2024, 2024), (2025, 2025), (2026, 2026)),
+}
+
+FINAL_NONSELECTED_EXPORTS = (
+    (
+        "QF01/abstract/QF01_abstract_000001-001931.bib",
+        "CALIBRATION_ONLY",
+        "ACM Export All ceiling calibration; never eligible for the partition union",
+    ),
+    (
+        "QF01/keyword/QF01_keyword_000001-000020.bib",
+        "SUPERSEDED_INCOMPLETE_OPERATOR_EXPORT",
+        "affirmative first-page-only export error superseded by the 28-record Export All artifact",
+    ),
+    (
+        "QF02/abstract/QF02_abstract_2025-2025_SHORT.bib",
+        "SUPERSEDED_DUPLICATE_EXPORT",
+        "same 768-record stable-identity set as the selected 2025-2026 operator-labeled artifact",
+    ),
+    (
+        "QF05/abstract/QF05_abstract_2024-2025.bib",
+        "SUPERSEDED_OVERLAPPING_EXPLORATORY_EXPORT",
+        "overlaps the selected single-year artifacts and is preserved outside the production union",
+    ),
+)
+
+FINAL_SCREENSHOT_OBSERVATIONS = (
+    ("QF01/QF01_abstract_1974-2016.png", "QF01", (), 1974, 2016, 950, "2026-09-03T17:23:20Z"),
+    ("QF01/QF01_abstract_2017-2026.png", "QF01", (), 2017, 2026, 982, "2026-09-03T17:24:11Z"),
+    ("QF03/QF03_abstract_1971-2018.png", "QF03", (), 1971, 2018, 951, "2026-09-03T17:19:36Z"),
+    ("QF03/QF03_abstract_2019-2019.png", "QF03", (), 2019, 2019, 78, "2026-09-03T17:14:53Z"),
+    ("QF03/QF03_abstract_2020-2026.png", "QF03", (), 2020, 2026, 955, "2026-09-03T17:20:49Z"),
+    ("QF03/QF03_abstract_all_dates.png", "QF03", (), None, None, 1983, "2026-09-03T18:27:50Z"),
+    ("QF04/QF04_abstract_1978-2018.png", "QF04", (), 1978, 2018, 999, "2026-09-03T17:13:17Z"),
+    ("QF04/QF04_abstract_2019-2024.png", "QF04", (), 2019, 2024, 988, "2026-09-03T17:12:38Z"),
+    ("QF04/QF04_abstract_2025-2026.png", "QF04", (), 2025, 2026, 446, "2026-09-03T17:12:03Z"),
+    ("QF04/QF04_abstract_all_dates.png", "QF04", (), None, None, 2433, "2026-09-03T18:28:43Z"),
+    ("QF05/QF05_abstract_1972-2017.png", "QF05", (), 1972, 2017, 908, "2026-09-03T17:10:10Z"),
+    ("QF05/QF05_abstract_2018-2023.png", "QF05", (), 2018, 2023, 858, "2026-09-03T17:06:03Z"),
+    ("QF05/QF05_abstract_2023-2024.png", "QF05", (), 2023, 2024, 678, "2026-09-03T17:05:38Z"),
+    ("QF05/QF05_abstract_2024-2024.png", "QF05", (), 2024, 2024, 459, "2026-09-03T17:05:11Z"),
+    ("QF05/QF05_abstract_2025-2025.png", "QF05", (), 2025, 2025, 668, "2026-09-03T17:04:27Z"),
+    ("QF05/QF05_abstract_2026-2026.png", "QF05", (), 2026, 2026, 563, "2026-09-03T17:00:52Z"),
+    ("QF05/QF05_abstract_all_dates.png", "QF05", (), None, None, 3456, "2026-09-03T18:29:49Z"),
+    ("ambiguous/abstract_1967-2024_count_000905_attempt_001.png", None, ("QF01", "QF02"), 1967, 2024, 905, "2026-09-03T18:18:21Z"),
+    ("ambiguous/abstract_2025-2026_count_000769_attempt_001.png", None, ("QF01", "QF02"), 2025, 2026, 769, "2026-09-03T18:19:24Z"),
+    ("ambiguous/abstract_all_dates_count_001674_attempt_001.png", None, ("QF01", "QF02"), None, None, 1674, "2026-09-03T18:17:17Z"),
+    ("ambiguous/abstract_all_dates_count_001931_attempt_001.png", None, ("QF01", "QF02"), None, None, 1931, "2026-09-03T18:20:30Z"),
+)
 
 
 class AcmFieldExecutionError(ValueError):
@@ -1051,6 +1163,587 @@ def load_acm_query_syntax_manifest(
 
 
 def query_syntax_manifest_json(manifest: dict[str, Any]) -> str:
+    return json.dumps(manifest, sort_keys=True, indent=2, ensure_ascii=True) + "\n"
+
+
+def _bound_file(path: Path, root: Path) -> dict[str, Any]:
+    raw = path.read_bytes()
+    return {
+        "relative_path": path.relative_to(root).as_posix(),
+        "byte_size": len(raw),
+        "raw_sha256": _sha256_bytes(raw),
+    }
+
+
+def _stable_identity_components(
+    rows: Iterable[dict[str, str | None]],
+) -> tuple[tuple[str, ...], dict[str, set[str]]]:
+    parent: dict[str, str] = {}
+
+    def find(token: str) -> str:
+        parent.setdefault(token, token)
+        while parent[token] != token:
+            parent[token] = parent[parent[token]]
+            token = parent[token]
+        return token
+
+    def union(left: str, right: str) -> None:
+        left_root, right_root = find(left), find(right)
+        if left_root == right_root:
+            return
+        first, second = sorted((left_root, right_root))
+        parent[second] = first
+
+    material = list(rows)
+    row_tokens: list[tuple[str, tuple[str, ...]]] = []
+    for row in material:
+        tokens: list[str] = []
+        if row["native_id"]:
+            tokens.append(f"acm:{row['native_id']}")
+        normalized_doi = normalize_doi(row["doi"])
+        if normalized_doi:
+            tokens.append(f"doi:{normalized_doi}")
+        if not tokens:
+            raise AcmFieldExecutionError("final ACM evidence contains no stable identity")
+        for token in tokens:
+            find(token)
+        for token in tokens[1:]:
+            union(tokens[0], token)
+        row_tokens.append((str(row["artifact_path"]), tuple(tokens)))
+
+    components: dict[str, set[str]] = {}
+    component_artifacts: dict[str, set[str]] = {}
+    for artifact_path, tokens in row_tokens:
+        root_token = find(tokens[0])
+        components.setdefault(root_token, set()).update(tokens)
+        component_artifacts.setdefault(root_token, set()).add(artifact_path)
+    canonical = tuple(
+        sorted(
+            next(
+                (token for token in sorted(tokens) if token.startswith("acm:")),
+                min(tokens),
+            )
+            for tokens in components.values()
+        )
+    )
+    artifacts_by_canonical = {
+        next(
+            (token for token in sorted(components[root_token]) if token.startswith("acm:")),
+            min(components[root_token]),
+        ): paths
+        for root_token, paths in component_artifacts.items()
+    }
+    return canonical, artifacts_by_canonical
+
+
+def _diagnostic_bibtex_evidence(
+    path: Path, root: Path
+) -> tuple[dict[str, Any], list[dict[str, str | None]]]:
+    raw = path.read_bytes()
+    result: BibtexParseResult = parse_bibtex_with_diagnostics(raw.decode("utf-8"))
+    if result.accounted_record_count != result.physical_header_count:
+        raise AcmFieldExecutionError("ACM physical and parser record accounting diverged")
+
+    rows: list[dict[str, str | None]] = []
+    years: list[int] = []
+    year_counts: dict[str, int] = {}
+    native_ids: set[str] = set()
+    normalized_dois: set[str] = set()
+    missing_year_count = 0
+    missing_identity_count = 0
+    for fields in result.entries:
+        native_id = fields.get("_key")
+        doi = normalize_doi(fields.get("doi"))
+        if native_id:
+            native_ids.add(native_id)
+        if doi:
+            normalized_dois.add(doi)
+        if not native_id and not doi:
+            missing_identity_count += 1
+        year = fields.get("year")
+        if year and year.isdigit():
+            numeric_year = int(year)
+            years.append(numeric_year)
+            year_counts[year] = year_counts.get(year, 0) + 1
+        else:
+            missing_year_count += 1
+        rows.append(
+            {
+                "artifact_path": path.relative_to(root).as_posix(),
+                "native_id": native_id,
+                "doi": doi,
+                "field_key": None,
+            }
+        )
+    issues = []
+    for issue in result.issues:
+        native_id = issue.key
+        doi = normalize_doi(issue.partial_fields.get("doi"))
+        if native_id:
+            native_ids.add(native_id)
+        if doi:
+            normalized_dois.add(doi)
+        if not native_id and not doi:
+            missing_identity_count += 1
+        year = issue.partial_fields.get("year")
+        if year and year.isdigit():
+            numeric_year = int(year)
+            years.append(numeric_year)
+            year_counts[year] = year_counts.get(year, 0) + 1
+        else:
+            missing_year_count += 1
+        rows.append(
+            {
+                "artifact_path": path.relative_to(root).as_posix(),
+                "native_id": native_id,
+                "doi": doi,
+                "field_key": None,
+            }
+        )
+        issues.append(
+            {
+                "ordinal": issue.ordinal,
+                "code": issue.code,
+                "native_id": native_id,
+                "brace_depth": issue.brace_depth,
+            }
+        )
+    if missing_identity_count:
+        raise AcmFieldExecutionError("ACM final retrieval contains missing stable identities")
+    stable_identities, _ = _stable_identity_components(rows)
+    evidence = {
+        **_bound_file(path, root),
+        "physical_header_count": result.physical_header_count,
+        "successfully_parsed_entry_count": len(result.entries),
+        "malformed_entry_count": len(result.issues),
+        "total_accounted_entry_count": result.accounted_record_count,
+        "unique_native_id_count": len(native_ids),
+        "unique_normalized_doi_count": len(normalized_dois),
+        "unique_stable_identity_count": len(stable_identities),
+        "stable_identity_digest_sha256": _sha256_text("\n".join(stable_identities)),
+        "missing_stable_identity_count": missing_identity_count,
+        "publication_year_minimum": min(years) if years else None,
+        "publication_year_maximum": max(years) if years else None,
+        "publication_year_counts": dict(sorted(year_counts.items())),
+        "missing_or_unparseable_year_count": missing_year_count,
+        "parse_issues": issues,
+    }
+    return evidence, rows
+
+
+def _referenced_manifest(path: Path, root: Path) -> dict[str, Any]:
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    reference = _bound_file(path, root)
+    for key in ("manifest_id", "manifest_version", "manifest_hash"):
+        if key in payload:
+            reference[key] = payload[key]
+    for key in ("contract_id", "contract_version", "contract_hash"):
+        if key in payload:
+            reference[key] = payload[key]
+    return reference
+
+
+def build_acm_final_reconciliation_manifest(*, root: str | Path) -> dict[str, Any]:
+    """Build the final offline ACM retrieval-evidence reconciliation.
+
+    The strict prospective partition contract remains unchanged.  This retrospective
+    audit distinguishes the retrieved artifact set from later observations of ACM's
+    mutable index; later counts are never substituted into execution-time gates.
+    """
+
+    root_path = Path(root).resolve()
+    bibtex_root = root_path / "artifacts/acm_field_execution/2026-09-02/bibtex"
+    screenshot_root = (
+        root_path / "artifacts/acm_field_execution/2026-09-03/ui_count_evidence"
+    )
+    field_contract_path = root_path / "config/star_acm_field_execution_contract_v1.json"
+    partition_contract_path = root_path / "config/star_acm_export_partition_contract_v1.json"
+    plan_path = root_path / "config/star_production_query_plan_v1.json"
+    syntax_manifest_path = (
+        root_path
+        / "provenance/star_acm_field_execution_2026-09-02_query_syntax_manifest.json"
+    )
+    calibration_manifest_path = (
+        root_path
+        / "provenance/star_acm_field_execution_2026-09-02_bulk_export_calibration_manifest.json"
+    )
+    field_contract = load_acm_field_execution_contract(field_contract_path, root=root_path)
+    load_acm_export_partition_contract(partition_contract_path, root=root_path)
+    syntax_manifest = load_acm_query_syntax_manifest(
+        syntax_manifest_path, root=root_path, verify_artifacts=True
+    )
+    syntax_children = {
+        child["child_query_id"]: child
+        for family in syntax_manifest["families"]
+        for child in family["children"]
+    }
+
+    selected_paths = {
+        path
+        for fields in FINAL_SELECTED_EXPORTS.values()
+        for paths in fields.values()
+        for path in paths
+    }
+    nonselected_paths = {item[0] for item in FINAL_NONSELECTED_EXPORTS}
+    observed_paths = {
+        path.relative_to(bibtex_root).as_posix() for path in bibtex_root.rglob("*.bib")
+    }
+    if selected_paths | nonselected_paths != observed_paths:
+        raise AcmFieldExecutionError("final ACM BibTeX inventory classification is incomplete")
+    if selected_paths & nonselected_paths:
+        raise AcmFieldExecutionError("an ACM BibTeX artifact has conflicting classifications")
+
+    parsed_cache: dict[
+        str, tuple[dict[str, Any], list[dict[str, str | None]]]
+    ] = {}
+
+    def parsed(relative_path: str) -> tuple[dict[str, Any], list[dict[str, str | None]]]:
+        if relative_path not in parsed_cache:
+            parsed_cache[relative_path] = _diagnostic_bibtex_evidence(
+                bibtex_root / relative_path, root_path
+            )
+        return parsed_cache[relative_path]
+
+    families: list[dict[str, Any]] = []
+    for family in field_contract["families"]:
+        family_code = _family_code(family["family_id"])
+        child_results: list[dict[str, Any]] = []
+        parent_rows: list[dict[str, str | None]] = []
+        for child in family["children"]:
+            field_key = child["field_key"]
+            paths = FINAL_SELECTED_EXPORTS[family_code][field_key]
+            ranges = FINAL_ABSTRACT_RANGES[family_code] if field_key == "abstract" else ()
+            if ranges and len(ranges) != len(paths):
+                raise AcmFieldExecutionError("ACM final partition path/range count differs")
+            if ranges and any(
+                current[1] + 1 != following[0]
+                for current, following in pairwise(ranges)
+            ):
+                raise AcmFieldExecutionError(
+                    "ACM final publication-year ranges are not disjoint and exhaustive"
+                )
+            artifact_items: list[dict[str, Any]] = []
+            rows: list[dict[str, str | None]] = []
+            for index, relative_path in enumerate(paths):
+                artifact, artifact_rows = parsed(relative_path)
+                if artifact["total_accounted_entry_count"] > ACM_EXPORT_RECORD_CEILING:
+                    raise AcmFieldExecutionError(
+                        "selected ACM artifact exceeds the demonstrated export ceiling"
+                    )
+                item = dict(artifact)
+                item["classification"] = "SELECTED_RETRIEVAL_ARTIFACT"
+                item["operator_label_not_authoritative"] = True
+                if ranges:
+                    item["operator_publication_date_filter"] = {
+                        "from_year": ranges[index][0],
+                        "to_year": ranges[index][1],
+                        "inclusive": True,
+                    }
+                artifact_items.append(item)
+                for row in artifact_rows:
+                    copied = dict(row)
+                    copied["field_key"] = field_key
+                    rows.append(copied)
+                    parent_rows.append(copied)
+            identities, artifacts_by_identity = _stable_identity_components(rows)
+            overlaps = sorted(
+                identity
+                for identity, artifact_paths in artifacts_by_identity.items()
+                if len(artifact_paths) > 1
+            )
+            if overlaps:
+                raise AcmFieldExecutionError(
+                    "selected ACM year partitions overlap by stable identity"
+                )
+            syntax_child = syntax_children[child["child_query_id"]]
+            accepted_number = syntax_child["accepted_attempt_number"]
+            accepted_attempt = next(
+                attempt
+                for attempt in syntax_child["attempts"]
+                if attempt["attempt_number"] == accepted_number
+            )
+            execution_count = accepted_attempt["parsed_ui_reported_count"]
+            difference = len(identities) - execution_count
+            comparison_state = (
+                "RECONCILES"
+                if difference == 0
+                else "PROVIDER_INDEX_STATE_DISCREPANCY_NO_AFFIRMATIVE_FAILURE"
+            )
+            child_results.append(
+                {
+                    "child_query_id": child["child_query_id"],
+                    "field_key": field_key,
+                    "field_label": child["field_label"],
+                    "frozen_child_query_sha256": child["child_query_sha256"],
+                    "accepted_syntax_attempt_number": accepted_number,
+                    "execution_time_provider_observation": {
+                        "count": execution_count,
+                        "observed_at_utc": accepted_attempt[
+                            "normalized_search_timestamp_utc"
+                        ],
+                        "query_syntax_artifact_sha256": accepted_attempt["artifact"][
+                            "raw_sha256"
+                        ],
+                    },
+                    "selected_artifacts": artifact_items,
+                    "retrieved_set": {
+                        "total_accounted_record_count": sum(
+                            item["total_accounted_entry_count"]
+                            for item in artifact_items
+                        ),
+                        "malformed_record_count": sum(
+                            item["malformed_entry_count"] for item in artifact_items
+                        ),
+                        "unique_stable_identity_count": len(identities),
+                        "stable_identity_union_digest_sha256": _sha256_text(
+                            "\n".join(identities)
+                        ),
+                        "cross_artifact_stable_identity_overlap_count": len(overlaps),
+                    },
+                    "count_comparison": {
+                        "retrieved_minus_execution_observation": difference,
+                        "state": comparison_state,
+                        "blocks_retrieval_completeness": False,
+                    },
+                    "retrieval_completeness_state": "COMPLETE_RETRIEVED_SET",
+                }
+            )
+
+        parent_identities, _ = _stable_identity_components(parent_rows)
+        overlap_counts = {
+            "title_only": 0,
+            "keyword_only": 0,
+            "abstract_only": 0,
+            "title_keyword": 0,
+            "title_abstract": 0,
+            "keyword_abstract": 0,
+            "triple_overlap": 0,
+        }
+        identity_fields: dict[str, set[str]] = {}
+        # All preserved records have native IDs, so map each field row through its
+        # canonical ACM token. DOI fallback remains available in component creation.
+        for row in parent_rows:
+            native = row["native_id"]
+            if native:
+                identity_fields.setdefault(f"acm:{native}", set()).add(
+                    str(row["field_key"])
+                )
+        overlap_names = {
+            frozenset({"title"}): "title_only",
+            frozenset({"keyword"}): "keyword_only",
+            frozenset({"abstract"}): "abstract_only",
+            frozenset({"title", "keyword"}): "title_keyword",
+            frozenset({"title", "abstract"}): "title_abstract",
+            frozenset({"keyword", "abstract"}): "keyword_abstract",
+            frozenset({"title", "keyword", "abstract"}): "triple_overlap",
+        }
+        for fields in identity_fields.values():
+            overlap_counts[overlap_names[frozenset(fields)]] += 1
+        if sum(overlap_counts.values()) != len(parent_identities):
+            raise AcmFieldExecutionError("ACM parent field-overlap accounting diverged")
+        families.append(
+            {
+                "family_id": family["family_id"],
+                "parent_query_id": family["parent_query_id"],
+                "children": child_results,
+                "field_union": {
+                    "unique_stable_identity_count": len(parent_identities),
+                    "stable_identity_union_digest_sha256": _sha256_text(
+                        "\n".join(parent_identities)
+                    ),
+                    "overlap_counts": overlap_counts,
+                    "state": "COMPLETE_SET_RECONCILED_NOT_IMPORTED",
+                },
+            }
+        )
+
+    nonselected = []
+    for relative_path, classification, reason in FINAL_NONSELECTED_EXPORTS:
+        artifact, rows = parsed(relative_path)
+        item = dict(artifact)
+        item.update({"classification": classification, "reason": reason})
+        if relative_path.endswith("QF01_keyword_000001-000020.bib"):
+            selected_rows = parsed("QF01/keyword/QF01_keyword_000001-000028.bib")[1]
+            old_ids, _ = _stable_identity_components(rows)
+            new_ids, _ = _stable_identity_components(selected_rows)
+            item["stable_identity_set_relationship"] = "STRICT_SUBSET_OF_SELECTED_EXPORT"
+            item["selected_export_additional_identity_count"] = len(
+                set(new_ids) - set(old_ids)
+            )
+            item["affirmative_operator_or_export_failure"] = True
+            item["failure_resolved_by_superseding_artifact"] = True
+        elif relative_path.endswith("QF02_abstract_2025-2025_SHORT.bib"):
+            selected_rows = parsed("QF02/abstract/QF02_abstract_2025-2026.bib")[1]
+            old_ids, _ = _stable_identity_components(rows)
+            new_ids, _ = _stable_identity_components(selected_rows)
+            item["stable_identity_set_relationship"] = (
+                "IDENTICAL_TO_SELECTED_EXPORT"
+                if old_ids == new_ids
+                else "DIFFERS_FROM_SELECTED_EXPORT"
+            )
+            item["affirmative_operator_or_export_failure"] = False
+        else:
+            item["affirmative_operator_or_export_failure"] = False
+        nonselected.append(item)
+
+    screenshots = []
+    for (
+        relative_path,
+        family_code,
+        candidate_codes,
+        from_year,
+        to_year,
+        count,
+        observed_at,
+    ) in FINAL_SCREENSHOT_OBSERVATIONS:
+        path = screenshot_root / relative_path
+        item = {
+            **_bound_file(path, root_path),
+            "evidence_role": "SUBSEQUENT_PROVIDER_VERIFICATION_OBSERVATION",
+            "classification_method": "manual_visual_inspection",
+            "filename_used_as_authoritative_metadata": False,
+            "family_id": (
+                next(
+                    family["family_id"]
+                    for family in field_contract["families"]
+                    if _family_code(family["family_id"]) == family_code
+                )
+                if family_code
+                else None
+            ),
+            "candidate_family_codes": list(candidate_codes),
+            "field_key": "abstract",
+            "publication_date_filter": (
+                {"state": "ALL_DATES", "from_year": None, "to_year": None}
+                if from_year is None
+                else {
+                    "state": "FILTERED_INCLUSIVE",
+                    "from_year": from_year,
+                    "to_year": to_year,
+                }
+            ),
+            "displayed_result_count": count,
+            "observed_at_utc": observed_at,
+            "family_mapping_state": "UNAMBIGUOUS" if family_code else "AMBIGUOUS",
+            "used_as_retrieval_completeness_gate": False,
+        }
+        screenshots.append(item)
+
+    manifest: dict[str, Any] = {
+        "schema_version": FINAL_RECONCILIATION_SCHEMA_VERSION,
+        "manifest_id": FINAL_RECONCILIATION_MANIFEST_ID,
+        "manifest_version": FINAL_RECONCILIATION_MANIFEST_VERSION,
+        "status": ACM_RETRIEVAL_EVIDENCE_COMPLETE,
+        "reconciled_at_utc": ACM_FINAL_RECONCILIATION_AT_UTC,
+        "methodology": {
+            "search_specification": (
+                "frozen production query expressions plus accepted ACM field syntax"
+            ),
+            "retrieved_record_set": (
+                "selected raw BibTeX artifacts reconciled by stable identity"
+            ),
+            "prospective_same_snapshot_partition_gates_preserved": True,
+            "later_provider_observations_are_completeness_gates": False,
+            "provider_index_temporal_invariance_required": False,
+            "count_differences_without_affirmative_failure": (
+                "documented provider/index-state discrepancies"
+            ),
+            "affirmative_operator_or_export_failure_blocks_selection": True,
+            "export_order_used_for_completeness": False,
+        },
+        "bindings": {
+            "production_query_plan": _referenced_manifest(plan_path, root_path),
+            "field_execution_contract": _referenced_manifest(
+                field_contract_path, root_path
+            ),
+            "export_partition_contract": _referenced_manifest(
+                partition_contract_path, root_path
+            ),
+            "query_syntax_manifest": _referenced_manifest(
+                syntax_manifest_path, root_path
+            ),
+            "bulk_export_calibration_manifest": _referenced_manifest(
+                calibration_manifest_path, root_path
+            ),
+            "diagnostic_bibtex_parser_commit": (
+                "9f7c2e808631fe803e9b98050d77c54e23938f46"
+            ),
+        },
+        "families": families,
+        "nonselected_preserved_bibtex_artifacts": nonselected,
+        "subsequent_verification_screenshots": screenshots,
+        "limitations": {
+            "operator_identity": "NOT_RECORDED",
+            "institutional_access_tier": "NOT_RECORDED",
+            "exact_bibtex_export_timestamps": "NOT_RECOVERABLE",
+            "ambiguous_screenshot_family_count": sum(
+                item["family_mapping_state"] == "AMBIGUOUS" for item in screenshots
+            ),
+            "limitations_block_retrieved_set_completeness": False,
+        },
+        "readiness": {
+            "acm_retrieval_evidence_complete": True,
+            "manual_acm_interaction_required": False,
+            "production_import_performed": False,
+            "global_production_wave_ready": False,
+            "next_acm_transition": "PRODUCTION_ARTIFACT_IMPORT_WHEN_AUTHORIZED",
+        },
+        "production_side_effects": {
+            "retrieval_run_created": False,
+            "record_occurrence_created": False,
+            "screening_executed": False,
+            "prisma_generated": False,
+            "e6_derived": False,
+            "llm_executed": False,
+            "corpus_membership_created": False,
+        },
+    }
+    if len(families) != 5 or sum(len(item["children"]) for item in families) != 15:
+        raise AcmFieldExecutionError("final ACM reconciliation must cover 15 field children")
+    if any(manifest["production_side_effects"].values()):
+        raise AcmFieldExecutionError("final ACM reconciliation created production state")
+    manifest["manifest_hash"] = _sha256_text(_canonical_json(manifest))
+    return manifest
+
+
+def validate_acm_final_reconciliation_manifest(
+    manifest: dict[str, Any], *, root: str | Path, verify_artifacts: bool = False
+) -> None:
+    material = dict(manifest)
+    claimed_hash = material.pop("manifest_hash", None)
+    if claimed_hash != _sha256_text(_canonical_json(material)):
+        raise AcmFieldExecutionError("ACM final reconciliation manifest hash mismatch")
+    if manifest.get("schema_version") != FINAL_RECONCILIATION_SCHEMA_VERSION:
+        raise AcmFieldExecutionError("unsupported ACM final reconciliation schema")
+    if manifest.get("manifest_id") != FINAL_RECONCILIATION_MANIFEST_ID:
+        raise AcmFieldExecutionError("unexpected ACM final reconciliation manifest ID")
+    if manifest.get("status") != ACM_RETRIEVAL_EVIDENCE_COMPLETE:
+        raise AcmFieldExecutionError("ACM final retrieval evidence is not complete")
+    if not manifest.get("readiness", {}).get("acm_retrieval_evidence_complete"):
+        raise AcmFieldExecutionError("ACM final readiness state is inconsistent")
+    if manifest["readiness"].get("production_import_performed"):
+        raise AcmFieldExecutionError("ACM reconciliation cannot perform production import")
+    if any(manifest.get("production_side_effects", {}).values()):
+        raise AcmFieldExecutionError("ACM final reconciliation created production state")
+    if verify_artifacts:
+        rebuilt = build_acm_final_reconciliation_manifest(root=root)
+        if manifest != rebuilt:
+            raise AcmFieldExecutionError(
+                "ACM final reconciliation does not match preserved raw evidence"
+            )
+
+
+def load_acm_final_reconciliation_manifest(
+    path: str | Path, *, root: str | Path, verify_artifacts: bool = False
+) -> dict[str, Any]:
+    manifest = json.loads(Path(path).read_text(encoding="utf-8"))
+    validate_acm_final_reconciliation_manifest(
+        manifest, root=root, verify_artifacts=verify_artifacts
+    )
+    return manifest
+
+
+def final_reconciliation_manifest_json(manifest: dict[str, Any]) -> str:
     return json.dumps(manifest, sort_keys=True, indent=2, ensure_ascii=True) + "\n"
 
 
