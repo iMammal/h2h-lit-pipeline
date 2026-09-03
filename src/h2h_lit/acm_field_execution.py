@@ -317,14 +317,19 @@ def _family_code(family_id: str) -> str:
     return match.group()
 
 
+def _expected_query_names(family_code: str, field_key: str) -> tuple[str, str]:
+    stem = f"{family_code}_{field_key}_query_syntax"
+    return f"{stem}.csv", f"{stem}_csv"
+
+
 def _syntax_validation_result(
     evidence: AcmQuerySyntaxEvidence,
     child_spec: dict[str, Any],
     *,
-    expected_query_name: str,
+    expected_query_names: tuple[str, ...],
 ) -> dict[str, Any]:
     checks = {
-        "query_name_matches_child": evidence.query_name == expected_query_name,
+        "query_name_matches_child": evidence.query_name in expected_query_names,
         "exactly_one_expected_field_wrapper": False,
         "no_other_field_wrapper": False,
         "exact_frozen_scientific_expression": False,
@@ -335,7 +340,10 @@ def _syntax_validation_result(
     }
     reasons: list[str] = []
     if not checks["query_name_matches_child"]:
-        reasons.append(f"query name does not match expected child name {expected_query_name}")
+        reasons.append(
+            "query name does not match expected child names "
+            f"{', '.join(expected_query_names)}"
+        )
     try:
         normalize_acm_search_timestamp(evidence.search_run_date)
         checks["timestamp_normalized_to_utc"] = True
@@ -443,9 +451,9 @@ def build_acm_query_syntax_manifest(
                     f"ACM query-syntax artifact must contain exactly one row: {path.name}"
                 )
             evidence = evidence_rows[0]
-            expected_name = f"{family_code}_{child['field_key']}_query_syntax.csv"
+            expected_names = _expected_query_names(family_code, child["field_key"])
             validation = _syntax_validation_result(
-                evidence, child, expected_query_name=expected_name
+                evidence, child, expected_query_names=expected_names
             )
             if validation["state"] == QUERY_SYNTAX_VALID:
                 valid_attempts += 1
@@ -467,6 +475,7 @@ def build_acm_query_syntax_manifest(
                     "relative_path": path.relative_to(root_path).as_posix(),
                     "byte_size": len(raw),
                     "raw_sha256": _sha256_bytes(raw),
+                    "availability": "AVAILABLE",
                 },
                 "query_name": evidence.query_name,
                 "acm_search_run_date_verbatim": evidence.search_run_date,
@@ -533,6 +542,99 @@ def build_acm_query_syntax_manifest(
     return manifest
 
 
+def reconcile_acm_query_syntax_manifest(
+    existing_manifest: dict[str, Any],
+    contract_path: str | Path,
+    syntax_directory: str | Path,
+    *,
+    root: str | Path,
+) -> dict[str, Any]:
+    """Append changed same-path bytes as new attempts without reconstructing overwritten bytes."""
+
+    prior_material = dict(existing_manifest)
+    prior_hash = prior_material.pop("manifest_hash", None)
+    if prior_hash != _sha256_text(_canonical_json(prior_material)):
+        raise AcmFieldExecutionError("existing ACM query-syntax manifest hash mismatch")
+
+    current = build_acm_query_syntax_manifest(
+        contract_path, syntax_directory, root=root
+    )
+    reconciled = json.loads(json.dumps(existing_manifest))
+    current_children = {
+        child["child_query_id"]: child
+        for family in current["families"]
+        for child in family["children"]
+    }
+    changed_children: list[str] = []
+    for family in reconciled["families"]:
+        for child in family["children"]:
+            current_child = current_children[child["child_query_id"]]
+            latest = child["attempts"][-1]
+            latest["artifact"].setdefault("availability", "AVAILABLE")
+            observed = current_child["attempts"][0]
+            if (
+                latest["artifact"]["raw_sha256"] == observed["artifact"]["raw_sha256"]
+                and latest["artifact"]["byte_size"] == observed["artifact"]["byte_size"]
+            ):
+                continue
+            next_number = latest["attempt_number"] + 1
+            latest["superseded_by_attempt_number"] = next_number
+            latest["artifact"]["availability"] = "OVERWRITTEN_UNAVAILABLE"
+            new_attempt = json.loads(json.dumps(observed))
+            new_attempt["attempt_number"] = next_number
+            new_attempt["supersedes_attempt_number"] = latest["attempt_number"]
+            new_attempt["superseded_by_attempt_number"] = None
+            child["attempts"].append(new_attempt)
+            changed_children.append(child["child_query_id"])
+
+    accepted_count = 0
+    valid_attempt_count = 0
+    invalid_attempt_count = 0
+    artifact_count = 0
+    for family in reconciled["families"]:
+        for child in family["children"]:
+            for attempt in child["attempts"]:
+                artifact_count += 1
+                if attempt["validation"]["state"] == QUERY_SYNTAX_VALID:
+                    valid_attempt_count += 1
+                else:
+                    invalid_attempt_count += 1
+            latest = child["attempts"][-1]
+            if latest["validation"]["state"] == QUERY_SYNTAX_VALID:
+                child["accepted_attempt_number"] = latest["attempt_number"]
+                child["completion_state"] = QUERY_SYNTAX_COMPLETE
+                accepted_count += 1
+            else:
+                child["accepted_attempt_number"] = None
+                child["completion_state"] = "REQUIRES_CORRECTED_ATTEMPT"
+
+    expected_child_count = sum(
+        len(family["children"]) for family in reconciled["families"]
+    )
+    reconciled["validation_summary"] = {
+        "expected_child_count": expected_child_count,
+        "observed_artifact_count": artifact_count,
+        "valid_attempt_count": valid_attempt_count,
+        "invalid_attempt_count": invalid_attempt_count,
+        "all_children_have_accepted_attempt": accepted_count == expected_child_count,
+    }
+    reconciled["manifest_status"] = (
+        QUERY_SYNTAX_COMPLETE
+        if accepted_count == expected_child_count
+        else QUERY_SYNTAX_INCOMPLETE
+    )
+    if changed_children and "reconciliation" not in reconciled:
+        reconciled["reconciliation"] = {
+            "previous_manifest_hash": prior_hash,
+            "changed_child_query_ids": changed_children,
+            "overwritten_bytes_reconstructed": False,
+        }
+    reconciled.pop("manifest_hash", None)
+    reconciled["manifest_hash"] = _sha256_text(_canonical_json(reconciled))
+    validate_acm_query_syntax_manifest(reconciled, root=root, verify_artifacts=True)
+    return reconciled
+
+
 def validate_acm_query_syntax_manifest(
     manifest: dict[str, Any],
     *,
@@ -594,7 +696,7 @@ def validate_acm_query_syntax_manifest(
     valid_attempt_count = 0
     invalid_attempt_count = 0
     artifact_count = 0
-    artifact_paths: set[str] = set()
+    artifact_path_bindings: dict[str, str] = {}
     for family_item in actual_families:
         family = expected_families.get(family_item["family_id"])
         if family is None or family_item["parent_query_id"] != family["parent_query_id"]:
@@ -640,9 +742,19 @@ def validate_acm_query_syntax_manifest(
                 _validate_sha256(artifact["raw_sha256"], "ACM query-syntax artifact hash")
                 if artifact["byte_size"] < 0:
                     raise AcmFieldExecutionError("ACM query-syntax artifact size is invalid")
-                if artifact["relative_path"] in artifact_paths:
-                    raise AcmFieldExecutionError("ACM query-syntax artifact path is reused")
-                artifact_paths.add(artifact["relative_path"])
+                availability = artifact.get("availability")
+                if availability not in {"AVAILABLE", "OVERWRITTEN_UNAVAILABLE"}:
+                    raise AcmFieldExecutionError("ACM query-syntax artifact availability is invalid")
+                prior_binding = artifact_path_bindings.get(artifact["relative_path"])
+                if prior_binding is not None and prior_binding != child["child_query_id"]:
+                    raise AcmFieldExecutionError(
+                        "ACM query-syntax artifact path is reused by another child"
+                    )
+                artifact_path_bindings[artifact["relative_path"]] = child["child_query_id"]
+                if availability == "OVERWRITTEN_UNAVAILABLE" and expected_next is None:
+                    raise AcmFieldExecutionError(
+                        "unavailable ACM query-syntax bytes require a superseding attempt"
+                    )
                 artifact_count += 1
                 validation = attempt["validation"]
                 checks = validation.get("checks", {})
@@ -677,7 +789,7 @@ def validate_acm_query_syntax_manifest(
                     invalid_attempt_count += 1
                 else:
                     raise AcmFieldExecutionError("unsupported ACM query-syntax validation state")
-                if verify_artifacts:
+                if verify_artifacts and availability == "AVAILABLE":
                     artifact_path = root_path / artifact["relative_path"]
                     raw = artifact_path.read_bytes()
                     if len(raw) != artifact["byte_size"]:
@@ -690,12 +802,11 @@ def validate_acm_query_syntax_manifest(
                             "ACM query-syntax artifact must contain exactly one evidence row"
                         )
                     evidence = rows[0]
-                    expected_name = (
-                        f"{_family_code(family['family_id'])}_{child['field_key']}_"
-                        "query_syntax.csv"
+                    expected_names = _expected_query_names(
+                        _family_code(family["family_id"]), child["field_key"]
                     )
                     reproduced = _syntax_validation_result(
-                        evidence, child, expected_query_name=expected_name
+                        evidence, child, expected_query_names=expected_names
                     )
                     observed_fields = {
                         "query_name": evidence.query_name,

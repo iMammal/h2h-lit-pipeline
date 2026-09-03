@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-from copy import deepcopy
 from pathlib import Path
 
 import pytest
@@ -12,7 +11,6 @@ from h2h_lit.acm_field_execution import (
     EXECUTION_METHOD_COMMIT,
     OPERATOR_EVIDENCE_LIMITATIONS,
     QUERY_SYNTAX_COMPLETE,
-    QUERY_SYNTAX_INCOMPLETE,
     QUERY_SYNTAX_PRODUCTION_SIDE_EFFECTS,
     AcmExportArtifactReference,
     AcmFieldExecutionError,
@@ -28,8 +26,8 @@ from h2h_lit.acm_field_execution import (
     normalize_acm_search_timestamp,
     parse_acm_query_syntax_csv,
     query_syntax_manifest_json,
+    reconcile_acm_query_syntax_manifest,
     validate_acm_query_syntax,
-    validate_acm_query_syntax_manifest,
 )
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -130,21 +128,25 @@ def test_query_syntax_manifest_is_deterministic_and_verifies_all_raw_artifacts()
     tracked = load_acm_query_syntax_manifest(
         QUERY_SYNTAX_MANIFEST_PATH, root=ROOT, verify_artifacts=True
     )
-    rebuilt = build_acm_query_syntax_manifest(
+    current_snapshot = build_acm_query_syntax_manifest(
         CONTRACT_PATH, QUERY_SYNTAX_ROOT, root=ROOT
     )
-    assert query_syntax_manifest_json(rebuilt) == QUERY_SYNTAX_MANIFEST_PATH.read_text(
+    reconciled = reconcile_acm_query_syntax_manifest(
+        tracked, CONTRACT_PATH, QUERY_SYNTAX_ROOT, root=ROOT
+    )
+    assert query_syntax_manifest_json(reconciled) == QUERY_SYNTAX_MANIFEST_PATH.read_text(
         encoding="utf-8"
     )
-    assert rebuilt == tracked
+    assert reconciled == tracked
+    assert current_snapshot["validation_summary"]["valid_attempt_count"] == 15
     assert tracked["execution_method_commit"] == EXECUTION_METHOD_COMMIT
-    assert tracked["manifest_status"] == QUERY_SYNTAX_INCOMPLETE
+    assert tracked["manifest_status"] == QUERY_SYNTAX_COMPLETE
     assert tracked["validation_summary"] == {
         "expected_child_count": 15,
-        "observed_artifact_count": 15,
-        "valid_attempt_count": 14,
+        "observed_artifact_count": 16,
+        "valid_attempt_count": 15,
         "invalid_attempt_count": 1,
-        "all_children_have_accepted_attempt": False,
+        "all_children_have_accepted_attempt": True,
     }
     assert tracked["operator_evidence_limitations"] == OPERATOR_EVIDENCE_LIMITATIONS
     assert tracked["production_side_effects"] == QUERY_SYNTAX_PRODUCTION_SIDE_EFFECTS
@@ -162,9 +164,9 @@ def test_query_syntax_manifest_binds_all_counts_sizes_and_raw_hashes() -> None:
             "682ca5628ff6b9b2d17024b926769954c354e9ca8e6e30b9b0835189f537b558",
         ),
         "QF01_keyword_query_syntax_csv": (
-            48,
-            1787,
-            "0f9a07aac22c954ad1c699b55565496ac05c9120088c48040152ff311919d28e",
+            28,
+            1717,
+            "c9ca2d46a89624c104f4f4c5a0344f9053bc62cba9043a9bd7a66dad3dcf0fd1",
         ),
         "QF01_abstract_query_syntax_csv": (
             1931,
@@ -241,7 +243,11 @@ def test_query_syntax_manifest_binds_all_counts_sizes_and_raw_hashes() -> None:
         for attempt in _manifest_attempts(manifest)
     }
     assert observed == expected
-    assert all(attempt["attempt_number"] == 1 for attempt in _manifest_attempts(manifest))
+    assert [
+        attempt["attempt_number"]
+        for attempt in _manifest_attempts(manifest)
+        if attempt["field_key"] == "keyword" and attempt["family_id"].startswith("STAR-QF01")
+    ] == [1, 2]
     assert all(
         attempt["normalized_search_timestamp_utc"].endswith("Z")
         for attempt in _manifest_attempts(manifest)
@@ -256,63 +262,37 @@ def test_qf01_keyword_attempt_one_remains_invalid_without_unescaping() -> None:
         QUERY_SYNTAX_MANIFEST_PATH, root=ROOT, verify_artifacts=True
     )
     child = manifest["families"][0]["children"][1]
-    attempt = child["attempts"][0]
-    raw = (ROOT / attempt["artifact"]["relative_path"]).read_bytes()
-    assert b'\\"life science\\"' in raw
-    assert attempt["validation"]["state"] == "INVALID"
-    assert attempt["validation"]["checks"]["exact_frozen_scientific_expression"] is False
-    assert attempt["validation"]["reason"] == (
+    attempt_one, attempt_two = child["attempts"]
+    assert attempt_one["artifact"] == {
+        "availability": "OVERWRITTEN_UNAVAILABLE",
+        "byte_size": 1787,
+        "raw_sha256": "0f9a07aac22c954ad1c699b55565496ac05c9120088c48040152ff311919d28e",
+        "relative_path": (
+            "artifacts/acm_field_execution/2026-09-02/query_syntax/"
+            "QF01_keyword_query_syntax_csv"
+        ),
+    }
+    assert attempt_one["validation"]["state"] == "INVALID"
+    assert attempt_one["validation"]["checks"]["exact_frozen_scientific_expression"] is False
+    assert attempt_one["validation"]["reason"] == (
         "stored query contains 70 literal backslashes before phrase quotes; "
         "exact frozen query required"
     )
-    assert child["accepted_attempt_number"] is None
-    assert child["completion_state"] == "REQUIRES_CORRECTED_ATTEMPT"
-    assert attempt["supersedes_attempt_number"] is None
-    assert attempt["superseded_by_attempt_number"] is None
+    assert attempt_one["supersedes_attempt_number"] is None
+    assert attempt_one["superseded_by_attempt_number"] == 2
 
-
-def test_manifest_schema_retains_failed_attempt_when_a_later_attempt_supersedes_it() -> None:
-    manifest = deepcopy(
-        load_acm_query_syntax_manifest(QUERY_SYNTAX_MANIFEST_PATH, root=ROOT)
-    )
-    child = manifest["families"][0]["children"][1]
-    failed = child["attempts"][0]
-    failed["superseded_by_attempt_number"] = 2
-    corrected = deepcopy(failed)
-    corrected["attempt_number"] = 2
-    corrected["supersedes_attempt_number"] = 1
-    corrected["superseded_by_attempt_number"] = None
-    corrected["artifact"] = {
-        "relative_path": (
-            "artifacts/acm_field_execution/future/query_syntax/"
-            "QF01_keyword_query_syntax_csv_attempt_2"
-        ),
-        "byte_size": 1,
-        "raw_sha256": _hash("future corrected evidence"),
-    }
-    corrected["validation"] = {
-        "state": "VALID",
-        "reason": None,
-        "checks": {key: True for key in failed["validation"]["checks"]},
-    }
-    child["attempts"].append(corrected)
-    child["accepted_attempt_number"] = 2
-    child["completion_state"] = QUERY_SYNTAX_COMPLETE
-    manifest["manifest_status"] = QUERY_SYNTAX_COMPLETE
-    manifest["validation_summary"] = {
-        "expected_child_count": 15,
-        "observed_artifact_count": 16,
-        "valid_attempt_count": 15,
-        "invalid_attempt_count": 1,
-        "all_children_have_accepted_attempt": True,
-    }
-    manifest.pop("manifest_hash")
-    canonical = json.dumps(
-        manifest, sort_keys=True, separators=(",", ":"), ensure_ascii=True
-    )
-    manifest["manifest_hash"] = _hash(canonical)
-    validate_acm_query_syntax_manifest(manifest, root=ROOT)
-    assert child["attempts"][0]["validation"]["state"] == "INVALID"
+    raw = (ROOT / attempt_two["artifact"]["relative_path"]).read_bytes()
+    assert hashlib.sha256(raw).hexdigest() == attempt_two["artifact"]["raw_sha256"]
+    assert attempt_two["artifact"]["availability"] == "AVAILABLE"
+    assert attempt_two["attempt_number"] == 2
+    assert attempt_two["supersedes_attempt_number"] == 1
+    assert attempt_two["superseded_by_attempt_number"] is None
+    assert attempt_two["parsed_ui_reported_count"] == 28
+    assert attempt_two["acm_search_run_date_verbatim"] == "2026-09-02 at 20:48:36 PDT"
+    assert attempt_two["normalized_search_timestamp_utc"] == "2026-09-03T03:48:36Z"
+    assert attempt_two["validation"]["state"] == "VALID"
+    assert child["accepted_attempt_number"] == 2
+    assert child["completion_state"] == QUERY_SYNTAX_COMPLETE
 
 
 def test_exact_single_field_operator_evidence_passes() -> None:

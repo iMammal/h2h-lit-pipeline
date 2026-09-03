@@ -16,6 +16,7 @@
             {
               "acm_search_run_date_verbatim": "2026-09-02 at 19:02:55 PDT",
               "artifact": {
+                "availability": "AVAILABLE",
                 "byte_size": 1712,
                 "raw_sha256": "682ca5628ff6b9b2d17024b926769954c354e9ca8e6e30b9b0835189f537b558",
                 "relative_path": "artifacts/acm_field_execution/2026-09-02/query_syntax/QF01_title_query_syntax_csv"
@@ -51,11 +52,12 @@
           "field_label": "Title"
         },
         {
-          "accepted_attempt_number": null,
+          "accepted_attempt_number": 2,
           "attempts": [
             {
               "acm_search_run_date_verbatim": "2026-09-02 at 18:55:53 PDT",
               "artifact": {
+                "availability": "OVERWRITTEN_UNAVAILABLE",
                 "byte_size": 1787,
                 "raw_sha256": "0f9a07aac22c954ad1c699b55565496ac05c9120088c48040152ff311919d28e",
                 "relative_path": "artifacts/acm_field_execution/2026-09-02/query_syntax/QF01_keyword_query_syntax_csv"
@@ -68,7 +70,7 @@
               "normalized_search_timestamp_utc": "2026-09-03T01:55:53Z",
               "parsed_ui_reported_count": 48,
               "query_name": "QF01_keyword_query_syntax.csv",
-              "superseded_by_attempt_number": null,
+              "superseded_by_attempt_number": 2,
               "supersedes_attempt_number": null,
               "validation": {
                 "checks": {
@@ -83,10 +85,42 @@
                 "reason": "stored query contains 70 literal backslashes before phrase quotes; exact frozen query required",
                 "state": "INVALID"
               }
+            },
+            {
+              "acm_search_run_date_verbatim": "2026-09-02 at 20:48:36 PDT",
+              "artifact": {
+                "availability": "AVAILABLE",
+                "byte_size": 1717,
+                "raw_sha256": "c9ca2d46a89624c104f4f4c5a0344f9053bc62cba9043a9bd7a66dad3dcf0fd1",
+                "relative_path": "artifacts/acm_field_execution/2026-09-02/query_syntax/QF01_keyword_query_syntax_csv"
+              },
+              "attempt_number": 2,
+              "child_query_id": "production:STAR-QF01-RELATIONAL-VIS:ACMDigitalLibrary:field:keyword",
+              "family_id": "STAR-QF01-RELATIONAL-VIS",
+              "field_key": "keyword",
+              "field_label": "Keyword",
+              "normalized_search_timestamp_utc": "2026-09-03T03:48:36Z",
+              "parsed_ui_reported_count": 28,
+              "query_name": "QF01_keyword_query_syntax_csv",
+              "superseded_by_attempt_number": null,
+              "supersedes_attempt_number": 1,
+              "validation": {
+                "checks": {
+                  "exact_frozen_scientific_expression": true,
+                  "exactly_one_expected_field_wrapper": true,
+                  "no_other_field_wrapper": true,
+                  "query_name_matches_child": true,
+                  "required_collection_filter": true,
+                  "timestamp_normalized_to_utc": true,
+                  "ui_count_parsed": true
+                },
+                "reason": null,
+                "state": "VALID"
+              }
             }
           ],
           "child_query_id": "production:STAR-QF01-RELATIONAL-VIS:ACMDigitalLibrary:field:keyword",
-          "completion_state": "REQUIRES_CORRECTED_ATTEMPT",
+          "completion_state": "SYNTAX_COUNT_EVIDENCE_VALIDATED",
           "field_key": "keyword",
           "field_label": "Keyword"
         },
@@ -96,6 +130,7 @@
             {
               "acm_search_run_date_verbatim": "2026-09-02 at 19:04:29 PDT",
               "artifact": {
+                "availability": "AVAILABLE",
                 "byte_size": 1722,
                 "raw_sha256": "8807e8085d6f84d489922e4ed272da67698c1d521e95442453f7a4fee6a799ea",
                 "relative_path": "artifacts/acm_field_execution/2026-09-02/query_syntax/QF01_abstract_query_syntax_csv"
@@ -142,6 +177,7 @@
             {
               "acm_search_run_date_verbatim": "2026-09-02 at 19:05:45 PDT",
               "artifact": {
+                "availability": "AVAILABLE",
                 "byte_size": 3011,
                 "raw_sha256": "db1edc08ad24141719828971e64516015cda19c9e5d0a73543f3cc6b03a77b6d",
                 "relative_path": "artifacts/acm_field_execution/2026-09-02/query_syntax/QF02_title_query_syntax_csv"
@@ -182,6 +218,7 @@
             {
               "acm_search_run_date_verbatim": "2026-09-02 at 19:07:53 PDT",
               "artifact": {
+                "availability": "AVAILABLE",
                 "byte_size": 3015,
                 "raw_sha256": "dec43b59bb0ff72b30bb5c7779afcdf1c5c3c898487721a2c127f25ad4905f37",
                 "relative_path": "artifacts/acm_field_execution/2026-09-02/query_syntax/QF02_keyword_query_syntax_csv"
@@ -222,6 +259,7 @@
             {
               "acm_search_run_date_verbatim": "2026-09-02 at 19:11:15 PDT",
               "artifact": {
+                "availability": "AVAILABLE",
                 "byte_size": 3020,
                 "raw_sha256": "c0d00f388c5ba90d8a41cb8783f788bfb76e443999d02cce88543e9d51b54e3b",
                 "relative_path": "artifacts/acm_field_execution/2026-09-02/query_syntax/QF02_abstract_query_syntax_csv"
@@ -268,6 +306,7 @@
             {
               "acm_search_run_date_verbatim": "2026-09-02 at 19:13:01 PDT",
               "artifact": {
+                "availability": "AVAILABLE",
                 "byte_size": 2253,
                 "raw_sha256": "ea0b8fb2e134d5dd8c5721d6a4010483f40530c580644b78936150cffc48f308",
                 "relative_path": "artifacts/acm_field_execution/2026-09-02/query_syntax/QF03_title_query_syntax_csv"
@@ -308,6 +347,7 @@
             {
               "acm_search_run_date_verbatim": "2026-09-02 at 19:13:58 PDT",
               "artifact": {
+                "availability": "AVAILABLE",
                 "byte_size": 2258,
                 "raw_sha256": "ebe91a54114999da6392118dbfd7bedf298aa1c456453bcede002018f1967bc3",
                 "relative_path": "artifacts/acm_field_execution/2026-09-02/query_syntax/QF03_keyword_query_syntax_csv"
@@ -348,6 +388,7 @@
             {
               "acm_search_run_date_verbatim": "2026-09-02 at 19:15:05 PDT",
               "artifact": {
+                "availability": "AVAILABLE",
                 "byte_size": 2263,
                 "raw_sha256": "1476df7e871606e97a6d91551f34aadca8bf0106d02e74f9fa94f776443d1f7e",
                 "relative_path": "artifacts/acm_field_execution/2026-09-02/query_syntax/QF03_abstract_query_syntax_csv"
@@ -394,6 +435,7 @@
             {
               "acm_search_run_date_verbatim": "2026-09-02 at 19:16:21 PDT",
               "artifact": {
+                "availability": "AVAILABLE",
                 "byte_size": 2365,
                 "raw_sha256": "0beb2636e81cc4fff25d2b046bd1c74d0d9f34482283bc8b1069b6d6e8950733",
                 "relative_path": "artifacts/acm_field_execution/2026-09-02/query_syntax/QF04_title_query_syntax_csv"
@@ -434,6 +476,7 @@
             {
               "acm_search_run_date_verbatim": "2026-09-02 at 19:19:18 PDT",
               "artifact": {
+                "availability": "AVAILABLE",
                 "byte_size": 2369,
                 "raw_sha256": "89177437e377614ba0234a12cd8aa205ba1c41b6392492a4a8da2cba265f393f",
                 "relative_path": "artifacts/acm_field_execution/2026-09-02/query_syntax/QF04_keyword_query_syntax_csv"
@@ -474,6 +517,7 @@
             {
               "acm_search_run_date_verbatim": "2026-09-02 at 19:20:19 PDT",
               "artifact": {
+                "availability": "AVAILABLE",
                 "byte_size": 2374,
                 "raw_sha256": "f6535ed358beae8bfb5eb514a68741108034055368477a3050a012dfaf411100",
                 "relative_path": "artifacts/acm_field_execution/2026-09-02/query_syntax/QF04_abstract_query_syntax_csv"
@@ -520,6 +564,7 @@
             {
               "acm_search_run_date_verbatim": "2026-09-02 at 19:21:36 PDT",
               "artifact": {
+                "availability": "AVAILABLE",
                 "byte_size": 2495,
                 "raw_sha256": "b7de6f005668a5604d3f77ed5395f2f754e61fa6119268334cf508c2e386a58e",
                 "relative_path": "artifacts/acm_field_execution/2026-09-02/query_syntax/QF05_title_query_syntax_csv"
@@ -560,6 +605,7 @@
             {
               "acm_search_run_date_verbatim": "2026-09-02 at 19:22:37 PDT",
               "artifact": {
+                "availability": "AVAILABLE",
                 "byte_size": 2499,
                 "raw_sha256": "4b75c28758745f3b7a0b9af2d8a0432c7cb747714a368054177638cdcae7ea42",
                 "relative_path": "artifacts/acm_field_execution/2026-09-02/query_syntax/QF05_keyword_query_syntax_csv"
@@ -600,6 +646,7 @@
             {
               "acm_search_run_date_verbatim": "2026-09-02 at 19:23:26 PDT",
               "artifact": {
+                "availability": "AVAILABLE",
                 "byte_size": 2504,
                 "raw_sha256": "d5bc5f7d01ebbbed5a6fde02e229bf490d66d2523a1ff1f43a65421776ee844f",
                 "relative_path": "artifacts/acm_field_execution/2026-09-02/query_syntax/QF05_abstract_query_syntax_csv"
@@ -646,9 +693,9 @@
     "repository_policy": "raw operator artifacts are under the ignored artifacts directory",
     "status": "unresolved"
   },
-  "manifest_hash": "4dec0a54775f661755f8728fb7df3cbfeba3013961d7600c97112e73c69ffe35",
+  "manifest_hash": "2dc4ce26e30750a93f47e4cc10ff581aacec660ce4f6abdb1184858f6b681f3d",
   "manifest_id": "star-acm-field-execution-2026-09-02-query-syntax",
-  "manifest_status": "COMPLETED_CAPTURE_WITH_VALIDATION_FAILURE",
+  "manifest_status": "SYNTAX_COUNT_EVIDENCE_VALIDATED",
   "manifest_version": "1.0.0",
   "operator_evidence_limitations": {
     "citation_exports": "NOT_PERFORMED",
@@ -667,13 +714,20 @@
     "prisma_generated": false,
     "screening_executed": false
   },
+  "reconciliation": {
+    "changed_child_query_ids": [
+      "production:STAR-QF01-RELATIONAL-VIS:ACMDigitalLibrary:field:keyword"
+    ],
+    "overwritten_bytes_reconstructed": false,
+    "previous_manifest_hash": "4dec0a54775f661755f8728fb7df3cbfeba3013961d7600c97112e73c69ffe35"
+  },
   "schema_version": "1.0.0",
   "source_directory": "artifacts/acm_field_execution/2026-09-02/query_syntax",
   "validation_summary": {
-    "all_children_have_accepted_attempt": false,
+    "all_children_have_accepted_attempt": true,
     "expected_child_count": 15,
     "invalid_attempt_count": 1,
-    "observed_artifact_count": 15,
-    "valid_attempt_count": 14
+    "observed_artifact_count": 16,
+    "valid_attempt_count": 15
   }
 }
