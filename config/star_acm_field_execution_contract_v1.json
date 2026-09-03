@@ -1,0 +1,663 @@
+{
+  "contract_hash": "8626fc8e2dfe6e9b13bf6d2478b29c6f87e3864e9c8675dbd16c0de7a7466e8c",
+  "contract_id": "star-acm-field-decomposed-execution",
+  "contract_version": "1.0.0",
+  "execution_contract": {
+    "browser_automation": false,
+    "collection": "Full-Text Collection",
+    "exported_filter_syntax": "ACM Content: DL",
+    "filters": {},
+    "network_execution_performed": false,
+    "parent_result_definition": "deterministic_set_union_of_three_field_children",
+    "scientific_query_change": false,
+    "scope": "ACM Publications",
+    "sort": "publicationDate asc",
+    "transport": "human_ui_artifact_import"
+  },
+  "families": [
+    {
+      "children": [
+        {
+          "child_query_id": "production:STAR-QF01-RELATIONAL-VIS:ACMDigitalLibrary:field:title",
+          "child_query_sha256": "5349e9b56499fabafef90778ae7d0e81bc85ea54a4fc5384243877e3d63cabaf",
+          "child_query_text": "Title:(((\"life science\" OR \"life sciences\" OR biology OR biological OR biomedical OR bioinformatics OR \"systems biology\" OR genomics OR transcriptomics OR proteomics OR metabolomics OR epigenomics OR omics OR \"single cell\" OR \"single-cell\" OR \"spatial transcriptomics\" OR connectomics OR neuroscience OR pathology OR microscopy OR ecology OR ecological OR \"marine science\") OR (clinical OR medical OR health OR tissue OR cellular OR molecular OR imaging)) AND ((\"visual analytics\" OR \"interactive visualization\" OR \"interactive visualisation\" OR \"visual exploration\" OR \"visual analysis\" OR \"exploratory visualization\" OR \"exploratory visualisation\") OR ((\"data visualization\" OR \"data visualisation\" OR \"information visualization\" OR \"information visualisation\" OR \"scientific visualization\" OR \"scientific visualisation\" OR visualization OR visualisation OR \"graphical display\") AND (interactive OR exploratory OR \"user-guided\" OR \"user-steered\" OR \"human-in-the-loop\" OR brushing OR filtering OR \"linked views\" OR \"coordinated views\"))) AND ((\"biological network\" OR \"molecular network\" OR \"protein-protein interaction\" OR interactome OR connectome OR \"gene regulatory network\" OR pathway OR \"cell-cell communication\" OR lineage OR multiscale OR \"multi-scale\" OR hierarchy OR hierarchical OR \"node-link\" OR \"adjacency matrix\") OR (network OR graph OR relational OR relationship OR relationships OR connectivity OR topology OR neighborhood OR neighbourhood OR trajectory OR similarity OR spatial OR temporal OR multivariate OR \"image-derived\")))",
+          "completion": {
+            "citation_export_required": true,
+            "contiguous_chunk_ranges_required": true,
+            "format": "BibTeX",
+            "ui_total_reconciliation_required": true
+          },
+          "execution_status": "REQUIRES_OPERATOR_INPUT",
+          "export_artifact_references": [],
+          "field_key": "title",
+          "field_label": "Title",
+          "operator_evidence": {
+            "exact_single_field_wrapper_required": true,
+            "export_query_syntax_csv_required": true,
+            "query_url_or_screenshot_evidence_required": true,
+            "ui_reported_count_required": true,
+            "utc_timestamp_required": true
+          },
+          "request_specification": {
+            "collection": "Full-Text Collection",
+            "field": "Title",
+            "filters": {},
+            "scope": "ACM Publications",
+            "sort": "publicationDate asc",
+            "transport": "human_ui_artifact_import",
+            "workflow": "advanced_search"
+          }
+        },
+        {
+          "child_query_id": "production:STAR-QF01-RELATIONAL-VIS:ACMDigitalLibrary:field:keyword",
+          "child_query_sha256": "8e3d4a09ab66c4512dd829f2ace6d124fdbfbdf0f00e950ca559d3b3392f5a1f",
+          "child_query_text": "Keyword:(((\"life science\" OR \"life sciences\" OR biology OR biological OR biomedical OR bioinformatics OR \"systems biology\" OR genomics OR transcriptomics OR proteomics OR metabolomics OR epigenomics OR omics OR \"single cell\" OR \"single-cell\" OR \"spatial transcriptomics\" OR connectomics OR neuroscience OR pathology OR microscopy OR ecology OR ecological OR \"marine science\") OR (clinical OR medical OR health OR tissue OR cellular OR molecular OR imaging)) AND ((\"visual analytics\" OR \"interactive visualization\" OR \"interactive visualisation\" OR \"visual exploration\" OR \"visual analysis\" OR \"exploratory visualization\" OR \"exploratory visualisation\") OR ((\"data visualization\" OR \"data visualisation\" OR \"information visualization\" OR \"information visualisation\" OR \"scientific visualization\" OR \"scientific visualisation\" OR visualization OR visualisation OR \"graphical display\") AND (interactive OR exploratory OR \"user-guided\" OR \"user-steered\" OR \"human-in-the-loop\" OR brushing OR filtering OR \"linked views\" OR \"coordinated views\"))) AND ((\"biological network\" OR \"molecular network\" OR \"protein-protein interaction\" OR interactome OR connectome OR \"gene regulatory network\" OR pathway OR \"cell-cell communication\" OR lineage OR multiscale OR \"multi-scale\" OR hierarchy OR hierarchical OR \"node-link\" OR \"adjacency matrix\") OR (network OR graph OR relational OR relationship OR relationships OR connectivity OR topology OR neighborhood OR neighbourhood OR trajectory OR similarity OR spatial OR temporal OR multivariate OR \"image-derived\")))",
+          "completion": {
+            "citation_export_required": true,
+            "contiguous_chunk_ranges_required": true,
+            "format": "BibTeX",
+            "ui_total_reconciliation_required": true
+          },
+          "execution_status": "REQUIRES_OPERATOR_INPUT",
+          "export_artifact_references": [],
+          "field_key": "keyword",
+          "field_label": "Keyword",
+          "operator_evidence": {
+            "exact_single_field_wrapper_required": true,
+            "export_query_syntax_csv_required": true,
+            "query_url_or_screenshot_evidence_required": true,
+            "ui_reported_count_required": true,
+            "utc_timestamp_required": true
+          },
+          "request_specification": {
+            "collection": "Full-Text Collection",
+            "field": "Keyword",
+            "filters": {},
+            "scope": "ACM Publications",
+            "sort": "publicationDate asc",
+            "transport": "human_ui_artifact_import",
+            "workflow": "advanced_search"
+          }
+        },
+        {
+          "child_query_id": "production:STAR-QF01-RELATIONAL-VIS:ACMDigitalLibrary:field:abstract",
+          "child_query_sha256": "fb81b9c4e613ed9543ba55d37a716467821d809ba3759bedb1846dc0b9606ed1",
+          "child_query_text": "Abstract:(((\"life science\" OR \"life sciences\" OR biology OR biological OR biomedical OR bioinformatics OR \"systems biology\" OR genomics OR transcriptomics OR proteomics OR metabolomics OR epigenomics OR omics OR \"single cell\" OR \"single-cell\" OR \"spatial transcriptomics\" OR connectomics OR neuroscience OR pathology OR microscopy OR ecology OR ecological OR \"marine science\") OR (clinical OR medical OR health OR tissue OR cellular OR molecular OR imaging)) AND ((\"visual analytics\" OR \"interactive visualization\" OR \"interactive visualisation\" OR \"visual exploration\" OR \"visual analysis\" OR \"exploratory visualization\" OR \"exploratory visualisation\") OR ((\"data visualization\" OR \"data visualisation\" OR \"information visualization\" OR \"information visualisation\" OR \"scientific visualization\" OR \"scientific visualisation\" OR visualization OR visualisation OR \"graphical display\") AND (interactive OR exploratory OR \"user-guided\" OR \"user-steered\" OR \"human-in-the-loop\" OR brushing OR filtering OR \"linked views\" OR \"coordinated views\"))) AND ((\"biological network\" OR \"molecular network\" OR \"protein-protein interaction\" OR interactome OR connectome OR \"gene regulatory network\" OR pathway OR \"cell-cell communication\" OR lineage OR multiscale OR \"multi-scale\" OR hierarchy OR hierarchical OR \"node-link\" OR \"adjacency matrix\") OR (network OR graph OR relational OR relationship OR relationships OR connectivity OR topology OR neighborhood OR neighbourhood OR trajectory OR similarity OR spatial OR temporal OR multivariate OR \"image-derived\")))",
+          "completion": {
+            "citation_export_required": true,
+            "contiguous_chunk_ranges_required": true,
+            "format": "BibTeX",
+            "ui_total_reconciliation_required": true
+          },
+          "execution_status": "REQUIRES_OPERATOR_INPUT",
+          "export_artifact_references": [],
+          "field_key": "abstract",
+          "field_label": "Abstract",
+          "operator_evidence": {
+            "exact_single_field_wrapper_required": true,
+            "export_query_syntax_csv_required": true,
+            "query_url_or_screenshot_evidence_required": true,
+            "ui_reported_count_required": true,
+            "utc_timestamp_required": true
+          },
+          "request_specification": {
+            "collection": "Full-Text Collection",
+            "field": "Abstract",
+            "filters": {},
+            "scope": "ACM Publications",
+            "sort": "publicationDate asc",
+            "transport": "human_ui_artifact_import",
+            "workflow": "advanced_search"
+          }
+        }
+      ],
+      "decomposed_union_semantics": "union(Title:(Q), Keyword:(Q), Abstract:(Q))",
+      "family_id": "STAR-QF01-RELATIONAL-VIS",
+      "parent_combined_semantics": "Title:(Q) OR Keyword:(Q) OR Abstract:(Q)",
+      "parent_completion": {
+        "all_child_exports_reconciled_required": true,
+        "all_three_children_required": true,
+        "missing_stable_identity_blocks_union": true,
+        "overlap_categories": [
+          "title_only",
+          "keyword_only",
+          "abstract_only",
+          "title_keyword",
+          "title_abstract",
+          "keyword_abstract",
+          "triple_overlap"
+        ],
+        "stable_identity_hierarchy": [
+          "ACM native ID",
+          "normalized DOI"
+        ]
+      },
+      "parent_query_hash": "93109d5271be4e35de70127bc6941455ed852d1e3092ae07fb6dd04c61b33ff5",
+      "parent_query_id": "production:STAR-QF01-RELATIONAL-VIS:ACMDigitalLibrary",
+      "scientific_query_text": "((\"life science\" OR \"life sciences\" OR biology OR biological OR biomedical OR bioinformatics OR \"systems biology\" OR genomics OR transcriptomics OR proteomics OR metabolomics OR epigenomics OR omics OR \"single cell\" OR \"single-cell\" OR \"spatial transcriptomics\" OR connectomics OR neuroscience OR pathology OR microscopy OR ecology OR ecological OR \"marine science\") OR (clinical OR medical OR health OR tissue OR cellular OR molecular OR imaging)) AND ((\"visual analytics\" OR \"interactive visualization\" OR \"interactive visualisation\" OR \"visual exploration\" OR \"visual analysis\" OR \"exploratory visualization\" OR \"exploratory visualisation\") OR ((\"data visualization\" OR \"data visualisation\" OR \"information visualization\" OR \"information visualisation\" OR \"scientific visualization\" OR \"scientific visualisation\" OR visualization OR visualisation OR \"graphical display\") AND (interactive OR exploratory OR \"user-guided\" OR \"user-steered\" OR \"human-in-the-loop\" OR brushing OR filtering OR \"linked views\" OR \"coordinated views\"))) AND ((\"biological network\" OR \"molecular network\" OR \"protein-protein interaction\" OR interactome OR connectome OR \"gene regulatory network\" OR pathway OR \"cell-cell communication\" OR lineage OR multiscale OR \"multi-scale\" OR hierarchy OR hierarchical OR \"node-link\" OR \"adjacency matrix\") OR (network OR graph OR relational OR relationship OR relationships OR connectivity OR topology OR neighborhood OR neighbourhood OR trajectory OR similarity OR spatial OR temporal OR multivariate OR \"image-derived\"))",
+      "scientific_query_text_sha256": "34e0d8334d0cfde34108bd7e38def34665c3a0ada70d74697b7864ea15880cff"
+    },
+    {
+      "children": [
+        {
+          "child_query_id": "production:STAR-QF02-ASSISTED-VIS:ACMDigitalLibrary:field:title",
+          "child_query_sha256": "d4f7804d31682f6b84cd315009d4219763f6bc173da2f95a816e6737087e7c45",
+          "child_query_text": "Title:(((\"life science\" OR \"life sciences\" OR biology OR biological OR biomedical OR bioinformatics OR \"systems biology\" OR genomics OR transcriptomics OR proteomics OR metabolomics OR epigenomics OR omics OR \"single cell\" OR \"single-cell\" OR \"spatial transcriptomics\" OR connectomics OR neuroscience OR pathology OR microscopy OR ecology OR ecological OR \"marine science\") OR (clinical OR medical OR health OR tissue OR cellular OR molecular OR imaging)) AND (((\"visual analytics\" OR \"interactive visualization\" OR \"interactive visualisation\" OR \"visual exploration\" OR \"visual analysis\" OR \"exploratory visualization\" OR \"exploratory visualisation\") OR ((\"data visualization\" OR \"data visualisation\" OR \"information visualization\" OR \"information visualisation\" OR \"scientific visualization\" OR \"scientific visualisation\" OR visualization OR visualisation OR \"graphical display\") AND (interactive OR exploratory OR \"user-guided\" OR \"user-steered\" OR \"human-in-the-loop\" OR brushing OR filtering OR \"linked views\" OR \"coordinated views\"))) OR ((\"interactive system\" OR \"interactive tool\" OR \"interactive platform\" OR \"visual interface\" OR \"analytic interface\" OR \"analysis workbench\" OR \"exploration tool\" OR \"exploratory tool\" OR \"visualization system\" OR \"visualisation system\" OR \"visualization tool\" OR \"visualisation tool\" OR \"interactive dashboard\") OR ((tool OR system OR platform OR interface OR explorer OR workbench OR dashboard) AND (interactive OR exploratory OR \"user-guided\" OR \"user-steered\" OR \"human-in-the-loop\" OR brushing OR filtering OR \"linked views\" OR \"coordinated views\")))) AND ((\"mixed initiative\" OR \"mixed-initiative\" OR \"visual analytics guidance\" OR \"guided visual analytics\" OR \"visualization recommendation\" OR \"visualisation recommendation\" OR \"view recommendation\" OR \"interaction recommendation\" OR \"adaptive visualization\" OR \"adaptive visualisation\" OR \"adaptive interface\" OR \"user model\" OR \"user modeling\" OR \"user modelling\" OR \"personalized visualization\" OR \"personalised visualisation\" OR \"proactive visual analytics\" OR \"human-in-the-loop analytics\" OR \"natural language interface\" OR \"conversational interface\" OR \"large language model\" OR LLM OR \"visualization agent\" OR \"visual analytics agent\") OR ((\"machine learning\" OR \"artificial intelligence\" OR clustering OR \"dimensionality reduction\" OR aggregation OR layout OR ranking OR recommendation OR prediction OR classification OR annotation OR segmentation OR \"feature extraction\" OR automatic OR automated) AND (\"visual analytics\" OR \"interactive visualization\" OR \"interactive visualisation\" OR \"interactive system\" OR \"interactive tool\" OR \"visualization system\" OR \"visualisation system\" OR \"visual interface\" OR \"analytic interface\" OR \"user-guided\" OR \"user-steered\" OR \"human-in-the-loop\" OR \"mixed initiative\" OR \"mixed-initiative\"))))",
+          "completion": {
+            "citation_export_required": true,
+            "contiguous_chunk_ranges_required": true,
+            "format": "BibTeX",
+            "ui_total_reconciliation_required": true
+          },
+          "execution_status": "REQUIRES_OPERATOR_INPUT",
+          "export_artifact_references": [],
+          "field_key": "title",
+          "field_label": "Title",
+          "operator_evidence": {
+            "exact_single_field_wrapper_required": true,
+            "export_query_syntax_csv_required": true,
+            "query_url_or_screenshot_evidence_required": true,
+            "ui_reported_count_required": true,
+            "utc_timestamp_required": true
+          },
+          "request_specification": {
+            "collection": "Full-Text Collection",
+            "field": "Title",
+            "filters": {},
+            "scope": "ACM Publications",
+            "sort": "publicationDate asc",
+            "transport": "human_ui_artifact_import",
+            "workflow": "advanced_search"
+          }
+        },
+        {
+          "child_query_id": "production:STAR-QF02-ASSISTED-VIS:ACMDigitalLibrary:field:keyword",
+          "child_query_sha256": "12943d0b7d44e37fd9cfea4bf81932a0f472780a4b9952ae3704f7dbd859d300",
+          "child_query_text": "Keyword:(((\"life science\" OR \"life sciences\" OR biology OR biological OR biomedical OR bioinformatics OR \"systems biology\" OR genomics OR transcriptomics OR proteomics OR metabolomics OR epigenomics OR omics OR \"single cell\" OR \"single-cell\" OR \"spatial transcriptomics\" OR connectomics OR neuroscience OR pathology OR microscopy OR ecology OR ecological OR \"marine science\") OR (clinical OR medical OR health OR tissue OR cellular OR molecular OR imaging)) AND (((\"visual analytics\" OR \"interactive visualization\" OR \"interactive visualisation\" OR \"visual exploration\" OR \"visual analysis\" OR \"exploratory visualization\" OR \"exploratory visualisation\") OR ((\"data visualization\" OR \"data visualisation\" OR \"information visualization\" OR \"information visualisation\" OR \"scientific visualization\" OR \"scientific visualisation\" OR visualization OR visualisation OR \"graphical display\") AND (interactive OR exploratory OR \"user-guided\" OR \"user-steered\" OR \"human-in-the-loop\" OR brushing OR filtering OR \"linked views\" OR \"coordinated views\"))) OR ((\"interactive system\" OR \"interactive tool\" OR \"interactive platform\" OR \"visual interface\" OR \"analytic interface\" OR \"analysis workbench\" OR \"exploration tool\" OR \"exploratory tool\" OR \"visualization system\" OR \"visualisation system\" OR \"visualization tool\" OR \"visualisation tool\" OR \"interactive dashboard\") OR ((tool OR system OR platform OR interface OR explorer OR workbench OR dashboard) AND (interactive OR exploratory OR \"user-guided\" OR \"user-steered\" OR \"human-in-the-loop\" OR brushing OR filtering OR \"linked views\" OR \"coordinated views\")))) AND ((\"mixed initiative\" OR \"mixed-initiative\" OR \"visual analytics guidance\" OR \"guided visual analytics\" OR \"visualization recommendation\" OR \"visualisation recommendation\" OR \"view recommendation\" OR \"interaction recommendation\" OR \"adaptive visualization\" OR \"adaptive visualisation\" OR \"adaptive interface\" OR \"user model\" OR \"user modeling\" OR \"user modelling\" OR \"personalized visualization\" OR \"personalised visualisation\" OR \"proactive visual analytics\" OR \"human-in-the-loop analytics\" OR \"natural language interface\" OR \"conversational interface\" OR \"large language model\" OR LLM OR \"visualization agent\" OR \"visual analytics agent\") OR ((\"machine learning\" OR \"artificial intelligence\" OR clustering OR \"dimensionality reduction\" OR aggregation OR layout OR ranking OR recommendation OR prediction OR classification OR annotation OR segmentation OR \"feature extraction\" OR automatic OR automated) AND (\"visual analytics\" OR \"interactive visualization\" OR \"interactive visualisation\" OR \"interactive system\" OR \"interactive tool\" OR \"visualization system\" OR \"visualisation system\" OR \"visual interface\" OR \"analytic interface\" OR \"user-guided\" OR \"user-steered\" OR \"human-in-the-loop\" OR \"mixed initiative\" OR \"mixed-initiative\"))))",
+          "completion": {
+            "citation_export_required": true,
+            "contiguous_chunk_ranges_required": true,
+            "format": "BibTeX",
+            "ui_total_reconciliation_required": true
+          },
+          "execution_status": "REQUIRES_OPERATOR_INPUT",
+          "export_artifact_references": [],
+          "field_key": "keyword",
+          "field_label": "Keyword",
+          "operator_evidence": {
+            "exact_single_field_wrapper_required": true,
+            "export_query_syntax_csv_required": true,
+            "query_url_or_screenshot_evidence_required": true,
+            "ui_reported_count_required": true,
+            "utc_timestamp_required": true
+          },
+          "request_specification": {
+            "collection": "Full-Text Collection",
+            "field": "Keyword",
+            "filters": {},
+            "scope": "ACM Publications",
+            "sort": "publicationDate asc",
+            "transport": "human_ui_artifact_import",
+            "workflow": "advanced_search"
+          }
+        },
+        {
+          "child_query_id": "production:STAR-QF02-ASSISTED-VIS:ACMDigitalLibrary:field:abstract",
+          "child_query_sha256": "f853a75cbdb081511fee42e05de89d67aa78690928354579ad9418a298dbbca8",
+          "child_query_text": "Abstract:(((\"life science\" OR \"life sciences\" OR biology OR biological OR biomedical OR bioinformatics OR \"systems biology\" OR genomics OR transcriptomics OR proteomics OR metabolomics OR epigenomics OR omics OR \"single cell\" OR \"single-cell\" OR \"spatial transcriptomics\" OR connectomics OR neuroscience OR pathology OR microscopy OR ecology OR ecological OR \"marine science\") OR (clinical OR medical OR health OR tissue OR cellular OR molecular OR imaging)) AND (((\"visual analytics\" OR \"interactive visualization\" OR \"interactive visualisation\" OR \"visual exploration\" OR \"visual analysis\" OR \"exploratory visualization\" OR \"exploratory visualisation\") OR ((\"data visualization\" OR \"data visualisation\" OR \"information visualization\" OR \"information visualisation\" OR \"scientific visualization\" OR \"scientific visualisation\" OR visualization OR visualisation OR \"graphical display\") AND (interactive OR exploratory OR \"user-guided\" OR \"user-steered\" OR \"human-in-the-loop\" OR brushing OR filtering OR \"linked views\" OR \"coordinated views\"))) OR ((\"interactive system\" OR \"interactive tool\" OR \"interactive platform\" OR \"visual interface\" OR \"analytic interface\" OR \"analysis workbench\" OR \"exploration tool\" OR \"exploratory tool\" OR \"visualization system\" OR \"visualisation system\" OR \"visualization tool\" OR \"visualisation tool\" OR \"interactive dashboard\") OR ((tool OR system OR platform OR interface OR explorer OR workbench OR dashboard) AND (interactive OR exploratory OR \"user-guided\" OR \"user-steered\" OR \"human-in-the-loop\" OR brushing OR filtering OR \"linked views\" OR \"coordinated views\")))) AND ((\"mixed initiative\" OR \"mixed-initiative\" OR \"visual analytics guidance\" OR \"guided visual analytics\" OR \"visualization recommendation\" OR \"visualisation recommendation\" OR \"view recommendation\" OR \"interaction recommendation\" OR \"adaptive visualization\" OR \"adaptive visualisation\" OR \"adaptive interface\" OR \"user model\" OR \"user modeling\" OR \"user modelling\" OR \"personalized visualization\" OR \"personalised visualisation\" OR \"proactive visual analytics\" OR \"human-in-the-loop analytics\" OR \"natural language interface\" OR \"conversational interface\" OR \"large language model\" OR LLM OR \"visualization agent\" OR \"visual analytics agent\") OR ((\"machine learning\" OR \"artificial intelligence\" OR clustering OR \"dimensionality reduction\" OR aggregation OR layout OR ranking OR recommendation OR prediction OR classification OR annotation OR segmentation OR \"feature extraction\" OR automatic OR automated) AND (\"visual analytics\" OR \"interactive visualization\" OR \"interactive visualisation\" OR \"interactive system\" OR \"interactive tool\" OR \"visualization system\" OR \"visualisation system\" OR \"visual interface\" OR \"analytic interface\" OR \"user-guided\" OR \"user-steered\" OR \"human-in-the-loop\" OR \"mixed initiative\" OR \"mixed-initiative\"))))",
+          "completion": {
+            "citation_export_required": true,
+            "contiguous_chunk_ranges_required": true,
+            "format": "BibTeX",
+            "ui_total_reconciliation_required": true
+          },
+          "execution_status": "REQUIRES_OPERATOR_INPUT",
+          "export_artifact_references": [],
+          "field_key": "abstract",
+          "field_label": "Abstract",
+          "operator_evidence": {
+            "exact_single_field_wrapper_required": true,
+            "export_query_syntax_csv_required": true,
+            "query_url_or_screenshot_evidence_required": true,
+            "ui_reported_count_required": true,
+            "utc_timestamp_required": true
+          },
+          "request_specification": {
+            "collection": "Full-Text Collection",
+            "field": "Abstract",
+            "filters": {},
+            "scope": "ACM Publications",
+            "sort": "publicationDate asc",
+            "transport": "human_ui_artifact_import",
+            "workflow": "advanced_search"
+          }
+        }
+      ],
+      "decomposed_union_semantics": "union(Title:(Q), Keyword:(Q), Abstract:(Q))",
+      "family_id": "STAR-QF02-ASSISTED-VIS",
+      "parent_combined_semantics": "Title:(Q) OR Keyword:(Q) OR Abstract:(Q)",
+      "parent_completion": {
+        "all_child_exports_reconciled_required": true,
+        "all_three_children_required": true,
+        "missing_stable_identity_blocks_union": true,
+        "overlap_categories": [
+          "title_only",
+          "keyword_only",
+          "abstract_only",
+          "title_keyword",
+          "title_abstract",
+          "keyword_abstract",
+          "triple_overlap"
+        ],
+        "stable_identity_hierarchy": [
+          "ACM native ID",
+          "normalized DOI"
+        ]
+      },
+      "parent_query_hash": "54dd631c674660482fdf1790d9210b9476d1f17a8583913862380153b158b819",
+      "parent_query_id": "production:STAR-QF02-ASSISTED-VIS:ACMDigitalLibrary",
+      "scientific_query_text": "((\"life science\" OR \"life sciences\" OR biology OR biological OR biomedical OR bioinformatics OR \"systems biology\" OR genomics OR transcriptomics OR proteomics OR metabolomics OR epigenomics OR omics OR \"single cell\" OR \"single-cell\" OR \"spatial transcriptomics\" OR connectomics OR neuroscience OR pathology OR microscopy OR ecology OR ecological OR \"marine science\") OR (clinical OR medical OR health OR tissue OR cellular OR molecular OR imaging)) AND (((\"visual analytics\" OR \"interactive visualization\" OR \"interactive visualisation\" OR \"visual exploration\" OR \"visual analysis\" OR \"exploratory visualization\" OR \"exploratory visualisation\") OR ((\"data visualization\" OR \"data visualisation\" OR \"information visualization\" OR \"information visualisation\" OR \"scientific visualization\" OR \"scientific visualisation\" OR visualization OR visualisation OR \"graphical display\") AND (interactive OR exploratory OR \"user-guided\" OR \"user-steered\" OR \"human-in-the-loop\" OR brushing OR filtering OR \"linked views\" OR \"coordinated views\"))) OR ((\"interactive system\" OR \"interactive tool\" OR \"interactive platform\" OR \"visual interface\" OR \"analytic interface\" OR \"analysis workbench\" OR \"exploration tool\" OR \"exploratory tool\" OR \"visualization system\" OR \"visualisation system\" OR \"visualization tool\" OR \"visualisation tool\" OR \"interactive dashboard\") OR ((tool OR system OR platform OR interface OR explorer OR workbench OR dashboard) AND (interactive OR exploratory OR \"user-guided\" OR \"user-steered\" OR \"human-in-the-loop\" OR brushing OR filtering OR \"linked views\" OR \"coordinated views\")))) AND ((\"mixed initiative\" OR \"mixed-initiative\" OR \"visual analytics guidance\" OR \"guided visual analytics\" OR \"visualization recommendation\" OR \"visualisation recommendation\" OR \"view recommendation\" OR \"interaction recommendation\" OR \"adaptive visualization\" OR \"adaptive visualisation\" OR \"adaptive interface\" OR \"user model\" OR \"user modeling\" OR \"user modelling\" OR \"personalized visualization\" OR \"personalised visualisation\" OR \"proactive visual analytics\" OR \"human-in-the-loop analytics\" OR \"natural language interface\" OR \"conversational interface\" OR \"large language model\" OR LLM OR \"visualization agent\" OR \"visual analytics agent\") OR ((\"machine learning\" OR \"artificial intelligence\" OR clustering OR \"dimensionality reduction\" OR aggregation OR layout OR ranking OR recommendation OR prediction OR classification OR annotation OR segmentation OR \"feature extraction\" OR automatic OR automated) AND (\"visual analytics\" OR \"interactive visualization\" OR \"interactive visualisation\" OR \"interactive system\" OR \"interactive tool\" OR \"visualization system\" OR \"visualisation system\" OR \"visual interface\" OR \"analytic interface\" OR \"user-guided\" OR \"user-steered\" OR \"human-in-the-loop\" OR \"mixed initiative\" OR \"mixed-initiative\")))",
+      "scientific_query_text_sha256": "6024c805ff3cd10c4323c30e8f358614affc25c238de5257eab9466545954023"
+    },
+    {
+      "children": [
+        {
+          "child_query_id": "production:STAR-QF03-INTERACTIVE-SYSTEMS:ACMDigitalLibrary:field:title",
+          "child_query_sha256": "1cdb781da32a917c081b366e7c0f40bf8ae43b6c437a031cca92b987d9c18de6",
+          "child_query_text": "Title:(((\"life science\" OR \"life sciences\" OR biology OR biological OR biomedical OR bioinformatics OR \"systems biology\" OR genomics OR transcriptomics OR proteomics OR metabolomics OR epigenomics OR omics OR \"single cell\" OR \"single-cell\" OR \"spatial transcriptomics\" OR connectomics OR neuroscience OR pathology OR microscopy OR ecology OR ecological OR \"marine science\") OR (clinical OR medical OR health OR tissue OR cellular OR molecular OR imaging)) AND (((\"interactive system\" OR \"interactive tool\" OR \"interactive platform\" OR \"visual interface\" OR \"analytic interface\" OR \"analysis workbench\" OR \"exploration tool\" OR \"exploratory tool\" OR \"visualization system\" OR \"visualisation system\" OR \"visualization tool\" OR \"visualisation tool\" OR \"interactive dashboard\") OR ((tool OR system OR platform OR interface OR explorer OR workbench OR dashboard) AND (interactive OR exploratory OR \"user-guided\" OR \"user-steered\" OR \"human-in-the-loop\" OR brushing OR filtering OR \"linked views\" OR \"coordinated views\"))) OR (\"visual analytics\" OR \"interactive visualization\" OR \"interactive visualisation\" OR \"visual exploration\" OR \"visual analysis\" OR \"exploratory visualization\" OR \"exploratory visualisation\")) AND ((\"biological network\" OR \"molecular network\" OR \"protein-protein interaction\" OR interactome OR connectome OR \"gene regulatory network\" OR pathway OR \"cell-cell communication\" OR lineage OR multiscale OR \"multi-scale\" OR hierarchy OR hierarchical OR \"node-link\" OR \"adjacency matrix\") OR ((network OR graph OR relational OR relationship OR relationships OR connectivity OR topology OR neighborhood OR neighbourhood OR trajectory OR similarity OR spatial OR temporal OR multivariate OR \"image-derived\") AND (\"relational data\" OR \"data relationships\" OR \"derived relationship\" OR \"spatial organization\" OR \"spatial relationship\" OR \"temporal relationship\" OR \"multivariate relationship\" OR \"multiscale structure\" OR \"neighborhood analysis\" OR \"neighbourhood analysis\" OR \"trajectory analysis\" OR \"similarity analysis\" OR \"connectivity analysis\" OR \"topological analysis\"))))",
+          "completion": {
+            "citation_export_required": true,
+            "contiguous_chunk_ranges_required": true,
+            "format": "BibTeX",
+            "ui_total_reconciliation_required": true
+          },
+          "execution_status": "REQUIRES_OPERATOR_INPUT",
+          "export_artifact_references": [],
+          "field_key": "title",
+          "field_label": "Title",
+          "operator_evidence": {
+            "exact_single_field_wrapper_required": true,
+            "export_query_syntax_csv_required": true,
+            "query_url_or_screenshot_evidence_required": true,
+            "ui_reported_count_required": true,
+            "utc_timestamp_required": true
+          },
+          "request_specification": {
+            "collection": "Full-Text Collection",
+            "field": "Title",
+            "filters": {},
+            "scope": "ACM Publications",
+            "sort": "publicationDate asc",
+            "transport": "human_ui_artifact_import",
+            "workflow": "advanced_search"
+          }
+        },
+        {
+          "child_query_id": "production:STAR-QF03-INTERACTIVE-SYSTEMS:ACMDigitalLibrary:field:keyword",
+          "child_query_sha256": "bd043e7ae5e9af7a09c974d5bd7f198489d14c7fa2c48fb55de1a0bbcad8bf7b",
+          "child_query_text": "Keyword:(((\"life science\" OR \"life sciences\" OR biology OR biological OR biomedical OR bioinformatics OR \"systems biology\" OR genomics OR transcriptomics OR proteomics OR metabolomics OR epigenomics OR omics OR \"single cell\" OR \"single-cell\" OR \"spatial transcriptomics\" OR connectomics OR neuroscience OR pathology OR microscopy OR ecology OR ecological OR \"marine science\") OR (clinical OR medical OR health OR tissue OR cellular OR molecular OR imaging)) AND (((\"interactive system\" OR \"interactive tool\" OR \"interactive platform\" OR \"visual interface\" OR \"analytic interface\" OR \"analysis workbench\" OR \"exploration tool\" OR \"exploratory tool\" OR \"visualization system\" OR \"visualisation system\" OR \"visualization tool\" OR \"visualisation tool\" OR \"interactive dashboard\") OR ((tool OR system OR platform OR interface OR explorer OR workbench OR dashboard) AND (interactive OR exploratory OR \"user-guided\" OR \"user-steered\" OR \"human-in-the-loop\" OR brushing OR filtering OR \"linked views\" OR \"coordinated views\"))) OR (\"visual analytics\" OR \"interactive visualization\" OR \"interactive visualisation\" OR \"visual exploration\" OR \"visual analysis\" OR \"exploratory visualization\" OR \"exploratory visualisation\")) AND ((\"biological network\" OR \"molecular network\" OR \"protein-protein interaction\" OR interactome OR connectome OR \"gene regulatory network\" OR pathway OR \"cell-cell communication\" OR lineage OR multiscale OR \"multi-scale\" OR hierarchy OR hierarchical OR \"node-link\" OR \"adjacency matrix\") OR ((network OR graph OR relational OR relationship OR relationships OR connectivity OR topology OR neighborhood OR neighbourhood OR trajectory OR similarity OR spatial OR temporal OR multivariate OR \"image-derived\") AND (\"relational data\" OR \"data relationships\" OR \"derived relationship\" OR \"spatial organization\" OR \"spatial relationship\" OR \"temporal relationship\" OR \"multivariate relationship\" OR \"multiscale structure\" OR \"neighborhood analysis\" OR \"neighbourhood analysis\" OR \"trajectory analysis\" OR \"similarity analysis\" OR \"connectivity analysis\" OR \"topological analysis\"))))",
+          "completion": {
+            "citation_export_required": true,
+            "contiguous_chunk_ranges_required": true,
+            "format": "BibTeX",
+            "ui_total_reconciliation_required": true
+          },
+          "execution_status": "REQUIRES_OPERATOR_INPUT",
+          "export_artifact_references": [],
+          "field_key": "keyword",
+          "field_label": "Keyword",
+          "operator_evidence": {
+            "exact_single_field_wrapper_required": true,
+            "export_query_syntax_csv_required": true,
+            "query_url_or_screenshot_evidence_required": true,
+            "ui_reported_count_required": true,
+            "utc_timestamp_required": true
+          },
+          "request_specification": {
+            "collection": "Full-Text Collection",
+            "field": "Keyword",
+            "filters": {},
+            "scope": "ACM Publications",
+            "sort": "publicationDate asc",
+            "transport": "human_ui_artifact_import",
+            "workflow": "advanced_search"
+          }
+        },
+        {
+          "child_query_id": "production:STAR-QF03-INTERACTIVE-SYSTEMS:ACMDigitalLibrary:field:abstract",
+          "child_query_sha256": "6d877d4d9cc5ab5818948e7c63bb9e71bafb8c145df7fb053dcd776e10f17d86",
+          "child_query_text": "Abstract:(((\"life science\" OR \"life sciences\" OR biology OR biological OR biomedical OR bioinformatics OR \"systems biology\" OR genomics OR transcriptomics OR proteomics OR metabolomics OR epigenomics OR omics OR \"single cell\" OR \"single-cell\" OR \"spatial transcriptomics\" OR connectomics OR neuroscience OR pathology OR microscopy OR ecology OR ecological OR \"marine science\") OR (clinical OR medical OR health OR tissue OR cellular OR molecular OR imaging)) AND (((\"interactive system\" OR \"interactive tool\" OR \"interactive platform\" OR \"visual interface\" OR \"analytic interface\" OR \"analysis workbench\" OR \"exploration tool\" OR \"exploratory tool\" OR \"visualization system\" OR \"visualisation system\" OR \"visualization tool\" OR \"visualisation tool\" OR \"interactive dashboard\") OR ((tool OR system OR platform OR interface OR explorer OR workbench OR dashboard) AND (interactive OR exploratory OR \"user-guided\" OR \"user-steered\" OR \"human-in-the-loop\" OR brushing OR filtering OR \"linked views\" OR \"coordinated views\"))) OR (\"visual analytics\" OR \"interactive visualization\" OR \"interactive visualisation\" OR \"visual exploration\" OR \"visual analysis\" OR \"exploratory visualization\" OR \"exploratory visualisation\")) AND ((\"biological network\" OR \"molecular network\" OR \"protein-protein interaction\" OR interactome OR connectome OR \"gene regulatory network\" OR pathway OR \"cell-cell communication\" OR lineage OR multiscale OR \"multi-scale\" OR hierarchy OR hierarchical OR \"node-link\" OR \"adjacency matrix\") OR ((network OR graph OR relational OR relationship OR relationships OR connectivity OR topology OR neighborhood OR neighbourhood OR trajectory OR similarity OR spatial OR temporal OR multivariate OR \"image-derived\") AND (\"relational data\" OR \"data relationships\" OR \"derived relationship\" OR \"spatial organization\" OR \"spatial relationship\" OR \"temporal relationship\" OR \"multivariate relationship\" OR \"multiscale structure\" OR \"neighborhood analysis\" OR \"neighbourhood analysis\" OR \"trajectory analysis\" OR \"similarity analysis\" OR \"connectivity analysis\" OR \"topological analysis\"))))",
+          "completion": {
+            "citation_export_required": true,
+            "contiguous_chunk_ranges_required": true,
+            "format": "BibTeX",
+            "ui_total_reconciliation_required": true
+          },
+          "execution_status": "REQUIRES_OPERATOR_INPUT",
+          "export_artifact_references": [],
+          "field_key": "abstract",
+          "field_label": "Abstract",
+          "operator_evidence": {
+            "exact_single_field_wrapper_required": true,
+            "export_query_syntax_csv_required": true,
+            "query_url_or_screenshot_evidence_required": true,
+            "ui_reported_count_required": true,
+            "utc_timestamp_required": true
+          },
+          "request_specification": {
+            "collection": "Full-Text Collection",
+            "field": "Abstract",
+            "filters": {},
+            "scope": "ACM Publications",
+            "sort": "publicationDate asc",
+            "transport": "human_ui_artifact_import",
+            "workflow": "advanced_search"
+          }
+        }
+      ],
+      "decomposed_union_semantics": "union(Title:(Q), Keyword:(Q), Abstract:(Q))",
+      "family_id": "STAR-QF03-INTERACTIVE-SYSTEMS",
+      "parent_combined_semantics": "Title:(Q) OR Keyword:(Q) OR Abstract:(Q)",
+      "parent_completion": {
+        "all_child_exports_reconciled_required": true,
+        "all_three_children_required": true,
+        "missing_stable_identity_blocks_union": true,
+        "overlap_categories": [
+          "title_only",
+          "keyword_only",
+          "abstract_only",
+          "title_keyword",
+          "title_abstract",
+          "keyword_abstract",
+          "triple_overlap"
+        ],
+        "stable_identity_hierarchy": [
+          "ACM native ID",
+          "normalized DOI"
+        ]
+      },
+      "parent_query_hash": "75a608fe72897f22adb68b7196565d4898b51d5375d2fb7d1aef8f1276511b5e",
+      "parent_query_id": "production:STAR-QF03-INTERACTIVE-SYSTEMS:ACMDigitalLibrary",
+      "scientific_query_text": "((\"life science\" OR \"life sciences\" OR biology OR biological OR biomedical OR bioinformatics OR \"systems biology\" OR genomics OR transcriptomics OR proteomics OR metabolomics OR epigenomics OR omics OR \"single cell\" OR \"single-cell\" OR \"spatial transcriptomics\" OR connectomics OR neuroscience OR pathology OR microscopy OR ecology OR ecological OR \"marine science\") OR (clinical OR medical OR health OR tissue OR cellular OR molecular OR imaging)) AND (((\"interactive system\" OR \"interactive tool\" OR \"interactive platform\" OR \"visual interface\" OR \"analytic interface\" OR \"analysis workbench\" OR \"exploration tool\" OR \"exploratory tool\" OR \"visualization system\" OR \"visualisation system\" OR \"visualization tool\" OR \"visualisation tool\" OR \"interactive dashboard\") OR ((tool OR system OR platform OR interface OR explorer OR workbench OR dashboard) AND (interactive OR exploratory OR \"user-guided\" OR \"user-steered\" OR \"human-in-the-loop\" OR brushing OR filtering OR \"linked views\" OR \"coordinated views\"))) OR (\"visual analytics\" OR \"interactive visualization\" OR \"interactive visualisation\" OR \"visual exploration\" OR \"visual analysis\" OR \"exploratory visualization\" OR \"exploratory visualisation\")) AND ((\"biological network\" OR \"molecular network\" OR \"protein-protein interaction\" OR interactome OR connectome OR \"gene regulatory network\" OR pathway OR \"cell-cell communication\" OR lineage OR multiscale OR \"multi-scale\" OR hierarchy OR hierarchical OR \"node-link\" OR \"adjacency matrix\") OR ((network OR graph OR relational OR relationship OR relationships OR connectivity OR topology OR neighborhood OR neighbourhood OR trajectory OR similarity OR spatial OR temporal OR multivariate OR \"image-derived\") AND (\"relational data\" OR \"data relationships\" OR \"derived relationship\" OR \"spatial organization\" OR \"spatial relationship\" OR \"temporal relationship\" OR \"multivariate relationship\" OR \"multiscale structure\" OR \"neighborhood analysis\" OR \"neighbourhood analysis\" OR \"trajectory analysis\" OR \"similarity analysis\" OR \"connectivity analysis\" OR \"topological analysis\")))",
+      "scientific_query_text_sha256": "f4a0f2156bf638908544c8015c4e77f2c4dabd09bf109d99f3fdcdb0d7986203"
+    },
+    {
+      "children": [
+        {
+          "child_query_id": "production:STAR-QF04-NONDESKTOP-ENV:ACMDigitalLibrary:field:title",
+          "child_query_sha256": "d4a450fbcd39a186e8843efdcd6622c693d01a0df20749523a5acf9ee4145415",
+          "child_query_text": "Title:(((\"life science\" OR \"life sciences\" OR biology OR biological OR biomedical OR bioinformatics OR \"systems biology\" OR genomics OR transcriptomics OR proteomics OR metabolomics OR epigenomics OR omics OR \"single cell\" OR \"single-cell\" OR \"spatial transcriptomics\" OR connectomics OR neuroscience OR pathology OR microscopy OR ecology OR ecological OR \"marine science\") OR (clinical OR medical OR health OR tissue OR cellular OR molecular OR imaging)) AND ((\"virtual reality\" OR \"augmented reality\" OR \"mixed reality\" OR \"extended reality\" OR \"immersive analytics\" OR \"immersive visualization\" OR \"immersive visualisation\" OR \"head-mounted display\" OR HMD OR HoloLens OR \"large display\" OR \"display wall\" OR \"tiled display\" OR powerwall OR \"CAVE automatic virtual environment\") OR ((CAVE OR VR OR stereoscopic OR \"virtual environment\" OR \"immersive environment\" OR \"spatial computing\" OR \"room scale\" OR \"projection-based\") AND (environment OR display OR visualization OR visualisation OR analytics))) AND (((\"visual analytics\" OR \"interactive visualization\" OR \"interactive visualisation\" OR \"visual exploration\" OR \"visual analysis\" OR \"exploratory visualization\" OR \"exploratory visualisation\") OR ((\"data visualization\" OR \"data visualisation\" OR \"information visualization\" OR \"information visualisation\" OR \"scientific visualization\" OR \"scientific visualisation\" OR visualization OR visualisation OR \"graphical display\") AND (interactive OR exploratory OR \"user-guided\" OR \"user-steered\" OR \"human-in-the-loop\" OR brushing OR filtering OR \"linked views\" OR \"coordinated views\"))) OR ((\"interactive system\" OR \"interactive tool\" OR \"interactive platform\" OR \"visual interface\" OR \"analytic interface\" OR \"analysis workbench\" OR \"exploration tool\" OR \"exploratory tool\" OR \"visualization system\" OR \"visualisation system\" OR \"visualization tool\" OR \"visualisation tool\" OR \"interactive dashboard\") OR ((tool OR system OR platform OR interface OR explorer OR workbench OR dashboard) AND (interactive OR exploratory OR \"user-guided\" OR \"user-steered\" OR \"human-in-the-loop\" OR brushing OR filtering OR \"linked views\" OR \"coordinated views\"))) OR \"interactive analysis\" OR \"data exploration\"))",
+          "completion": {
+            "citation_export_required": true,
+            "contiguous_chunk_ranges_required": true,
+            "format": "BibTeX",
+            "ui_total_reconciliation_required": true
+          },
+          "execution_status": "REQUIRES_OPERATOR_INPUT",
+          "export_artifact_references": [],
+          "field_key": "title",
+          "field_label": "Title",
+          "operator_evidence": {
+            "exact_single_field_wrapper_required": true,
+            "export_query_syntax_csv_required": true,
+            "query_url_or_screenshot_evidence_required": true,
+            "ui_reported_count_required": true,
+            "utc_timestamp_required": true
+          },
+          "request_specification": {
+            "collection": "Full-Text Collection",
+            "field": "Title",
+            "filters": {},
+            "scope": "ACM Publications",
+            "sort": "publicationDate asc",
+            "transport": "human_ui_artifact_import",
+            "workflow": "advanced_search"
+          }
+        },
+        {
+          "child_query_id": "production:STAR-QF04-NONDESKTOP-ENV:ACMDigitalLibrary:field:keyword",
+          "child_query_sha256": "ac1537509a6def06de6019fa930055df8bee5d4e48daa20ade76fc1ce105df36",
+          "child_query_text": "Keyword:(((\"life science\" OR \"life sciences\" OR biology OR biological OR biomedical OR bioinformatics OR \"systems biology\" OR genomics OR transcriptomics OR proteomics OR metabolomics OR epigenomics OR omics OR \"single cell\" OR \"single-cell\" OR \"spatial transcriptomics\" OR connectomics OR neuroscience OR pathology OR microscopy OR ecology OR ecological OR \"marine science\") OR (clinical OR medical OR health OR tissue OR cellular OR molecular OR imaging)) AND ((\"virtual reality\" OR \"augmented reality\" OR \"mixed reality\" OR \"extended reality\" OR \"immersive analytics\" OR \"immersive visualization\" OR \"immersive visualisation\" OR \"head-mounted display\" OR HMD OR HoloLens OR \"large display\" OR \"display wall\" OR \"tiled display\" OR powerwall OR \"CAVE automatic virtual environment\") OR ((CAVE OR VR OR stereoscopic OR \"virtual environment\" OR \"immersive environment\" OR \"spatial computing\" OR \"room scale\" OR \"projection-based\") AND (environment OR display OR visualization OR visualisation OR analytics))) AND (((\"visual analytics\" OR \"interactive visualization\" OR \"interactive visualisation\" OR \"visual exploration\" OR \"visual analysis\" OR \"exploratory visualization\" OR \"exploratory visualisation\") OR ((\"data visualization\" OR \"data visualisation\" OR \"information visualization\" OR \"information visualisation\" OR \"scientific visualization\" OR \"scientific visualisation\" OR visualization OR visualisation OR \"graphical display\") AND (interactive OR exploratory OR \"user-guided\" OR \"user-steered\" OR \"human-in-the-loop\" OR brushing OR filtering OR \"linked views\" OR \"coordinated views\"))) OR ((\"interactive system\" OR \"interactive tool\" OR \"interactive platform\" OR \"visual interface\" OR \"analytic interface\" OR \"analysis workbench\" OR \"exploration tool\" OR \"exploratory tool\" OR \"visualization system\" OR \"visualisation system\" OR \"visualization tool\" OR \"visualisation tool\" OR \"interactive dashboard\") OR ((tool OR system OR platform OR interface OR explorer OR workbench OR dashboard) AND (interactive OR exploratory OR \"user-guided\" OR \"user-steered\" OR \"human-in-the-loop\" OR brushing OR filtering OR \"linked views\" OR \"coordinated views\"))) OR \"interactive analysis\" OR \"data exploration\"))",
+          "completion": {
+            "citation_export_required": true,
+            "contiguous_chunk_ranges_required": true,
+            "format": "BibTeX",
+            "ui_total_reconciliation_required": true
+          },
+          "execution_status": "REQUIRES_OPERATOR_INPUT",
+          "export_artifact_references": [],
+          "field_key": "keyword",
+          "field_label": "Keyword",
+          "operator_evidence": {
+            "exact_single_field_wrapper_required": true,
+            "export_query_syntax_csv_required": true,
+            "query_url_or_screenshot_evidence_required": true,
+            "ui_reported_count_required": true,
+            "utc_timestamp_required": true
+          },
+          "request_specification": {
+            "collection": "Full-Text Collection",
+            "field": "Keyword",
+            "filters": {},
+            "scope": "ACM Publications",
+            "sort": "publicationDate asc",
+            "transport": "human_ui_artifact_import",
+            "workflow": "advanced_search"
+          }
+        },
+        {
+          "child_query_id": "production:STAR-QF04-NONDESKTOP-ENV:ACMDigitalLibrary:field:abstract",
+          "child_query_sha256": "05b21446a9e13987f59438f1d07f20f073a3a07931cf95af5ddab504f9b1a046",
+          "child_query_text": "Abstract:(((\"life science\" OR \"life sciences\" OR biology OR biological OR biomedical OR bioinformatics OR \"systems biology\" OR genomics OR transcriptomics OR proteomics OR metabolomics OR epigenomics OR omics OR \"single cell\" OR \"single-cell\" OR \"spatial transcriptomics\" OR connectomics OR neuroscience OR pathology OR microscopy OR ecology OR ecological OR \"marine science\") OR (clinical OR medical OR health OR tissue OR cellular OR molecular OR imaging)) AND ((\"virtual reality\" OR \"augmented reality\" OR \"mixed reality\" OR \"extended reality\" OR \"immersive analytics\" OR \"immersive visualization\" OR \"immersive visualisation\" OR \"head-mounted display\" OR HMD OR HoloLens OR \"large display\" OR \"display wall\" OR \"tiled display\" OR powerwall OR \"CAVE automatic virtual environment\") OR ((CAVE OR VR OR stereoscopic OR \"virtual environment\" OR \"immersive environment\" OR \"spatial computing\" OR \"room scale\" OR \"projection-based\") AND (environment OR display OR visualization OR visualisation OR analytics))) AND (((\"visual analytics\" OR \"interactive visualization\" OR \"interactive visualisation\" OR \"visual exploration\" OR \"visual analysis\" OR \"exploratory visualization\" OR \"exploratory visualisation\") OR ((\"data visualization\" OR \"data visualisation\" OR \"information visualization\" OR \"information visualisation\" OR \"scientific visualization\" OR \"scientific visualisation\" OR visualization OR visualisation OR \"graphical display\") AND (interactive OR exploratory OR \"user-guided\" OR \"user-steered\" OR \"human-in-the-loop\" OR brushing OR filtering OR \"linked views\" OR \"coordinated views\"))) OR ((\"interactive system\" OR \"interactive tool\" OR \"interactive platform\" OR \"visual interface\" OR \"analytic interface\" OR \"analysis workbench\" OR \"exploration tool\" OR \"exploratory tool\" OR \"visualization system\" OR \"visualisation system\" OR \"visualization tool\" OR \"visualisation tool\" OR \"interactive dashboard\") OR ((tool OR system OR platform OR interface OR explorer OR workbench OR dashboard) AND (interactive OR exploratory OR \"user-guided\" OR \"user-steered\" OR \"human-in-the-loop\" OR brushing OR filtering OR \"linked views\" OR \"coordinated views\"))) OR \"interactive analysis\" OR \"data exploration\"))",
+          "completion": {
+            "citation_export_required": true,
+            "contiguous_chunk_ranges_required": true,
+            "format": "BibTeX",
+            "ui_total_reconciliation_required": true
+          },
+          "execution_status": "REQUIRES_OPERATOR_INPUT",
+          "export_artifact_references": [],
+          "field_key": "abstract",
+          "field_label": "Abstract",
+          "operator_evidence": {
+            "exact_single_field_wrapper_required": true,
+            "export_query_syntax_csv_required": true,
+            "query_url_or_screenshot_evidence_required": true,
+            "ui_reported_count_required": true,
+            "utc_timestamp_required": true
+          },
+          "request_specification": {
+            "collection": "Full-Text Collection",
+            "field": "Abstract",
+            "filters": {},
+            "scope": "ACM Publications",
+            "sort": "publicationDate asc",
+            "transport": "human_ui_artifact_import",
+            "workflow": "advanced_search"
+          }
+        }
+      ],
+      "decomposed_union_semantics": "union(Title:(Q), Keyword:(Q), Abstract:(Q))",
+      "family_id": "STAR-QF04-NONDESKTOP-ENV",
+      "parent_combined_semantics": "Title:(Q) OR Keyword:(Q) OR Abstract:(Q)",
+      "parent_completion": {
+        "all_child_exports_reconciled_required": true,
+        "all_three_children_required": true,
+        "missing_stable_identity_blocks_union": true,
+        "overlap_categories": [
+          "title_only",
+          "keyword_only",
+          "abstract_only",
+          "title_keyword",
+          "title_abstract",
+          "keyword_abstract",
+          "triple_overlap"
+        ],
+        "stable_identity_hierarchy": [
+          "ACM native ID",
+          "normalized DOI"
+        ]
+      },
+      "parent_query_hash": "c55b8b195ca933f96ed73d97cf981c7ce41e5ed9bf01075b673b018c3cd09c51",
+      "parent_query_id": "production:STAR-QF04-NONDESKTOP-ENV:ACMDigitalLibrary",
+      "scientific_query_text": "((\"life science\" OR \"life sciences\" OR biology OR biological OR biomedical OR bioinformatics OR \"systems biology\" OR genomics OR transcriptomics OR proteomics OR metabolomics OR epigenomics OR omics OR \"single cell\" OR \"single-cell\" OR \"spatial transcriptomics\" OR connectomics OR neuroscience OR pathology OR microscopy OR ecology OR ecological OR \"marine science\") OR (clinical OR medical OR health OR tissue OR cellular OR molecular OR imaging)) AND ((\"virtual reality\" OR \"augmented reality\" OR \"mixed reality\" OR \"extended reality\" OR \"immersive analytics\" OR \"immersive visualization\" OR \"immersive visualisation\" OR \"head-mounted display\" OR HMD OR HoloLens OR \"large display\" OR \"display wall\" OR \"tiled display\" OR powerwall OR \"CAVE automatic virtual environment\") OR ((CAVE OR VR OR stereoscopic OR \"virtual environment\" OR \"immersive environment\" OR \"spatial computing\" OR \"room scale\" OR \"projection-based\") AND (environment OR display OR visualization OR visualisation OR analytics))) AND (((\"visual analytics\" OR \"interactive visualization\" OR \"interactive visualisation\" OR \"visual exploration\" OR \"visual analysis\" OR \"exploratory visualization\" OR \"exploratory visualisation\") OR ((\"data visualization\" OR \"data visualisation\" OR \"information visualization\" OR \"information visualisation\" OR \"scientific visualization\" OR \"scientific visualisation\" OR visualization OR visualisation OR \"graphical display\") AND (interactive OR exploratory OR \"user-guided\" OR \"user-steered\" OR \"human-in-the-loop\" OR brushing OR filtering OR \"linked views\" OR \"coordinated views\"))) OR ((\"interactive system\" OR \"interactive tool\" OR \"interactive platform\" OR \"visual interface\" OR \"analytic interface\" OR \"analysis workbench\" OR \"exploration tool\" OR \"exploratory tool\" OR \"visualization system\" OR \"visualisation system\" OR \"visualization tool\" OR \"visualisation tool\" OR \"interactive dashboard\") OR ((tool OR system OR platform OR interface OR explorer OR workbench OR dashboard) AND (interactive OR exploratory OR \"user-guided\" OR \"user-steered\" OR \"human-in-the-loop\" OR brushing OR filtering OR \"linked views\" OR \"coordinated views\"))) OR \"interactive analysis\" OR \"data exploration\")",
+      "scientific_query_text_sha256": "20648b4a5ffa36eb0c46c0b44d38705663ec65d38b263b1153bcc49c9ce1e5ef"
+    },
+    {
+      "children": [
+        {
+          "child_query_id": "production:STAR-QF05-CONVERSATIONAL:ACMDigitalLibrary:field:title",
+          "child_query_sha256": "5dcc0721bc7683b30ee051dc6a95b26428aa5ebd283a92bd7b03e141fb1eea92",
+          "child_query_text": "Title:(((\"life science\" OR \"life sciences\" OR biology OR biological OR biomedical OR bioinformatics OR \"systems biology\" OR genomics OR transcriptomics OR proteomics OR metabolomics OR epigenomics OR omics OR \"single cell\" OR \"single-cell\" OR \"spatial transcriptomics\" OR connectomics OR neuroscience OR pathology OR microscopy OR ecology OR ecological OR \"marine science\") OR (clinical OR medical OR health OR tissue OR cellular OR molecular OR imaging)) AND ((\"natural language interface\" OR \"natural-language interface\" OR \"conversational interface\" OR \"conversational visual analytics\" OR \"dialogue-based interface\" OR \"dialog-based interface\" OR chatbot OR \"large language model\" OR LLM OR \"visualization agent\" OR \"visual analytics agent\" OR \"analytics agent\" OR \"analytic copilot\") OR ((conversational OR dialogue OR dialog OR \"natural language\" OR \"question answering\" OR \"voice interface\" OR \"speech interface\" OR agentic OR copilot OR \"AI agent\") AND (interface OR query OR dialogue OR dialog OR explanation OR recommendation OR visualization OR visualisation OR analysis OR analytics))) AND (((\"visual analytics\" OR \"interactive visualization\" OR \"interactive visualisation\" OR \"visual exploration\" OR \"visual analysis\" OR \"exploratory visualization\" OR \"exploratory visualisation\") OR ((\"data visualization\" OR \"data visualisation\" OR \"information visualization\" OR \"information visualisation\" OR \"scientific visualization\" OR \"scientific visualisation\" OR visualization OR visualisation OR \"graphical display\") AND (interactive OR exploratory OR \"user-guided\" OR \"user-steered\" OR \"human-in-the-loop\" OR brushing OR filtering OR \"linked views\" OR \"coordinated views\"))) OR ((\"interactive system\" OR \"interactive tool\" OR \"interactive platform\" OR \"visual interface\" OR \"analytic interface\" OR \"analysis workbench\" OR \"exploration tool\" OR \"exploratory tool\" OR \"visualization system\" OR \"visualisation system\" OR \"visualization tool\" OR \"visualisation tool\" OR \"interactive dashboard\") OR ((tool OR system OR platform OR interface OR explorer OR workbench OR dashboard) AND (interactive OR exploratory OR \"user-guided\" OR \"user-steered\" OR \"human-in-the-loop\" OR brushing OR filtering OR \"linked views\" OR \"coordinated views\"))) OR \"data analysis\" OR \"data exploration\" OR \"analytic query\" OR \"visualization query\"))",
+          "completion": {
+            "citation_export_required": true,
+            "contiguous_chunk_ranges_required": true,
+            "format": "BibTeX",
+            "ui_total_reconciliation_required": true
+          },
+          "execution_status": "REQUIRES_OPERATOR_INPUT",
+          "export_artifact_references": [],
+          "field_key": "title",
+          "field_label": "Title",
+          "operator_evidence": {
+            "exact_single_field_wrapper_required": true,
+            "export_query_syntax_csv_required": true,
+            "query_url_or_screenshot_evidence_required": true,
+            "ui_reported_count_required": true,
+            "utc_timestamp_required": true
+          },
+          "request_specification": {
+            "collection": "Full-Text Collection",
+            "field": "Title",
+            "filters": {},
+            "scope": "ACM Publications",
+            "sort": "publicationDate asc",
+            "transport": "human_ui_artifact_import",
+            "workflow": "advanced_search"
+          }
+        },
+        {
+          "child_query_id": "production:STAR-QF05-CONVERSATIONAL:ACMDigitalLibrary:field:keyword",
+          "child_query_sha256": "fec621fa7e1471b32b205f590fc2ece1b4d43958ef1faadb2a365a6612ff4e6b",
+          "child_query_text": "Keyword:(((\"life science\" OR \"life sciences\" OR biology OR biological OR biomedical OR bioinformatics OR \"systems biology\" OR genomics OR transcriptomics OR proteomics OR metabolomics OR epigenomics OR omics OR \"single cell\" OR \"single-cell\" OR \"spatial transcriptomics\" OR connectomics OR neuroscience OR pathology OR microscopy OR ecology OR ecological OR \"marine science\") OR (clinical OR medical OR health OR tissue OR cellular OR molecular OR imaging)) AND ((\"natural language interface\" OR \"natural-language interface\" OR \"conversational interface\" OR \"conversational visual analytics\" OR \"dialogue-based interface\" OR \"dialog-based interface\" OR chatbot OR \"large language model\" OR LLM OR \"visualization agent\" OR \"visual analytics agent\" OR \"analytics agent\" OR \"analytic copilot\") OR ((conversational OR dialogue OR dialog OR \"natural language\" OR \"question answering\" OR \"voice interface\" OR \"speech interface\" OR agentic OR copilot OR \"AI agent\") AND (interface OR query OR dialogue OR dialog OR explanation OR recommendation OR visualization OR visualisation OR analysis OR analytics))) AND (((\"visual analytics\" OR \"interactive visualization\" OR \"interactive visualisation\" OR \"visual exploration\" OR \"visual analysis\" OR \"exploratory visualization\" OR \"exploratory visualisation\") OR ((\"data visualization\" OR \"data visualisation\" OR \"information visualization\" OR \"information visualisation\" OR \"scientific visualization\" OR \"scientific visualisation\" OR visualization OR visualisation OR \"graphical display\") AND (interactive OR exploratory OR \"user-guided\" OR \"user-steered\" OR \"human-in-the-loop\" OR brushing OR filtering OR \"linked views\" OR \"coordinated views\"))) OR ((\"interactive system\" OR \"interactive tool\" OR \"interactive platform\" OR \"visual interface\" OR \"analytic interface\" OR \"analysis workbench\" OR \"exploration tool\" OR \"exploratory tool\" OR \"visualization system\" OR \"visualisation system\" OR \"visualization tool\" OR \"visualisation tool\" OR \"interactive dashboard\") OR ((tool OR system OR platform OR interface OR explorer OR workbench OR dashboard) AND (interactive OR exploratory OR \"user-guided\" OR \"user-steered\" OR \"human-in-the-loop\" OR brushing OR filtering OR \"linked views\" OR \"coordinated views\"))) OR \"data analysis\" OR \"data exploration\" OR \"analytic query\" OR \"visualization query\"))",
+          "completion": {
+            "citation_export_required": true,
+            "contiguous_chunk_ranges_required": true,
+            "format": "BibTeX",
+            "ui_total_reconciliation_required": true
+          },
+          "execution_status": "REQUIRES_OPERATOR_INPUT",
+          "export_artifact_references": [],
+          "field_key": "keyword",
+          "field_label": "Keyword",
+          "operator_evidence": {
+            "exact_single_field_wrapper_required": true,
+            "export_query_syntax_csv_required": true,
+            "query_url_or_screenshot_evidence_required": true,
+            "ui_reported_count_required": true,
+            "utc_timestamp_required": true
+          },
+          "request_specification": {
+            "collection": "Full-Text Collection",
+            "field": "Keyword",
+            "filters": {},
+            "scope": "ACM Publications",
+            "sort": "publicationDate asc",
+            "transport": "human_ui_artifact_import",
+            "workflow": "advanced_search"
+          }
+        },
+        {
+          "child_query_id": "production:STAR-QF05-CONVERSATIONAL:ACMDigitalLibrary:field:abstract",
+          "child_query_sha256": "aa10bc34ae896393c2d4ad42f2df1d2c6de3a794f51c99d35ad09f9bdd431a86",
+          "child_query_text": "Abstract:(((\"life science\" OR \"life sciences\" OR biology OR biological OR biomedical OR bioinformatics OR \"systems biology\" OR genomics OR transcriptomics OR proteomics OR metabolomics OR epigenomics OR omics OR \"single cell\" OR \"single-cell\" OR \"spatial transcriptomics\" OR connectomics OR neuroscience OR pathology OR microscopy OR ecology OR ecological OR \"marine science\") OR (clinical OR medical OR health OR tissue OR cellular OR molecular OR imaging)) AND ((\"natural language interface\" OR \"natural-language interface\" OR \"conversational interface\" OR \"conversational visual analytics\" OR \"dialogue-based interface\" OR \"dialog-based interface\" OR chatbot OR \"large language model\" OR LLM OR \"visualization agent\" OR \"visual analytics agent\" OR \"analytics agent\" OR \"analytic copilot\") OR ((conversational OR dialogue OR dialog OR \"natural language\" OR \"question answering\" OR \"voice interface\" OR \"speech interface\" OR agentic OR copilot OR \"AI agent\") AND (interface OR query OR dialogue OR dialog OR explanation OR recommendation OR visualization OR visualisation OR analysis OR analytics))) AND (((\"visual analytics\" OR \"interactive visualization\" OR \"interactive visualisation\" OR \"visual exploration\" OR \"visual analysis\" OR \"exploratory visualization\" OR \"exploratory visualisation\") OR ((\"data visualization\" OR \"data visualisation\" OR \"information visualization\" OR \"information visualisation\" OR \"scientific visualization\" OR \"scientific visualisation\" OR visualization OR visualisation OR \"graphical display\") AND (interactive OR exploratory OR \"user-guided\" OR \"user-steered\" OR \"human-in-the-loop\" OR brushing OR filtering OR \"linked views\" OR \"coordinated views\"))) OR ((\"interactive system\" OR \"interactive tool\" OR \"interactive platform\" OR \"visual interface\" OR \"analytic interface\" OR \"analysis workbench\" OR \"exploration tool\" OR \"exploratory tool\" OR \"visualization system\" OR \"visualisation system\" OR \"visualization tool\" OR \"visualisation tool\" OR \"interactive dashboard\") OR ((tool OR system OR platform OR interface OR explorer OR workbench OR dashboard) AND (interactive OR exploratory OR \"user-guided\" OR \"user-steered\" OR \"human-in-the-loop\" OR brushing OR filtering OR \"linked views\" OR \"coordinated views\"))) OR \"data analysis\" OR \"data exploration\" OR \"analytic query\" OR \"visualization query\"))",
+          "completion": {
+            "citation_export_required": true,
+            "contiguous_chunk_ranges_required": true,
+            "format": "BibTeX",
+            "ui_total_reconciliation_required": true
+          },
+          "execution_status": "REQUIRES_OPERATOR_INPUT",
+          "export_artifact_references": [],
+          "field_key": "abstract",
+          "field_label": "Abstract",
+          "operator_evidence": {
+            "exact_single_field_wrapper_required": true,
+            "export_query_syntax_csv_required": true,
+            "query_url_or_screenshot_evidence_required": true,
+            "ui_reported_count_required": true,
+            "utc_timestamp_required": true
+          },
+          "request_specification": {
+            "collection": "Full-Text Collection",
+            "field": "Abstract",
+            "filters": {},
+            "scope": "ACM Publications",
+            "sort": "publicationDate asc",
+            "transport": "human_ui_artifact_import",
+            "workflow": "advanced_search"
+          }
+        }
+      ],
+      "decomposed_union_semantics": "union(Title:(Q), Keyword:(Q), Abstract:(Q))",
+      "family_id": "STAR-QF05-CONVERSATIONAL",
+      "parent_combined_semantics": "Title:(Q) OR Keyword:(Q) OR Abstract:(Q)",
+      "parent_completion": {
+        "all_child_exports_reconciled_required": true,
+        "all_three_children_required": true,
+        "missing_stable_identity_blocks_union": true,
+        "overlap_categories": [
+          "title_only",
+          "keyword_only",
+          "abstract_only",
+          "title_keyword",
+          "title_abstract",
+          "keyword_abstract",
+          "triple_overlap"
+        ],
+        "stable_identity_hierarchy": [
+          "ACM native ID",
+          "normalized DOI"
+        ]
+      },
+      "parent_query_hash": "f4f879c48ecdbba28dee2f92ba0837396ea9de9096e8d88e2deb177d6f93a772",
+      "parent_query_id": "production:STAR-QF05-CONVERSATIONAL:ACMDigitalLibrary",
+      "scientific_query_text": "((\"life science\" OR \"life sciences\" OR biology OR biological OR biomedical OR bioinformatics OR \"systems biology\" OR genomics OR transcriptomics OR proteomics OR metabolomics OR epigenomics OR omics OR \"single cell\" OR \"single-cell\" OR \"spatial transcriptomics\" OR connectomics OR neuroscience OR pathology OR microscopy OR ecology OR ecological OR \"marine science\") OR (clinical OR medical OR health OR tissue OR cellular OR molecular OR imaging)) AND ((\"natural language interface\" OR \"natural-language interface\" OR \"conversational interface\" OR \"conversational visual analytics\" OR \"dialogue-based interface\" OR \"dialog-based interface\" OR chatbot OR \"large language model\" OR LLM OR \"visualization agent\" OR \"visual analytics agent\" OR \"analytics agent\" OR \"analytic copilot\") OR ((conversational OR dialogue OR dialog OR \"natural language\" OR \"question answering\" OR \"voice interface\" OR \"speech interface\" OR agentic OR copilot OR \"AI agent\") AND (interface OR query OR dialogue OR dialog OR explanation OR recommendation OR visualization OR visualisation OR analysis OR analytics))) AND (((\"visual analytics\" OR \"interactive visualization\" OR \"interactive visualisation\" OR \"visual exploration\" OR \"visual analysis\" OR \"exploratory visualization\" OR \"exploratory visualisation\") OR ((\"data visualization\" OR \"data visualisation\" OR \"information visualization\" OR \"information visualisation\" OR \"scientific visualization\" OR \"scientific visualisation\" OR visualization OR visualisation OR \"graphical display\") AND (interactive OR exploratory OR \"user-guided\" OR \"user-steered\" OR \"human-in-the-loop\" OR brushing OR filtering OR \"linked views\" OR \"coordinated views\"))) OR ((\"interactive system\" OR \"interactive tool\" OR \"interactive platform\" OR \"visual interface\" OR \"analytic interface\" OR \"analysis workbench\" OR \"exploration tool\" OR \"exploratory tool\" OR \"visualization system\" OR \"visualisation system\" OR \"visualization tool\" OR \"visualisation tool\" OR \"interactive dashboard\") OR ((tool OR system OR platform OR interface OR explorer OR workbench OR dashboard) AND (interactive OR exploratory OR \"user-guided\" OR \"user-steered\" OR \"human-in-the-loop\" OR brushing OR filtering OR \"linked views\" OR \"coordinated views\"))) OR \"data analysis\" OR \"data exploration\" OR \"analytic query\" OR \"visualization query\")",
+      "scientific_query_text_sha256": "ec46a190e59e13fedbfbac57493a26a4958b5fa4f7cab6d36aac3bf5f920b6cd"
+    }
+  ],
+  "historical_calibration_evidence": [
+    {
+      "artifact_byte_size": 4808,
+      "artifact_git_status": "ignored_untracked",
+      "artifact_raw_sha256": "fd3d5a7faef687006b2e0b2777d67bf5a523421c9c80678af0d250de722c910b",
+      "artifact_relative_path": "artifacts/H2H_QF01_csv",
+      "durable_storage": "unresolved",
+      "family_id": "STAR-QF01-RELATIONAL-VIS",
+      "kind": "historical_combined_query_calibration",
+      "query_form": "combined_three_field_or",
+      "rewritten": false,
+      "search_run_date": "2026-09-02 at 17:26:03 PDT",
+      "ui_reported_count": 1948
+    }
+  ],
+  "production_plan": {
+    "canonical_hash": "856ef04518bc26941275cf6b60a793814fe18ff6b0b80dd24571252a7161e091",
+    "path": "config/star_production_query_plan_v1.json",
+    "raw_sha256": "b887d638e42f4909c1c8461dde733d758e5176d528ddccee4370211e14ed7451",
+    "version": "1.0.0"
+  },
+  "production_side_effects": {
+    "corpus_membership_created": false,
+    "e6_derived": false,
+    "llm_executed": false,
+    "prisma_generated": false,
+    "record_occurrence_created": false,
+    "retrieval_run_created": false,
+    "review_dataset_created": false,
+    "screening_executed": false,
+    "source_query_created": false
+  },
+  "schema_version": "1.0.0",
+  "status": "PROSPECTIVE_NOT_EXECUTED"
+}
