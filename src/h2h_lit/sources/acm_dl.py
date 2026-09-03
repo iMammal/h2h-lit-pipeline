@@ -204,7 +204,8 @@ def _entry_item(
         )
         identifier = fields.get("_key") or malformed_identifier(raw, rank)
         return ArtifactItem(identifier, record, raw), None
-    identifier = malformed_identifier(raw, rank)
+    identifier = fields.get("_key") if fields else None
+    identifier = identifier or malformed_identifier(raw, rank)
     record = LiteratureRecord(
         title=fields.get("title", "") if fields else "",
         source_identifier=identifier,
@@ -213,6 +214,7 @@ def _entry_item(
             "raw_bibtex": raw,
             "parser_incomplete": True,
             "parser_error": "malformed or unbalanced BibTeX entry",
+            "partial_fields": fields,
         },
         provenance=[
             ProvenanceEvent(

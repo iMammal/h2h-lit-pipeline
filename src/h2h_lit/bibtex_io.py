@@ -3,13 +3,48 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Iterable
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable
 
 from h2h_lit.models import LiteratureRecord, ProvenanceEvent, ProvenanceKind
 from h2h_lit.normalize import normalize_doi
 
 FIELD_RE = re.compile(r"([A-Za-z_][A-Za-z0-9_-]*)\s*=")
+PHYSICAL_ENTRY_HEADER_RE = re.compile(
+    r"(?m)^@\s*(?P<entry_type>[A-Za-z]+)\s*\{\s*(?P<key>[^,\s]+)\s*,"
+)
+FOLLOWING_FIELD_RE = re.compile(r"(?:[ \t]*\r?\n)*[ \t]*[A-Za-z_][A-Za-z0-9_-]*\s*=")
+
+
+@dataclass(frozen=True, slots=True)
+class BibtexParseIssue:
+    ordinal: int
+    code: str
+    message: str
+    raw_entry: str
+    entry_type: str | None
+    key: str | None
+    brace_depth: int
+    partial_fields: dict[str, str]
+
+
+@dataclass(frozen=True, slots=True)
+class BibtexParseResult:
+    physical_header_count: int
+    entries: tuple[dict[str, str], ...]
+    issues: tuple[BibtexParseIssue, ...]
+
+    @property
+    def accounted_record_count(self) -> int:
+        return len(self.entries) + len(self.issues)
+
+
+class BibtexParseError(ValueError):
+    def __init__(self, result: BibtexParseResult):
+        self.result = result
+        keys = ", ".join(issue.key or f"ordinal {issue.ordinal}" for issue in result.issues)
+        super().__init__(f"malformed BibTeX entries: {keys}")
 
 
 def escape_bibtex(text: object) -> str:
@@ -19,13 +54,17 @@ def escape_bibtex(text: object) -> str:
 
 
 def split_bib_entries(text: str) -> list[str]:
-    """Split BibTeX text into raw entries using balanced braces.
+    """Split BibTeX text with guarded recovery after an unbalanced entry.
 
     Ported from the historical downloader `_split_bib_entries` behavior, but kept
-    independent of the downloader.
+    independent of the downloader. A plausible line-start header is used as a
+    recovery boundary only after an apparent standalone entry terminator. The
+    malformed preceding slice remains unchanged and is reported by the diagnostic
+    parser rather than repaired.
     """
 
     entries: list[str] = []
+    recovery_headers = [match.start() for match in PHYSICAL_ENTRY_HEADER_RE.finditer(text)]
     i = 0
     n = len(text)
     while i < n:
@@ -37,13 +76,38 @@ def split_bib_entries(text: str) -> list[str]:
             break
         depth = 1
         j = brace + 1
+        candidate_index = 0
+        while (
+            candidate_index < len(recovery_headers)
+            and recovery_headers[candidate_index] <= brace
+        ):
+            candidate_index += 1
+        recovered_at: int | None = None
         while j < n and depth:
+            if (
+                candidate_index < len(recovery_headers)
+                and j == recovery_headers[candidate_index]
+            ):
+                candidate = recovery_headers[candidate_index]
+                prior = text[at:candidate].rstrip()
+                header = PHYSICAL_ENTRY_HEADER_RE.match(text, candidate)
+                if (
+                    prior.endswith("}")
+                    and header is not None
+                    and FOLLOWING_FIELD_RE.match(text, header.end()) is not None
+                ):
+                    recovered_at = candidate
+                    break
+                candidate_index += 1
             if text[j] == "{":
                 depth += 1
             elif text[j] == "}":
                 depth -= 1
             j += 1
-        if depth == 0:
+        if recovered_at is not None:
+            entries.append(text[at:recovered_at].rstrip())
+            i = recovered_at
+        elif depth == 0:
             entries.append(text[at:j])
             i = j
         else:
@@ -131,8 +195,50 @@ def parse_entry_fields(entry_text: str) -> dict[str, str]:
     return fields
 
 
+def parse_bibtex_with_diagnostics(text: str) -> BibtexParseResult:
+    """Parse valid entries and account explicitly for every malformed entry."""
+
+    entries: list[dict[str, str]] = []
+    issues: list[BibtexParseIssue] = []
+    raw_entries = split_bib_entries(text)
+    for ordinal, raw in enumerate(raw_entries, start=1):
+        fields = parse_entry_fields(raw)
+        brace_depth = raw.count("{") - raw.count("}")
+        if fields and brace_depth == 0 and raw.rstrip().endswith("}"):
+            entries.append(fields)
+            continue
+        header = PHYSICAL_ENTRY_HEADER_RE.match(raw)
+        code = "UNBALANCED_BRACES" if fields and brace_depth != 0 else "MALFORMED_ENTRY"
+        issues.append(
+            BibtexParseIssue(
+                ordinal=ordinal,
+                code=code,
+                message=(
+                    f"entry has final brace depth {brace_depth}"
+                    if code == "UNBALANCED_BRACES"
+                    else "entry has an invalid header or terminator"
+                ),
+                raw_entry=raw,
+                entry_type=(fields.get("_type") if fields else None)
+                or (header.group("entry_type") if header else None),
+                key=(fields.get("_key") if fields else None)
+                or (header.group("key") if header else None),
+                brace_depth=brace_depth,
+                partial_fields=fields,
+            )
+        )
+    return BibtexParseResult(
+        physical_header_count=len(PHYSICAL_ENTRY_HEADER_RE.findall(text)),
+        entries=tuple(entries),
+        issues=tuple(issues),
+    )
+
+
 def parse_bibtex(text: str) -> list[dict[str, str]]:
-    return [fields for raw in split_bib_entries(text) if (fields := parse_entry_fields(raw))]
+    result = parse_bibtex_with_diagnostics(text)
+    if result.issues:
+        raise BibtexParseError(result)
+    return list(result.entries)
 
 
 def record_from_bibtex_fields(fields: dict[str, str]) -> LiteratureRecord:
@@ -221,4 +327,3 @@ def save_bib(entries: Iterable[LiteratureRecord | dict[str, object]], out_path: 
     path = Path(out_path)
     path.write_text(to_bibtex(entries), encoding="utf-8")
     return path
-

@@ -1,9 +1,19 @@
 from pathlib import Path
 
-from h2h_lit.bibtex_io import parse_bibtex, parse_note, records_from_bibtex, to_bibtex
+import pytest
 
+from h2h_lit.bibtex_io import (
+    BibtexParseError,
+    parse_bibtex,
+    parse_bibtex_with_diagnostics,
+    parse_note,
+    records_from_bibtex,
+    split_bib_entries,
+    to_bibtex,
+)
 
 FIXTURE = Path(__file__).parent / "fixtures" / "sample_results.bib"
+MALFORMED_ACM_FIXTURE = Path(__file__).parent / "fixtures" / "acm_malformed_keywords.bib"
 
 
 def test_parse_note_source_and_open_access():
@@ -36,3 +46,53 @@ def test_to_bibtex_uses_historical_schema():
     assert "note    = {Source: EuropePMC, OpenAccess: True}" in text
     assert "abstract= {A short abstract" in text
 
+
+def test_malformed_acm_entry_is_flagged_without_swallowing_later_records():
+    text = MALFORMED_ACM_FIXTURE.read_text(encoding="utf-8")
+    raw_entries = split_bib_entries(text)
+    result = parse_bibtex_with_diagnostics(text)
+
+    assert len(raw_entries) == 4
+    assert result.physical_header_count == 4
+    assert len(result.entries) == 3
+    assert len(result.issues) == 1
+    assert result.accounted_record_count == result.physical_header_count
+    assert [entry["_key"] for entry in result.entries] == ["before", "after", "consecutive"]
+
+    issue = result.issues[0]
+    assert issue.ordinal == 2
+    assert issue.code == "UNBALANCED_BRACES"
+    assert issue.brace_depth == 1
+    assert issue.key == "10.1145/3805712.3808367"
+    assert issue.partial_fields["title"].startswith("ESCOMIC:")
+    assert issue.raw_entry == raw_entries[1]
+    assert "keywords = {{explainable information retrieval" in issue.raw_entry
+    assert "@article{after" not in issue.raw_entry
+
+
+def test_default_parser_fails_explicitly_and_exposes_diagnostics():
+    text = MALFORMED_ACM_FIXTURE.read_text(encoding="utf-8")
+    with pytest.raises(BibtexParseError) as caught:
+        parse_bibtex(text)
+    assert caught.value.result.accounted_record_count == 4
+    assert caught.value.result.issues[0].key == "10.1145/3805712.3808367"
+
+
+def test_valid_multiline_nested_quoted_and_consecutive_entries_are_unchanged():
+    text = '''@article{one,
+  title = {A {Nested} Title},
+  abstract = {First line
+second {nested} line},
+  note = "quoted {braces} remain balanced"
+}
+@article{two,
+  title = "Second {Title}",
+  year = {2026}
+}'''
+    result = parse_bibtex_with_diagnostics(text)
+    assert result.physical_header_count == 2
+    assert result.accounted_record_count == 2
+    assert result.issues == ()
+    assert list(result.entries) == parse_bibtex(text)
+    assert result.entries[0]["abstract"] == "First line\nsecond {nested} line"
+    assert result.entries[0]["note"] == "quoted {braces} remain balanced"

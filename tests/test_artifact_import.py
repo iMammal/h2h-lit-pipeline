@@ -142,6 +142,41 @@ def test_acm_malformed_or_absent_artifact_is_accounted_and_incomplete(tmp_path):
     assert missing.retrieval_runs[0].retrieval_cutoff_date is None
 
 
+def test_acm_malformed_entry_is_local_and_subsequent_records_are_preserved(tmp_path):
+    manifest_path = _write_acm_manifest(
+        tmp_path,
+        [
+            {
+                "chunk_id": "1-4",
+                "first_record": 1,
+                "last_record": 4,
+                "artifact_path": "malformed.bib",
+            }
+        ],
+        total=4,
+    )
+    artifact_path = manifest_path.parent / "malformed.bib"
+    artifact_path.write_bytes((FIXTURES / "acm_malformed_keywords.bib").read_bytes())
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["chunks"][0]["sha256"] = _sha(artifact_path)
+    manifest_path.write_text(json.dumps(manifest, sort_keys=True), encoding="utf-8")
+
+    dataset = import_acm_bibtex_manifest(manifest_path)
+    assert len(dataset.occurrences) == 4
+    by_identifier = {item.source_identifier: item for item in dataset.occurrences}
+    assert set(by_identifier) == {
+        "before",
+        "10.1145/3805712.3808367",
+        "after",
+        "consecutive",
+    }
+    malformed = by_identifier["10.1145/3805712.3808367"]
+    assert malformed.metadata["parser_incomplete"] is True
+    assert malformed.record.original_metadata["partial_fields"]["title"].startswith("ESCOMIC:")
+    assert "@article{after" not in malformed.record.original_metadata["raw_bibtex"]
+    assert dataset.retrieval_runs[0].completion_status is RetrievalCompletionStatus.FAILED
+
+
 def test_acm_ui_total_and_operator_evidence_must_reconcile(tmp_path):
     total_mismatch = import_acm_bibtex_manifest(
         _write_acm_manifest(
