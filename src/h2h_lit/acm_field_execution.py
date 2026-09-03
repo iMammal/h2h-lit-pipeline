@@ -28,6 +28,10 @@ ACM_SCOPE = "ACM Publications"
 ACM_COLLECTION = "Full-Text Collection"
 ACM_EXPORT_FILTER = "ACM Content: DL"
 ACM_SORT = "publicationDate asc"
+ACM_EXPORT_RECORD_CEILING = 1000
+EXPORT_PARTITION_CONTRACT_SCHEMA_VERSION = "1.0.0"
+EXPORT_PARTITION_CONTRACT_ID = "star-acm-publication-year-export-partition"
+EXPORT_PARTITION_CONTRACT_VERSION = "1.0.0"
 EXPECTED_PLAN_HASH = "856ef04518bc26941275cf6b60a793814fe18ff6b0b80dd24571252a7161e091"
 EXPECTED_PLAN_RAW_SHA256 = "b887d638e42f4909c1c8461dde733d758e5176d528ddccee4370211e14ed7451"
 QUERY_SYNTAX_MANIFEST_SCHEMA_VERSION = "1.0.0"
@@ -128,6 +132,24 @@ class AcmExportArtifactReference:
 
 
 @dataclass(frozen=True, slots=True)
+class AcmYearPartitionArtifactReference:
+    """One raw BibTeX artifact produced for an inclusive publication-year range."""
+
+    artifact_relative_path: str
+    artifact_sha256: str
+    byte_size: int
+    parsed_entry_count: int
+
+    def validate(self) -> None:
+        _validate_relative_path(self.artifact_relative_path)
+        _validate_sha256(self.artifact_sha256, "ACM year-partition artifact hash")
+        if self.byte_size < 0:
+            raise AcmFieldExecutionError("ACM year-partition artifact size cannot be negative")
+        if self.parsed_entry_count < 0:
+            raise AcmFieldExecutionError("ACM parsed-entry count cannot be negative")
+
+
+@dataclass(frozen=True, slots=True)
 class AcmRawFieldHit:
     child_query_id: str
     field_key: str
@@ -156,6 +178,68 @@ class AcmRawFieldHit:
         if normalized:
             tokens.append(f"doi:{normalized}")
         return tuple(tokens)
+
+
+@dataclass(frozen=True, slots=True)
+class AcmYearPartitionEvidence:
+    """Count and parsed export evidence for one inclusive operational year range."""
+
+    partition_id: str
+    child_query_id: str
+    field_key: str
+    from_year: int
+    to_year: int
+    ui_reported_count: int
+    artifact: AcmYearPartitionArtifactReference
+    hits: tuple[AcmRawFieldHit, ...]
+    ui_count_observed_at_utc: str
+    exported_at_utc: str
+    operator_sort: str | None = None
+
+    def validate(self, child_spec: dict[str, Any]) -> None:
+        if not self.partition_id.strip():
+            raise AcmFieldExecutionError("ACM year partition requires an ID")
+        if self.child_query_id != child_spec["child_query_id"]:
+            raise AcmFieldExecutionError("ACM year partition is linked to the wrong child")
+        if self.field_key != child_spec["field_key"]:
+            raise AcmFieldExecutionError("ACM year partition field does not match the child")
+        if self.from_year > self.to_year:
+            raise AcmFieldExecutionError("ACM year partition has an invalid inclusive range")
+        if self.ui_reported_count < 0:
+            raise AcmFieldExecutionError("ACM year-partition UI count cannot be negative")
+        if self.ui_reported_count > ACM_EXPORT_RECORD_CEILING:
+            raise AcmFieldExecutionError("ACM year-partition UI count exceeds export ceiling")
+        if not self.ui_count_observed_at_utc.strip() or not self.exported_at_utc.strip():
+            raise AcmFieldExecutionError("ACM year partition requires count and export timestamps")
+        self.artifact.validate()
+        if self.artifact.parsed_entry_count != self.ui_reported_count:
+            raise AcmFieldExecutionError(
+                "ACM year-partition parsed-entry count does not reconcile to partition UI count"
+            )
+        if len(self.hits) != self.artifact.parsed_entry_count:
+            raise AcmFieldExecutionError(
+                "ACM year-partition stable-identity rows do not reconcile to parsed entries"
+            )
+        if [hit.row_ordinal for hit in self.hits] != list(range(1, len(self.hits) + 1)):
+            raise AcmFieldExecutionError("ACM year-partition row ordinals must be contiguous")
+        for hit in self.hits:
+            hit.validate()
+            if hit.child_query_id != self.child_query_id or hit.field_key != self.field_key:
+                raise AcmFieldExecutionError("ACM year-partition hit is linked to the wrong child")
+
+
+@dataclass(frozen=True, slots=True)
+class AcmChildPartitionUnionResult:
+    """Set-based completeness result for one field child's year partitions."""
+
+    child_query_id: str
+    complete: bool
+    state: str
+    unfiltered_ui_count: int
+    partition_ui_count_sum: int
+    partition_count: int
+    unique_union_count: int | None
+    ordering_used_for_completeness: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -195,6 +279,104 @@ class AcmFieldExportEvidence:
             hit.validate()
             if hit.child_query_id != self.child_query_id or hit.field_key != self.field_key:
                 raise AcmFieldExecutionError("ACM raw hit is linked to the wrong child query")
+
+
+def reconcile_acm_year_partitions(
+    child_spec: dict[str, Any],
+    unfiltered_operator_evidence: AcmQuerySyntaxEvidence,
+    *,
+    supported_year_from: int,
+    supported_year_to: int,
+    partitions: Iterable[AcmYearPartitionEvidence],
+) -> AcmChildPartitionUnionResult:
+    """Validate and reconcile a complete, set-based year-partition export.
+
+    Publication years are operational provider filters only.  The accepted unfiltered
+    field query remains the scientific result definition, and provider ordering is
+    deliberately excluded from every completeness decision.
+    """
+
+    validate_acm_query_syntax(unfiltered_operator_evidence, child_spec)
+    if supported_year_from > supported_year_to:
+        raise AcmFieldExecutionError("ACM supported publication-year domain is invalid")
+    items = sorted(partitions, key=lambda item: (item.from_year, item.to_year))
+    if not items:
+        raise AcmFieldExecutionError("ACM year partition plan cannot be empty")
+    if len({item.partition_id for item in items}) != len(items):
+        raise AcmFieldExecutionError("ACM year partition IDs must be unique")
+
+    expected_from = supported_year_from
+    for item in items:
+        item.validate(child_spec)
+        if item.from_year != expected_from:
+            raise AcmFieldExecutionError(
+                "ACM year partitions must be disjoint and collectively exhaustive"
+            )
+        expected_from = item.to_year + 1
+    if expected_from != supported_year_to + 1:
+        raise AcmFieldExecutionError(
+            "ACM year partitions must be disjoint and collectively exhaustive"
+        )
+
+    partition_count_sum = sum(item.ui_reported_count for item in items)
+    unfiltered_count = unfiltered_operator_evidence.reported_count
+    if partition_count_sum != unfiltered_count:
+        return AcmChildPartitionUnionResult(
+            child_query_id=child_spec["child_query_id"],
+            complete=False,
+            state="UNRESOLVED_UNDATED_OR_UNREPRESENTED_RECORDS",
+            unfiltered_ui_count=unfiltered_count,
+            partition_ui_count_sum=partition_count_sum,
+            partition_count=len(items),
+            unique_union_count=None,
+        )
+
+    parent: dict[str, str] = {}
+
+    def find(token: str) -> str:
+        parent.setdefault(token, token)
+        while parent[token] != token:
+            parent[token] = parent[parent[token]]
+            token = parent[token]
+        return token
+
+    def union(left: str, right: str) -> None:
+        left_root, right_root = find(left), find(right)
+        if left_root == right_root:
+            return
+        first, second = sorted((left_root, right_root))
+        parent[second] = first
+
+    hit_tokens: list[tuple[str, tuple[str, ...]]] = []
+    for item in items:
+        for hit in item.hits:
+            tokens = hit.identity_tokens()
+            for token in tokens:
+                find(token)
+            for token in tokens[1:]:
+                union(tokens[0], token)
+            hit_tokens.append((item.partition_id, tokens))
+
+    component_partitions: dict[str, set[str]] = {}
+    for partition_id, tokens in hit_tokens:
+        component_partitions.setdefault(find(tokens[0]), set()).add(partition_id)
+    if any(len(partition_ids) > 1 for partition_ids in component_partitions.values()):
+        raise AcmFieldExecutionError("ACM stable identity overlaps across year partitions")
+
+    unique_union_count = len({find(tokens[0]) for _, tokens in hit_tokens})
+    if unique_union_count != unfiltered_count:
+        raise AcmFieldExecutionError(
+            "ACM year-partition unique union does not reconcile to unfiltered child count"
+        )
+    return AcmChildPartitionUnionResult(
+        child_query_id=child_spec["child_query_id"],
+        complete=True,
+        state="COMPLETE_SET_RECONCILED",
+        unfiltered_ui_count=unfiltered_count,
+        partition_ui_count_sum=partition_count_sum,
+        partition_count=len(items),
+        unique_union_count=unique_union_count,
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -1188,6 +1370,179 @@ def load_acm_field_execution_contract(path: str | Path, *, root: str | Path) -> 
 
 
 def contract_json(payload: dict[str, Any]) -> str:
+    return json.dumps(payload, sort_keys=True, indent=2, ensure_ascii=True) + "\n"
+
+
+def build_acm_export_partition_contract(
+    field_contract_path: str | Path, *, root: str | Path
+) -> dict[str, Any]:
+    """Build the subordinate, prospective ACM publication-year export contract."""
+
+    root_path = Path(root).resolve()
+    parent_path = Path(field_contract_path).resolve()
+    parent_contract = load_acm_field_execution_contract(parent_path, root=root_path)
+    model = {
+        "partition_dimension": "Publication Date year",
+        "range_semantics": "inclusive_from_and_to_year",
+        "range_selection": "prospective_from_observed_provider_counts",
+        "provider_supported_year_domain_must_be_recorded": True,
+        "ranges_disjoint_required": True,
+        "ranges_collectively_exhaustive_required": True,
+        "maximum_partition_ui_count": ACM_EXPORT_RECORD_CEILING,
+        "partition_ui_count_required_before_export_acceptance": True,
+        "partition_ui_count_sum_must_equal_unfiltered_child_count": True,
+        "count_sum_mismatch_state": "UNRESOLVED_UNDATED_OR_UNREPRESENTED_RECORDS",
+        "parsed_bibtex_count_must_equal_partition_ui_count": True,
+        "stable_identity_overlap_across_partitions_allowed": False,
+        "unique_union_count_must_equal_unfiltered_child_count": True,
+        "completeness_semantics": "set_based_stable_identity_union",
+        "export_order_used_for_completeness": False,
+        "operator_sort_may_be_recorded_as_metadata": True,
+        "scientific_query_change": False,
+        "eligibility_filter": False,
+    }
+    families = []
+    for family in parent_contract["families"]:
+        children = []
+        for child in family["children"]:
+            children.append(
+                {
+                    "child_query_id": child["child_query_id"],
+                    "field_key": child["field_key"],
+                    "field_label": child["field_label"],
+                    "frozen_child_query_sha256": child["child_query_sha256"],
+                    "unfiltered_count_evidence": "accepted_query_syntax_attempt_required",
+                    "export_partition_model": dict(model),
+                    "partition_plan_status": "REQUIRES_PROSPECTIVE_PROVIDER_COUNTS",
+                    "partitions": [],
+                }
+            )
+        families.append(
+            {
+                "family_id": family["family_id"],
+                "parent_query_id": family["parent_query_id"],
+                "children": children,
+            }
+        )
+    payload: dict[str, Any] = {
+        "schema_version": EXPORT_PARTITION_CONTRACT_SCHEMA_VERSION,
+        "contract_id": EXPORT_PARTITION_CONTRACT_ID,
+        "contract_version": EXPORT_PARTITION_CONTRACT_VERSION,
+        "status": "PROSPECTIVE_NOT_EXECUTED",
+        "parent_field_execution_contract": {
+            "path": parent_path.relative_to(root_path).as_posix(),
+            "version": parent_contract["contract_version"],
+            "contract_hash": parent_contract["contract_hash"],
+            "raw_sha256": _sha256_bytes(parent_path.read_bytes()),
+            "byte_size": parent_path.stat().st_size,
+        },
+        "scope": {
+            "purpose": "provider_export_transport_partitioning_only",
+            "scientific_query_preserved_exactly": True,
+            "publication_year_is_scientific_search_term": False,
+            "publication_year_is_eligibility_filter": False,
+        },
+        "provider_constraint": {
+            "empirically_observed_bulk_bibtex_ceiling": ACM_EXPORT_RECORD_CEILING,
+            "positional_chunking_permitted": False,
+            "publication_date_sort_reliable_for_completeness": False,
+        },
+        "families": families,
+        "calibration_evidence_policy": {
+            "manifest_path": (
+                "provenance/"
+                "star_acm_field_execution_2026-09-02_bulk_export_calibration_manifest.json"
+            ),
+            "production_partition_eligible": False,
+            "raw_artifact_must_remain_unchanged": True,
+        },
+        "production_side_effects": {
+            "field_execution_ready": False,
+            "retrieval_run_created": False,
+            "record_occurrence_created": False,
+            "screening_executed": False,
+            "prisma_generated": False,
+            "e6_derived": False,
+            "llm_executed": False,
+            "corpus_membership_created": False,
+        },
+    }
+    payload["contract_hash"] = _sha256_text(_canonical_json(payload))
+    validate_acm_export_partition_contract(payload, root=root_path)
+    return payload
+
+
+def validate_acm_export_partition_contract(
+    payload: dict[str, Any], *, root: str | Path
+) -> None:
+    material = dict(payload)
+    claimed_hash = material.pop("contract_hash", None)
+    if claimed_hash != _sha256_text(_canonical_json(material)):
+        raise AcmFieldExecutionError("ACM export-partition contract hash mismatch")
+    if payload.get("schema_version") != EXPORT_PARTITION_CONTRACT_SCHEMA_VERSION:
+        raise AcmFieldExecutionError("unsupported ACM export-partition contract schema")
+    if payload.get("contract_id") != EXPORT_PARTITION_CONTRACT_ID:
+        raise AcmFieldExecutionError("unexpected ACM export-partition contract ID")
+    if payload.get("contract_version") != EXPORT_PARTITION_CONTRACT_VERSION:
+        raise AcmFieldExecutionError("unsupported ACM export-partition contract version")
+    if payload.get("status") != "PROSPECTIVE_NOT_EXECUTED":
+        raise AcmFieldExecutionError("ACM export-partition contract must remain prospective")
+
+    root_path = Path(root).resolve()
+    parent_ref = payload["parent_field_execution_contract"]
+    _validate_relative_path(parent_ref["path"])
+    parent_path = root_path / parent_ref["path"]
+    raw = parent_path.read_bytes()
+    if len(raw) != parent_ref["byte_size"] or _sha256_bytes(raw) != parent_ref["raw_sha256"]:
+        raise AcmFieldExecutionError("parent ACM field contract bytes changed")
+    parent_contract = load_acm_field_execution_contract(parent_path, root=root_path)
+    if (
+        parent_ref["version"] != parent_contract["contract_version"]
+        or parent_ref["contract_hash"] != parent_contract["contract_hash"]
+    ):
+        raise AcmFieldExecutionError("parent ACM field contract binding changed")
+
+    expected_families = {family["family_id"]: family for family in parent_contract["families"]}
+    actual_families = payload.get("families", [])
+    if {family["family_id"] for family in actual_families} != set(expected_families):
+        raise AcmFieldExecutionError("ACM export-partition family coverage changed")
+    for family_item in actual_families:
+        family = expected_families[family_item["family_id"]]
+        if family_item["parent_query_id"] != family["parent_query_id"]:
+            raise AcmFieldExecutionError("ACM export-partition parent binding changed")
+        expected_children = {child["child_query_id"]: child for child in family["children"]}
+        children = family_item.get("children", [])
+        if {child["child_query_id"] for child in children} != set(expected_children):
+            raise AcmFieldExecutionError("ACM export-partition child coverage changed")
+        for child_item in children:
+            child = expected_children[child_item["child_query_id"]]
+            if child_item["frozen_child_query_sha256"] != child["child_query_sha256"]:
+                raise AcmFieldExecutionError("ACM export partition changed a frozen child query")
+            if child_item["partitions"] or child_item["partition_plan_status"] != (
+                "REQUIRES_PROSPECTIVE_PROVIDER_COUNTS"
+            ):
+                raise AcmFieldExecutionError("prospective ACM partition contract contains execution data")
+            model = child_item["export_partition_model"]
+            if (
+                model["maximum_partition_ui_count"] != ACM_EXPORT_RECORD_CEILING
+                or model["export_order_used_for_completeness"] is not False
+                or model["scientific_query_change"] is not False
+                or model["eligibility_filter"] is not False
+            ):
+                raise AcmFieldExecutionError("ACM export-partition safeguards changed")
+    if any(payload.get("production_side_effects", {}).values()):
+        raise AcmFieldExecutionError("ACM export-partition contract created production state")
+
+
+def load_acm_export_partition_contract(
+    path: str | Path, *, root: str | Path
+) -> dict[str, Any]:
+    payload = json.loads(Path(path).read_text(encoding="utf-8"))
+    validate_acm_export_partition_contract(payload, root=root)
+    return payload
+
+
+def export_partition_contract_json(payload: dict[str, Any]) -> str:
     return json.dumps(payload, sort_keys=True, indent=2, ensure_ascii=True) + "\n"
 
 

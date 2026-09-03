@@ -8,31 +8,43 @@ import pytest
 
 from h2h_lit.acm_field_execution import (
     ACM_EXPORT_FILTER,
+    ACM_EXPORT_RECORD_CEILING,
     EXECUTION_METHOD_COMMIT,
     OPERATOR_EVIDENCE_LIMITATIONS,
     QUERY_SYNTAX_COMPLETE,
     QUERY_SYNTAX_PRODUCTION_SIDE_EFFECTS,
+    AcmChildPartitionUnionResult,
     AcmExportArtifactReference,
     AcmFieldExecutionError,
     AcmFieldExportEvidence,
     AcmQuerySyntaxEvidence,
     AcmRawFieldHit,
+    AcmYearPartitionArtifactReference,
+    AcmYearPartitionEvidence,
+    build_acm_export_partition_contract,
     build_acm_field_execution_contract,
     build_acm_parent_union,
     build_acm_query_syntax_manifest,
     contract_json,
+    export_partition_contract_json,
+    load_acm_export_partition_contract,
     load_acm_field_execution_contract,
     load_acm_query_syntax_manifest,
     normalize_acm_search_timestamp,
     parse_acm_query_syntax_csv,
     query_syntax_manifest_json,
     reconcile_acm_query_syntax_manifest,
+    reconcile_acm_year_partitions,
     validate_acm_query_syntax,
 )
 
 ROOT = Path(__file__).resolve().parents[1]
 PLAN_PATH = ROOT / "config/star_production_query_plan_v1.json"
 CONTRACT_PATH = ROOT / "config/star_acm_field_execution_contract_v1.json"
+EXPORT_PARTITION_CONTRACT_PATH = ROOT / "config/star_acm_export_partition_contract_v1.json"
+CALIBRATION_MANIFEST_PATH = (
+    ROOT / "provenance/star_acm_field_execution_2026-09-02_bulk_export_calibration_manifest.json"
+)
 QUERY_SYNTAX_ROOT = ROOT / "artifacts/acm_field_execution/2026-09-02/query_syntax"
 QUERY_SYNTAX_MANIFEST_PATH = (
     ROOT / "provenance/star_acm_field_execution_2026-09-02_query_syntax_manifest.json"
@@ -451,3 +463,214 @@ def test_contract_has_no_production_or_methodological_side_effects() -> None:
     serialized = json.dumps(contract)
     for forbidden in ('"eligibility"', '"screening_decision"', '"corpus_membership"'):
         assert forbidden not in serialized
+
+
+def _year_partition(
+    child: dict,
+    partition_id: str,
+    from_year: int,
+    to_year: int,
+    identities: list[tuple[str, str | None]],
+    *,
+    ui_count: int | None = None,
+    parsed_count: int | None = None,
+) -> AcmYearPartitionEvidence:
+    count = len(identities) if ui_count is None else ui_count
+    parsed = count if parsed_count is None else parsed_count
+    hits = tuple(
+        AcmRawFieldHit(
+            child_query_id=child["child_query_id"],
+            field_key=child["field_key"],
+            row_ordinal=index,
+            raw_entry_sha256=_hash(f"{partition_id}:{index}:{native_id}:{doi}"),
+            acm_native_id=native_id,
+            doi=doi,
+        )
+        for index, (native_id, doi) in enumerate(identities, start=1)
+    )
+    return AcmYearPartitionEvidence(
+        partition_id=partition_id,
+        child_query_id=child["child_query_id"],
+        field_key=child["field_key"],
+        from_year=from_year,
+        to_year=to_year,
+        ui_reported_count=count,
+        artifact=AcmYearPartitionArtifactReference(
+            artifact_relative_path=f"artifacts/acm/{partition_id}.bib",
+            artifact_sha256=_hash(f"artifact:{partition_id}"),
+            byte_size=100,
+            parsed_entry_count=parsed,
+        ),
+        hits=hits,
+        ui_count_observed_at_utc="2026-09-03T12:00:00Z",
+        exported_at_utc="2026-09-03T13:00:00Z",
+        operator_sort="publicationDate asc",
+    )
+
+
+def test_export_partition_contract_is_deterministic_and_subordinate() -> None:
+    tracked = load_acm_export_partition_contract(EXPORT_PARTITION_CONTRACT_PATH, root=ROOT)
+    rebuilt = build_acm_export_partition_contract(CONTRACT_PATH, root=ROOT)
+    assert rebuilt == tracked
+    assert export_partition_contract_json(rebuilt) == EXPORT_PARTITION_CONTRACT_PATH.read_text(
+        encoding="utf-8"
+    )
+    assert tracked["parent_field_execution_contract"]["contract_hash"] == _contract()[
+        "contract_hash"
+    ]
+    assert tracked["provider_constraint"]["empirically_observed_bulk_bibtex_ceiling"] == 1000
+    assert all(value is False for value in tracked["production_side_effects"].values())
+
+
+@pytest.mark.parametrize(
+    "ranges",
+    [
+        [(1900, 1950), (1952, 2026)],
+        [(1900, 1950), (1950, 2026)],
+        [(1901, 2026)],
+        [(1900, 2025)],
+    ],
+)
+def test_year_ranges_must_be_exhaustive_and_non_overlapping(
+    ranges: list[tuple[int, int]],
+) -> None:
+    child = _contract()["families"][0]["children"][2]
+    partitions = [
+        _year_partition(child, f"p{index}", start, end, [(f"id-{index}", None)])
+        for index, (start, end) in enumerate(ranges, start=1)
+    ]
+    with pytest.raises(AcmFieldExecutionError, match="disjoint and collectively exhaustive"):
+        reconcile_acm_year_partitions(
+            child,
+            _syntax(child, len(partitions)),
+            supported_year_from=1900,
+            supported_year_to=2026,
+            partitions=partitions,
+        )
+
+
+def test_partition_count_must_not_exceed_acm_export_ceiling() -> None:
+    child = _contract()["families"][0]["children"][2]
+    partition = _year_partition(
+        child,
+        "all-years",
+        1900,
+        2026,
+        [(f"id-{index}", None) for index in range(ACM_EXPORT_RECORD_CEILING + 1)],
+    )
+    with pytest.raises(AcmFieldExecutionError, match="exceeds export ceiling"):
+        reconcile_acm_year_partitions(
+            child,
+            _syntax(child, ACM_EXPORT_RECORD_CEILING + 1),
+            supported_year_from=1900,
+            supported_year_to=2026,
+            partitions=[partition],
+        )
+
+
+def test_partition_ui_counts_and_parsed_counts_must_reconcile() -> None:
+    child = _contract()["families"][0]["children"][2]
+    partition = _year_partition(
+        child,
+        "all-years",
+        1900,
+        2026,
+        [("id-1", None), ("id-2", None)],
+        parsed_count=1,
+    )
+    with pytest.raises(AcmFieldExecutionError, match="parsed-entry count does not reconcile"):
+        reconcile_acm_year_partitions(
+            child,
+            _syntax(child, 2),
+            supported_year_from=1900,
+            supported_year_to=2026,
+            partitions=[partition],
+        )
+
+
+def test_partition_count_sum_discrepancy_marks_undated_records_unresolved() -> None:
+    child = _contract()["families"][0]["children"][2]
+    partitions = [
+        _year_partition(child, "early", 1900, 1999, [("early-1", None)]),
+        _year_partition(child, "late", 2000, 2026, [("late-1", None)]),
+    ]
+    result = reconcile_acm_year_partitions(
+        child,
+        _syntax(child, 3),
+        supported_year_from=1900,
+        supported_year_to=2026,
+        partitions=partitions,
+    )
+    assert result == AcmChildPartitionUnionResult(
+        child_query_id=child["child_query_id"],
+        complete=False,
+        state="UNRESOLVED_UNDATED_OR_UNREPRESENTED_RECORDS",
+        unfiltered_ui_count=3,
+        partition_ui_count_sum=2,
+        partition_count=2,
+        unique_union_count=None,
+    )
+
+
+def test_duplicate_stable_identity_across_year_partitions_fails() -> None:
+    child = _contract()["families"][0]["children"][2]
+    partitions = [
+        _year_partition(child, "early", 1900, 1999, [("native-1", "10.1234/shared")]),
+        _year_partition(child, "late", 2000, 2026, [("native-2", "10.1234/shared")]),
+    ]
+    with pytest.raises(AcmFieldExecutionError, match="overlaps across year partitions"):
+        reconcile_acm_year_partitions(
+            child,
+            _syntax(child, 2),
+            supported_year_from=1900,
+            supported_year_to=2026,
+            partitions=partitions,
+        )
+
+
+def test_complete_year_partition_union_is_set_based_and_reconciles() -> None:
+    child = _contract()["families"][0]["children"][2]
+    partitions = [
+        _year_partition(child, "early", 1900, 1999, [("native-1", None)]),
+        _year_partition(
+            child,
+            "late",
+            2000,
+            2026,
+            [("native-2", "10.1234/two"), ("native-3", None)],
+        ),
+    ]
+    result = reconcile_acm_year_partitions(
+        child,
+        _syntax(child, 3),
+        supported_year_from=1900,
+        supported_year_to=2026,
+        partitions=reversed(partitions),
+    )
+    assert result.complete is True
+    assert result.state == "COMPLETE_SET_RECONCILED"
+    assert result.partition_ui_count_sum == 3
+    assert result.unique_union_count == 3
+    assert result.ordering_used_for_completeness is False
+
+
+def test_qf01_abstract_bulk_export_is_calibration_only() -> None:
+    manifest = json.loads(CALIBRATION_MANIFEST_PATH.read_text(encoding="utf-8"))
+    material = dict(manifest)
+    claimed_hash = material.pop("manifest_hash")
+    assert hashlib.sha256(
+        json.dumps(material, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest() == claimed_hash
+    artifact = manifest["artifact"]
+    raw = (ROOT / artifact["relative_path"]).read_bytes()
+    assert len(raw) == artifact["byte_size"] == 2_101_534
+    assert hashlib.sha256(raw).hexdigest() == artifact["raw_sha256"]
+    assert manifest["classification"] == "CALIBRATION_ONLY_NOT_PRODUCTION_PARTITION"
+    assert manifest["observations"]["parsed_bibtex_entry_count"] == 1000
+    assert manifest["unfiltered_accepted_child_count"] == 1931
+    assert manifest["accepted_as_production_partition"] is False
+    partition_contract = manifest["export_partition_contract"]
+    contract_raw = (ROOT / partition_contract["path"]).read_bytes()
+    assert len(contract_raw) == partition_contract["byte_size"]
+    assert hashlib.sha256(contract_raw).hexdigest() == partition_contract["raw_sha256"]
+    assert all(value is False for value in manifest["production_side_effects"].values())

@@ -1,0 +1,68 @@
+{
+  "accepted_as_production_partition": false,
+  "artifact": {
+    "availability": "AVAILABLE_IGNORED_RAW_ARTIFACT",
+    "byte_size": 2101534,
+    "raw_sha256": "f14da73ed600fdb9589732bffa61924efdc4bb5351721af08319eb150db35e5a",
+    "relative_path": "artifacts/acm_field_execution/2026-09-02/bibtex/QF01/abstract/QF01_abstract_000001-001931.bib"
+  },
+  "classification": "CALIBRATION_ONLY_NOT_PRODUCTION_PARTITION",
+  "export_partition_contract": {
+    "byte_size": 27724,
+    "contract_hash": "643bcba25d8d71a5983b6eca8ae0edb00e2abe1eaf6be10a0e2e4667b416be5e",
+    "path": "config/star_acm_export_partition_contract_v1.json",
+    "raw_sha256": "3acaee2fbb1a8132bf75b2c597ccdff35b608c7c6262f7a0a223270d841cefda",
+    "version": "1.0.0"
+  },
+  "field_execution_contract": {
+    "byte_size": 73287,
+    "contract_hash": "8626fc8e2dfe6e9b13bf6d2478b29c6f87e3864e9c8675dbd16c0de7a7466e8c",
+    "path": "config/star_acm_field_execution_contract_v1.json",
+    "raw_sha256": "6b20ae473b0b6fe9dcc684281949a88491130324365d5a3526891fb379e00401",
+    "version": "1.0.0"
+  },
+  "manifest_hash": "9cb70cb04b244a267d97ee0a58fb13061b4ef99b0ba1ed540e7983899b8efa70",
+  "manifest_id": "star-acm-field-execution-2026-09-02-bulk-export-calibration",
+  "manifest_version": "1.0.0",
+  "observations": {
+    "duplicate_native_identity_count": 0,
+    "duplicate_normalized_doi_count": 0,
+    "first_record": {
+      "native_id": "10.1145/3774816.3774845",
+      "title": "Using Machine Learning Explainer SHAP to Improve Genomic Data Heatmap Visualisation on a Dashboard",
+      "year": 2026
+    },
+    "last_record": {
+      "native_id": "10.1145/2766196.2766198",
+      "title": "The ecosystem of SpatialHadoop",
+      "year": 2015
+    },
+    "malformed_or_unparseable_entry_count": 0,
+    "ordering_supported_publication_date_ascending": false,
+    "parsed_bibtex_entry_count": 1000,
+    "parser": "h2h_lit.bibtex_io.parse_bibtex",
+    "unique_acm_native_id_count": 1000,
+    "unique_normalized_doi_count": 931
+  },
+  "production_side_effects": {
+    "corpus_membership_created": false,
+    "e6_derived": false,
+    "field_execution_ready": false,
+    "field_union_created": false,
+    "llm_executed": false,
+    "prisma_generated": false,
+    "record_occurrence_created": false,
+    "retrieval_run_created": false,
+    "screening_executed": false
+  },
+  "query_syntax_evidence": {
+    "accepted_attempt_number": 1,
+    "child_query_id": "production:STAR-QF01-RELATIONAL-VIS:ACMDigitalLibrary:field:abstract",
+    "manifest_hash": "2dc4ce26e30750a93f47e4cc10ff581aacec660ce4f6abdb1184858f6b681f3d",
+    "manifest_path": "provenance/star_acm_field_execution_2026-09-02_query_syntax_manifest.json",
+    "manifest_raw_sha256": "ab68255886de81aea95b6eae90113348740417ca574b913f10146f62ba7e08a8"
+  },
+  "schema_version": "1.0.0",
+  "unfiltered_accepted_child_count": 1931,
+  "validation_state": "BULK_EXPORT_CEILING_EMPIRICALLY_OBSERVED_DOES_NOT_RECONCILE"
+}
