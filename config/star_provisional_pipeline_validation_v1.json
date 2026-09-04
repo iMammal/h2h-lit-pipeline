@@ -1,0 +1,97 @@
+{
+  "schema_version": "1.0.0",
+  "plan_id": "star-provisional-pipeline-validation-001",
+  "purpose": "Bounded nonproduction validation of STAR retrieval, normalization, local deduplication, proposal-only title/abstract screening, and JFR25 rediscovery diagnostics.",
+  "run_id": "provisional:star-pipeline-validation-001",
+  "output_namespace": "outputs/provisional/star-pipeline-validation-001",
+  "production_import_allowed": false,
+  "bindings": {
+    "production_query_plan": {
+      "path": "config/star_production_query_plan_v1.json",
+      "raw_sha256": "b887d638e42f4909c1c8461dde733d758e5176d528ddccee4370211e14ed7451",
+      "canonical_hash": "856ef04518bc26941275cf6b60a793814fe18ff6b0b80dd24571252a7161e091"
+    },
+    "acm_final_reconciliation": {
+      "path": "provenance/star_acm_field_execution_2026-09-03_final_reconciliation_manifest.json",
+      "raw_sha256": "1770b9ffab28d951e06e0840a3e60aa85d7b2c7c7d1103c921e61784755daf25",
+      "canonical_hash": "c159e0b2b6dc7991d0eab55ed5b395817d524c0b8245011db3d083870f3f4e12"
+    },
+    "jfr25_seed_manifest": {
+      "path": "config/star_retrieval_prerequisites_v1/seed_jfr25.json",
+      "raw_sha256": "91838be9985a5707ef3ba8f622a531ce41761dc844c4469a61a8d010e07a730b",
+      "canonical_hash": "90071facd9d75becb6ffa62cdbc3fb7ab570557b1b7bffc65a2dda171a637743"
+    },
+    "stage5d_config": {
+      "path": "config/stage5d_pilot_v1.json",
+      "raw_sha256": "3daeb97b118908bfd0397d01837bbc932eafff50fd4cde708c53be08fcf6baf6"
+    },
+    "stage5d_prompt": {
+      "path": "prompts/revised_star_title_abstract_screening_pilot5d_v1_3_0.md",
+      "raw_sha256": "49751bd2dcc0e8337467818bcb21c329dcfba19e04d1f8eb947c9208ad22d8c3"
+    }
+  },
+  "pubmed": {
+    "family_count": 5,
+    "complete_identity_enumeration_required": true,
+    "maximum_supported_identity_count_per_family": 10000,
+    "metadata_sample_size_per_family": 100,
+    "metadata_fetch_batch_size": 100,
+    "selection_method": "lowest_sha256_of_config_hash_query_text_hash_and_pmid",
+    "expected_request_count_without_retries": 10,
+    "authorization_flag": "--authorize-pubmed-execution"
+  },
+  "acm": {
+    "source_manifest_status_required": "RETRIEVAL_EVIDENCE_COMPLETE_NOT_IMPORTED",
+    "provisional_import_scope": "all_selected_retrieval_artifacts",
+    "preserve_malformed_records_as_accounted": true,
+    "authorization_flag": "--authorize-acm-provisional-import"
+  },
+  "candidate_selection": {
+    "target_canonical_records": 750,
+    "balanced_quota_per_family_and_route": 50,
+    "routes": [
+      "PubMed",
+      "ACMDigitalLibrary"
+    ],
+    "remainder_selection": "lowest_sha256_of_config_hash_and_canonical_identity",
+    "eligibility_blind": true
+  },
+  "screening": {
+    "proposal_sample_size": 250,
+    "stage": "TITLE_ABSTRACT",
+    "output_schema_version": "1.3.0",
+    "authority": "PROPOSED",
+    "e6_scope": "pilot_only",
+    "authorization_flag": "--authorize-llm-inference"
+  },
+  "human_validation_sample": {
+    "target_records": 40,
+    "status_quotas": {
+      "ELIGIBLE": 13,
+      "EXCLUDED": 13,
+      "UNCERTAIN": 14
+    },
+    "shortfall_policy": "deterministic_redistribution_across_nonempty_status_strata",
+    "invalid_final_responses_separate": true
+  },
+  "jfr25_rediscovery": {
+    "comparison_only": true,
+    "create_seed_occurrences": false,
+    "doi_match": "exact_normalized_doi",
+    "doi_missing_match": "unique_exact_normalized_title",
+    "fuzzy_matching": false,
+    "exclude_prior_survey_seed_occurrences": true
+  },
+  "prohibited_effects": {
+    "production_retrieval_cutoff": true,
+    "production_retrieval_wave_state": true,
+    "identification_closure": true,
+    "final_global_deduplication": true,
+    "authoritative_screening": true,
+    "corpus_membership": true,
+    "prisma": true,
+    "full_text_retrieval_or_screening": true,
+    "production_e6": true,
+    "seed_import": true
+  }
+}
