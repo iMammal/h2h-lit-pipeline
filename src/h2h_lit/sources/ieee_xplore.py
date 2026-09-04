@@ -149,7 +149,10 @@ class IeeeXplorePaginator:
         mutable_provider_totals = bool(
             getattr(spec, "metadata", {}).get("mutable_provider_totals")
         )
-        next_start = start_record + len(items)
+        # IEEE serves fixed ``max_records`` request windows.  A mutable index can
+        # make a nonterminal window short; advancing by the returned count would
+        # leave the next request inside the same provider window and repeat it.
+        next_start = start_record + int(spec.limit)
         terminal = next_start > total
         incomplete_reason = None
         if not items and start_record <= total:

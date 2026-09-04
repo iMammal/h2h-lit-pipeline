@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 from datetime import UTC, datetime, timedelta
@@ -12,6 +13,7 @@ import h2h_lit.sources.pubmed as pubmed_module
 from h2h_lit.external_retrieval_wave import (
     ACM_RECONCILIATION_PATH,
     EUROPE_PMC_TERMINAL_RECOVERY_STATUS,
+    IEEE_REPEATED_WINDOW_RECOVERY_STATUS,
     IEEE_TOTAL_DRIFT_RECOVERY_STATUS,
     PREFLIGHT_PATH,
     PUBMED_EPISODE_2_OMITTED_BOOK_PMIDS,
@@ -21,6 +23,7 @@ from h2h_lit.external_retrieval_wave import (
     ExternalRetrievalWaveError,
     _safe_output_path,
     authorize_europe_pmc_terminal_recovery,
+    authorize_ieee_repeated_window_recovery,
     authorize_ieee_total_drift_recovery,
     authorize_pubmed_parser_recovery,
     authorize_pubmed_transport_retry,
@@ -49,6 +52,7 @@ from h2h_lit.sources.europe_pmc import (
     EuropePmcPaginator,
     parse_europe_pmc_response,
 )
+from h2h_lit.sources.ieee_xplore import IeeeXplorePaginator
 from tests.fake_http import FakeHttp, FakeResponse
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -265,7 +269,7 @@ def _failed_ieee_total_drift_episode(
     monkeypatch.setattr(
         external_module,
         "IEEE_TOTAL_DRIFT_EXPECTED",
-        tuple((5, 4, 2, 3, 4) for _ in range(5)),
+        tuple((6, 5, 2, 3, 4) for _ in range(5)),
     )
     monkeypatch.setattr(
         external_module, "IEEE_TOTAL_DRIFT_EXPECTED_ATTEMPTS", 10
@@ -283,7 +287,7 @@ def _failed_ieee_total_drift_episode(
             [
                 FakeResponse(
                     payload=_ieee_drift_page(
-                        family, start_record=1, count=2, total=5
+                        family, start_record=1, count=2, total=6
                     )
                 ),
                 FakeResponse(
@@ -291,13 +295,19 @@ def _failed_ieee_total_drift_episode(
                         family,
                         start_record=3,
                         count=1,
-                        total=4,
+                        total=5,
                         overlap=cross_page_overlap and family == 1,
                     )
                 ),
             ]
         )
     clock = Clock()
+    fixed_adapter = external_module.PAGINATED_SOURCE_ADAPTERS["IEEEXplore"]
+    monkeypatch.setitem(
+        external_module.PAGINATED_SOURCE_ADAPTERS,
+        "IEEEXplore",
+        LegacyReturnedCountIeeePaginator(),
+    )
     failed = execute_external_source_session(
         root=tmp_path,
         source="IEEEXplore",
@@ -309,8 +319,119 @@ def _failed_ieee_total_drift_episode(
         retry_policy=RetryPolicy(max_attempts=1),
         rate_limiter=RateLimiter({}),
     )
+    monkeypatch.setitem(
+        external_module.PAGINATED_SOURCE_ADAPTERS,
+        "IEEEXplore",
+        fixed_adapter,
+    )
     assert failed["sources"]["IEEEXplore"]["status"] == "FAILED"
     return failed, clock
+
+
+class LegacyReturnedCountIeeePaginator(IeeeXplorePaginator):
+    """Model the paginator used to create the immutable episode-2 failure."""
+
+    def parse_response(self, spec, state, response):
+        parsed = super().parse_response(spec, state, response)
+        next_start = int(state["start_record"]) + parsed.raw_item_count
+        parsed.terminal = next_start > int(parsed.source_reported_total)
+        parsed.next_state = None if parsed.terminal else {"start_record": next_start}
+        parsed.completion_proof = (
+            "ieee_current_total_exhaustion_observed" if parsed.terminal else None
+        )
+        return parsed
+
+
+def _failed_ieee_repeated_window_episode(
+    tmp_path,
+    monkeypatch,
+    external_wave,
+    external_preflight,
+):
+    _, clock = _failed_ieee_total_drift_episode(
+        tmp_path, monkeypatch, external_wave, external_preflight
+    )
+    authorize_ieee_total_drift_recovery(root=tmp_path, timestamp=clock)
+    monkeypatch.setattr(
+        external_module,
+        "IEEE_REPEATED_WINDOW_EXPECTED",
+        tuple((4, 5, 5, 1, 6) for _ in range(5)),
+    )
+    monkeypatch.setattr(
+        external_module,
+        "IEEE_REPEATED_WINDOW_EXPECTED_TOTAL_HISTORIES",
+        tuple((6, 5, 7, 7) for _ in range(5)),
+    )
+    monkeypatch.setattr(
+        external_module, "IEEE_REPEATED_WINDOW_EXPECTED_ATTEMPTS", 20
+    )
+    monkeypatch.setattr(
+        external_module, "IEEE_REPEATED_WINDOW_EXPECTED_VALID_PAGES", 15
+    )
+    monkeypatch.setattr(
+        external_module, "IEEE_REPEATED_WINDOW_EXPECTED_KNOWN_CALLS", 92
+    )
+    monkeypatch.setattr(
+        external_module,
+        "_ieee_calls_on_day",
+        lambda _root, checkpoint_dir, _day: (
+            72 + external_module._checkpoint_attempt_count(checkpoint_dir)
+        ),
+    )
+    fixed_adapter = external_module.PAGINATED_SOURCE_ADAPTERS["IEEEXplore"]
+    monkeypatch.setitem(
+        external_module.PAGINATED_SOURCE_ADAPTERS,
+        "IEEEXplore",
+        LegacyReturnedCountIeeePaginator(),
+    )
+    responses = []
+    for family in range(1, 6):
+        repeated = _ieee_drift_page(
+            family, start_record=4, count=1, total=7
+        )
+        responses.extend(
+            [FakeResponse(payload=repeated), FakeResponse(payload=repeated)]
+        )
+    http = FakeHttp(responses)
+    episode_2 = execute_external_source_session(
+        root=tmp_path,
+        source="IEEEXplore",
+        http=http,
+        resume=True,
+        ieee_credential="offline-test-key",
+        quota_day_utc="2026-09-04",
+        timestamp=clock,
+        retry_policy=RetryPolicy(max_attempts=1),
+        rate_limiter=RateLimiter({}),
+    )
+    monkeypatch.setitem(
+        external_module.PAGINATED_SOURCE_ADAPTERS,
+        "IEEEXplore",
+        fixed_adapter,
+    )
+    assert episode_2["sources"]["IEEEXplore"]["status"] == "FAILED"
+    assert [call["params"]["start_record"] for call in http.calls] == [
+        4,
+        5,
+    ] * 5
+    assert episode_2["sources"]["IEEEXplore"]["ieee_quota"][
+        "known_calls_after_session"
+    ] == 92
+    return episode_2, clock
+
+
+def _rewrite_active_ieee_checkpoint(tmp_path, state, dataset):
+    state_path = tmp_path / external_module.EXECUTION_STATE_PATH
+    checkpoint_path = tmp_path / state["sources"]["IEEEXplore"][
+        "checkpoint_dataset"
+    ]["path"]
+    external_module.save_review_dataset(checkpoint_path, dataset)
+    reference = external_module._file_reference(checkpoint_path, tmp_path)
+    state["sources"]["IEEEXplore"]["checkpoint_dataset"] = reference
+    state["sources"]["IEEEXplore"]["execution_episodes"][-1][
+        "checkpoint_dataset"
+    ] = reference
+    external_module._save_execution_state(state_path, state)
 
 
 class LegacyEuropePmcPaginator:
@@ -963,7 +1084,7 @@ def test_ieee_total_drift_resume_starts_at_continuations_and_reconciles(
     reconciliation = ieee["terminal_reconciliation"]
     assert reconciliation["snapshot_equivalent_completeness_claimed"] is False
     assert all(
-        family["observed_provider_totals"] == [5, 4, 5]
+        family["observed_provider_totals"] == [6, 5, 5]
         and family["duplicate_identities_across_pages"] == 0
         and family["retrieved_minus_final_provider_total"] == 0
         and family["discrepancy_explainable_by_observed_index_drift"] is True
@@ -976,7 +1097,7 @@ def test_ieee_total_drift_resume_starts_at_continuations_and_reconciles(
         tmp_path / ieee["checkpoint_dataset"]["path"]
     )
     assert all(
-        query.metadata["provider_total_observations"] == [5, 4, 5]
+        query.metadata["provider_total_observations"] == [6, 5, 5]
         and "next_start_record" not in query.metadata
         for query in dataset.source_queries
     )
@@ -1014,6 +1135,256 @@ def test_ieee_total_drift_recovery_refuses_raw_response_hash_mismatch(
 
     with pytest.raises(ExternalRetrievalWaveError, match="hash/read failure"):
         authorize_ieee_total_drift_recovery(root=tmp_path, timestamp=clock)
+
+
+def test_ieee_repeated_window_recovery_builds_episode_3_without_refunding_calls(
+    tmp_path, monkeypatch, external_wave, external_preflight
+) -> None:
+    episode_2_state, clock = _failed_ieee_repeated_window_episode(
+        tmp_path, monkeypatch, external_wave, external_preflight
+    )
+    ieee_before = episode_2_state["sources"]["IEEEXplore"]
+    immutable_checkpoints = {
+        episode["episode_number"]: (
+            tmp_path / episode["checkpoint_dataset"]["path"]
+        ).read_bytes()
+        for episode in ieee_before["execution_episodes"]
+    }
+    episode_2_checkpoint = tmp_path / ieee_before["checkpoint_dataset"]["path"]
+    episode_2_responses = {
+        path.name: path.read_bytes()
+        for path in sorted((episode_2_checkpoint.parent / "responses").iterdir())
+    }
+
+    recovered = authorize_ieee_repeated_window_recovery(
+        root=tmp_path, timestamp=clock
+    )
+
+    ieee = recovered["sources"]["IEEEXplore"]
+    assert ieee["status"] == IEEE_REPEATED_WINDOW_RECOVERY_STATUS
+    assert ieee["active_episode_number"] == 3
+    assert ieee["ieee_quota"]["known_calls_after_session"] == 92
+    assert ieee["requests_this_session"] == 0
+    assert ieee["preserved_source_attempt_count"] == 20
+    assert ieee["rejected_page_count"] == 5
+    assert [episode["immutable"] for episode in ieee["execution_episodes"]] == [
+        True,
+        True,
+        False,
+    ]
+    assert [episode["status"] for episode in ieee["execution_episodes"][:2]] == [
+        "FAILED",
+        "FAILED",
+    ]
+    episode_3 = ieee["execution_episodes"][2]
+    assert episode_3["retained_page_count"] == 15
+    assert len(episode_3["rejection_evidence"]) == 5
+    assert len(episode_3["source_raw_responses"]) == 20
+    assert len(episode_3["rejected_raw_responses"]) == 5
+    assert episode_3["known_daily_calls_preserved"] == 92
+    assert episode_3["remaining_daily_calls"] == 108
+    assert [
+        item["next_start_record"] for item in episode_3["continuation_plan"]
+    ] == [6, 6, 6, 6, 6]
+    assert all(
+        item["classification"] == "REJECTED_WHOLE_PROVIDER_WINDOW_REPETITION"
+        for item in episode_3["rejection_evidence"]
+    )
+    assert recovered["external_retrieval_cutoff_date"] is None
+
+    for episode in ieee["execution_episodes"][:2]:
+        path = tmp_path / episode["checkpoint_dataset"]["path"]
+        assert path.read_bytes() == immutable_checkpoints[episode["episode_number"]]
+    assert {
+        path.name: path.read_bytes()
+        for path in sorted((episode_2_checkpoint.parent / "responses").iterdir())
+    } == episode_2_responses
+    for binding in episode_3["source_raw_responses"]:
+        source = tmp_path / binding["episode_2_path"]
+        copied = tmp_path / binding["recovery_copy_path"]
+        assert copied.read_bytes() == source.read_bytes()
+        assert hashlib.sha256(source.read_bytes()).hexdigest() == binding["raw_sha256"]
+
+    dataset = external_module.load_review_dataset(
+        tmp_path / ieee["checkpoint_dataset"]["path"]
+    )
+    assert len(dataset.retrieval_pages) == 15
+    assert len(dataset.retrieval_attempts) == 15
+    assert len(dataset.occurrences) == 20
+    assert [query.result_count for query in dataset.source_queries] == [4] * 5
+    assert [
+        query.metadata["next_start_record"] for query in dataset.source_queries
+    ] == [6] * 5
+    assert all(
+        query.metadata["provider_total_observations"] == [6, 5, 7, 7]
+        and query.metadata["recovery_retained_page_count"] == 3
+        for query in dataset.source_queries
+    )
+    for query in dataset.source_queries:
+        identifiers = [
+            identifier
+            for page in dataset.retrieval_pages
+            if page.source_query_id == query.query_id
+            for identifier in page.native_identifiers
+        ]
+        assert len(identifiers) == len(set(identifiers))
+
+    repeated = authorize_ieee_repeated_window_recovery(
+        root=tmp_path, timestamp=clock
+    )
+    assert repeated == recovered
+
+
+def test_ieee_episode_3_live_resume_begins_at_corrected_boundaries(
+    tmp_path, monkeypatch, external_wave, external_preflight
+) -> None:
+    _, clock = _failed_ieee_repeated_window_episode(
+        tmp_path, monkeypatch, external_wave, external_preflight
+    )
+    authorize_ieee_repeated_window_recovery(root=tmp_path, timestamp=clock)
+    monkeypatch.setattr(external_module, "_ieee_calls_on_day", lambda *_: 92)
+    http = FakeHttp(
+        [
+            FakeResponse(
+                payload=_ieee_drift_page(
+                    family, start_record=6, count=2, total=7
+                )
+            )
+            for family in range(1, 6)
+        ]
+    )
+
+    completed = execute_external_source_session(
+        root=tmp_path,
+        source="IEEEXplore",
+        http=http,
+        resume=True,
+        ieee_credential="offline-test-key",
+        quota_day_utc="2026-09-04",
+        timestamp=clock,
+        retry_policy=RetryPolicy(max_attempts=1),
+        rate_limiter=RateLimiter({}),
+    )
+
+    assert [call["params"]["start_record"] for call in http.calls] == [6] * 5
+    ieee = completed["sources"]["IEEEXplore"]
+    assert ieee["status"] == "COMPLETE"
+    assert ieee["ieee_quota"]["known_calls_before_session"] == 92
+    assert ieee["ieee_quota"]["known_calls_after_session"] == 97
+    assert [episode["immutable"] for episode in ieee["execution_episodes"]] == [
+        True,
+        True,
+        True,
+    ]
+    assert all(
+        family["observed_provider_totals"] == [6, 5, 7, 7, 7]
+        for family in ieee["terminal_reconciliation"]["families"]
+    )
+
+
+def test_ieee_repeated_window_recovery_refuses_response_hash_corruption(
+    tmp_path, monkeypatch, external_wave, external_preflight
+) -> None:
+    state, clock = _failed_ieee_repeated_window_episode(
+        tmp_path, monkeypatch, external_wave, external_preflight
+    )
+    checkpoint = tmp_path / state["sources"]["IEEEXplore"][
+        "checkpoint_dataset"
+    ]["path"]
+    response = next((checkpoint.parent / "responses").iterdir())
+    response.write_bytes(response.read_bytes() + b"corrupt")
+
+    with pytest.raises(ExternalRetrievalWaveError, match="hash/read failure"):
+        authorize_ieee_repeated_window_recovery(root=tmp_path, timestamp=clock)
+
+
+def test_ieee_repeated_window_recovery_refuses_nonidentical_overlap(
+    tmp_path, monkeypatch, external_wave, external_preflight
+) -> None:
+    state, clock = _failed_ieee_repeated_window_episode(
+        tmp_path, monkeypatch, external_wave, external_preflight
+    )
+    checkpoint = tmp_path / state["sources"]["IEEEXplore"][
+        "checkpoint_dataset"
+    ]["path"]
+    dataset = external_module.load_review_dataset(checkpoint)
+    rejected_page = dataset.retrieval_pages[3]
+    attempt = next(
+        item for item in dataset.retrieval_attempts if item.page_id == rejected_page.page_id
+    )
+    response_path = checkpoint.parent / attempt.raw_response_path
+    envelope = json.loads(response_path.read_text(encoding="utf-8"))
+    payload = json.loads(base64.b64decode(envelope["content_base64"]))
+    payload["articles"].append({"article_number": "not-the-same-page", "title": "X"})
+    envelope["content_base64"] = base64.b64encode(
+        json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+    ).decode()
+    encoded = (json.dumps(envelope, sort_keys=True, separators=(",", ":")) + "\n").encode()
+    response_path.write_bytes(encoded)
+    attempt.raw_response_hash = hashlib.sha256(encoded).hexdigest()
+    _rewrite_active_ieee_checkpoint(tmp_path, state, dataset)
+
+    with pytest.raises(
+        ExternalRetrievalWaveError, match="page or occurrence accounting changed"
+    ):
+        authorize_ieee_repeated_window_recovery(root=tmp_path, timestamp=clock)
+
+
+def test_ieee_repeated_window_recovery_refuses_malformed_rejection_signature(
+    tmp_path, monkeypatch, external_wave, external_preflight
+) -> None:
+    state, clock = _failed_ieee_repeated_window_episode(
+        tmp_path, monkeypatch, external_wave, external_preflight
+    )
+    checkpoint = tmp_path / state["sources"]["IEEEXplore"][
+        "checkpoint_dataset"
+    ]["path"]
+    dataset = external_module.load_review_dataset(checkpoint)
+    dataset.source_queries[0].errors = ["unsupported rejection signature"]
+    _rewrite_active_ieee_checkpoint(tmp_path, state, dataset)
+
+    with pytest.raises(
+        ExternalRetrievalWaveError, match="malformed repeated-window rejection signature"
+    ):
+        authorize_ieee_repeated_window_recovery(root=tmp_path, timestamp=clock)
+
+
+def test_ieee_repeated_window_recovery_refuses_unexplained_pagination_gap(
+    tmp_path, monkeypatch, external_wave, external_preflight
+) -> None:
+    state, clock = _failed_ieee_repeated_window_episode(
+        tmp_path, monkeypatch, external_wave, external_preflight
+    )
+    checkpoint = tmp_path / state["sources"]["IEEEXplore"][
+        "checkpoint_dataset"
+    ]["path"]
+    dataset = external_module.load_review_dataset(checkpoint)
+    query = dataset.source_queries[0]
+    pages = [
+        page for page in dataset.retrieval_pages if page.source_query_id == query.query_id
+    ]
+    preceding, rejected = pages[-2:]
+    preceding.next_state = {"start_record": 7}
+    rejected.request_state = {"start_record": 7}
+    attempt = next(
+        item for item in dataset.retrieval_attempts if item.page_id == rejected.page_id
+    )
+    spec = external_module._source_query_specs(
+        external_wave,
+        "IEEEXplore",
+        ieee_credential="offline-recovery-redacted",
+        ieee_mutable_total_mode=True,
+    )[0]
+    request = IeeeXplorePaginator().build_request(spec, rejected.request_state)
+    attempt.request_params = request.sanitized_params()
+    attempt.request_headers = request.sanitized_headers()
+    attempt.request_hash = request.request_hash()
+    _rewrite_active_ieee_checkpoint(tmp_path, state, dataset)
+
+    with pytest.raises(
+        ExternalRetrievalWaveError, match="unexplained pagination gap"
+    ):
+        authorize_ieee_repeated_window_recovery(root=tmp_path, timestamp=clock)
 
 
 def test_europe_pmc_terminal_recovery_preserves_failure_and_reconstructs_all_queries(
@@ -1196,6 +1567,18 @@ def test_ieee_daily_quota_stops_and_resumes_without_repeating_pages(
     known_calls = iter([199, 0])
     monkeypatch.setattr(
         external_module, "_ieee_calls_on_day", lambda *_: next(known_calls)
+    )
+    source_query_specs = external_module._source_query_specs
+
+    def one_record_ieee_specs(*args, **kwargs):
+        specs = source_query_specs(*args, **kwargs)
+        if args[1] == "IEEEXplore":
+            for spec in specs:
+                spec.limit = 1
+        return specs
+
+    monkeypatch.setattr(
+        external_module, "_source_query_specs", one_record_ieee_specs
     )
     clock = Clock()
     first_http = FakeHttp([FakeResponse(payload=_ieee_page("A1", total=2))])

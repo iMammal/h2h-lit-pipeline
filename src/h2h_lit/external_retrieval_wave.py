@@ -86,6 +86,37 @@ IEEE_TOTAL_DRIFT_EXPECTED = (
     (4695, 4694, 2, 399, 400),
 )
 IEEE_TOTAL_DRIFT_EXPECTED_ATTEMPTS = 23
+IEEE_REPEATED_WINDOW_RECOVERY_STATUS = (
+    "REPEATED_WINDOW_RECOVERY_READY_TO_RESUME"
+)
+IEEE_REPEATED_WINDOW_EXPECTED = (
+    (25, 4993, 4797, 197, 4800),
+    (10, 1997, 1799, 199, 1800),
+    (11, 2195, 1998, 198, 2000),
+    (20, 3997, 3799, 199, 3800),
+    (21, 4197, 3999, 199, 4000),
+)
+IEEE_REPEATED_WINDOW_EXPECTED_TOTAL_HISTORIES = (
+    (
+        16842, 16842, 16842, 16842, 16842, 16841,
+        16845, 16845, 16845, 16845, 16845, 16845, 16845, 16845, 16845,
+        16845, 16845, 16845, 16845, 16845, 16845, 16845, 16845, 16842, 16842,
+    ),
+    (6061, 6060, 6061, 6061, 6061, 6061, 6061, 6061, 6060, 6060),
+    (9787, 9786, 9787, 9787, 9787, 9787, 9787, 9787, 9787, 9785, 9785),
+    (
+        8410, 8410, 8410, 8410, 8410, 8410, 8410, 8410, 8410, 8410,
+        8409, 8411, 8411, 8411, 8411, 8411, 8411, 8411, 8410, 8410,
+    ),
+    (
+        4695, 4694, 4696, 4696, 4696, 4696, 4696, 4696, 4696, 4696,
+        4696, 4696, 4696, 4696, 4696, 4696, 4696, 4696, 4696, 4695, 4695,
+    ),
+)
+IEEE_REPEATED_WINDOW_EXPECTED_ATTEMPTS = 87
+IEEE_REPEATED_WINDOW_EXPECTED_VALID_PAGES = 82
+IEEE_REPEATED_WINDOW_EXPECTED_REJECTIONS = 5
+IEEE_REPEATED_WINDOW_EXPECTED_KNOWN_CALLS = 92
 IEEE_VERIFICATION_PATH = (
     "provenance/star_ieee_xplore_verification_2026-09-04_manifest.json"
 )
@@ -1399,6 +1430,227 @@ def authorize_ieee_total_drift_recovery(
     return state
 
 
+def authorize_ieee_repeated_window_recovery(
+    *,
+    root: str | Path,
+    timestamp: Callable[[], str] = utc_now,
+) -> dict[str, Any]:
+    """Exclude proven repeated IEEE windows in a new offline episode."""
+
+    root_path = Path(root).resolve()
+    wave, preflight = validate_persisted_external_preflight(root=root_path)
+    state_path = _safe_output_path(root_path, EXECUTION_STATE_PATH)
+    if not state_path.is_file():
+        raise ExternalRetrievalWaveError("external execution state does not exist")
+    state = _load_execution_state(state_path, root_path, wave, preflight)
+    source_state = state["sources"]["IEEEXplore"]
+    if source_state["status"] == IEEE_REPEATED_WINDOW_RECOVERY_STATUS:
+        _validate_authorized_ieee_repeated_window_recovery(source_state, root_path)
+        return state
+    if source_state["status"] != "FAILED":
+        raise ExternalRetrievalWaveError(
+            "IEEE repeated-window recovery requires a terminal FAILED component"
+        )
+    if state["external_retrieval_cutoff_date"] is not None:
+        raise ExternalRetrievalWaveError(
+            "IEEE repeated-window recovery cannot alter a closed retrieval wave"
+        )
+
+    episodes = source_state.get("execution_episodes", [])
+    if (
+        len(episodes) != 2
+        or source_state.get("active_episode_number") != 2
+        or any(not episode.get("immutable") for episode in episodes)
+        or episodes[0].get("episode_number") != 1
+        or episodes[1].get("episode_number") != 2
+        or episodes[1].get("status") != "FAILED"
+    ):
+        raise ExternalRetrievalWaveError(
+            "IEEE repeated-window recovery requires immutable failed episodes 1 and 2"
+        )
+    for episode in episodes:
+        reference = episode.get("checkpoint_dataset")
+        if not reference:
+            raise ExternalRetrievalWaveError("IEEE episode checkpoint is absent")
+        _verify_file_reference(
+            _safe_output_path(root_path, reference["path"]), reference, root_path
+        )
+
+    quota_before = json.loads(
+        json.dumps(source_state.get("ieee_quota"), sort_keys=True)
+    )
+    if (
+        not quota_before
+        or quota_before.get("daily_limit") != IEEE_DAILY_REQUEST_LIMIT
+        or quota_before.get("known_calls_after_session")
+        != IEEE_REPEATED_WINDOW_EXPECTED_KNOWN_CALLS
+    ):
+        raise ExternalRetrievalWaveError(
+            "IEEE repeated-window recovery quota evidence changed"
+        )
+    checkpoint_reference = source_state.get("checkpoint_dataset")
+    if checkpoint_reference != episodes[1].get("checkpoint_dataset"):
+        raise ExternalRetrievalWaveError("IEEE active episode-2 checkpoint changed")
+    failed_checkpoint = _safe_output_path(root_path, checkpoint_reference["path"])
+    failed_checkpoint_bytes = failed_checkpoint.read_bytes()
+    failed_payload = json.loads(failed_checkpoint_bytes)
+    source_attempt_manifest_hash = _hash_payload(
+        {"retrieval_attempts": failed_payload.get("retrieval_attempts", [])}
+    )
+    dataset = load_review_dataset(failed_checkpoint)
+    other_sources_before = {
+        key: json.loads(json.dumps(value, sort_keys=True))
+        for key, value in state["sources"].items()
+        if key != "IEEEXplore"
+    }
+    recovered_at = timestamp()
+    recovery = _reparse_failed_ieee_repeated_window_checkpoint(
+        dataset=dataset,
+        checkpoint_dir=failed_checkpoint.parent,
+        root=root_path,
+        wave=wave,
+        recovered_at=recovered_at,
+    )
+
+    recovery_checkpoint_relative = (
+        f"{EXECUTION_ROOT}/IEEEXplore/episodes/episode-003/checkpoint"
+    )
+    recovery_checkpoint_dir = _safe_output_path(
+        root_path, recovery_checkpoint_relative
+    )
+    if recovery_checkpoint_dir.exists():
+        raise ExternalRetrievalWaveError(
+            "IEEE episode-3 checkpoint exists without valid state lineage"
+        )
+    recovery_store = CheckpointStore(recovery_checkpoint_dir)
+    raw_bindings = _copy_recovery_raw_responses(
+        root=root_path,
+        source_checkpoint_dir=failed_checkpoint.parent,
+        recovery_checkpoint_dir=recovery_checkpoint_dir,
+        raw_response_references=recovery["raw_response_references"],
+        source_path_key="episode_2_path",
+        error_prefix="IEEE repeated-window",
+    )
+    binding_by_source = {
+        binding["episode_2_path"]: binding for binding in raw_bindings
+    }
+    rejected_bindings = [
+        binding_by_source[item["episode_2_response_path"]]
+        for item in recovery["rejection_evidence"]
+    ]
+
+    run = dataset.retrieval_runs[0]
+    run.metadata["offline_repeated_window_recovery"] = {
+        "recovery_episode_number": 3,
+        "source_episode_number": 2,
+        "source_checkpoint": dict(checkpoint_reference),
+        "source_attempt_manifest_hash": source_attempt_manifest_hash,
+        "source_attempt_count": IEEE_REPEATED_WINDOW_EXPECTED_ATTEMPTS,
+        "retained_page_count": recovery["retained_page_count"],
+        "rejected_page_count": len(recovery["rejection_evidence"]),
+        "quota_only_rejected_attempt_count": len(recovery["rejection_evidence"]),
+        "source_raw_response_count": len(raw_bindings),
+        "source_raw_response_manifest_hash": _hash_payload(
+            {"responses": raw_bindings}
+        ),
+        "rejected_response_manifest_hash": _hash_payload(
+            {"responses": rejected_bindings}
+        ),
+        "continuation_plan": recovery["continuation_plan"],
+        "provider_total_histories": recovery["provider_total_histories"],
+        "rejection_evidence": recovery["rejection_evidence"],
+        "known_daily_calls_preserved": quota_before["known_calls_after_session"],
+        "quota_day_utc": quota_before["quota_day_utc"],
+        "network_used": False,
+    }
+    checkpoint_hash = recovery_store.save_dataset(dataset)
+    recovery_checkpoint_reference = _file_reference(
+        recovery_store.dataset_path, root_path
+    )
+    if checkpoint_hash != recovery_checkpoint_reference["raw_sha256"]:
+        raise ExternalRetrievalWaveError(
+            "IEEE episode-3 recovery checkpoint hash disagreement"
+        )
+    if failed_checkpoint.read_bytes() != failed_checkpoint_bytes:
+        raise ExternalRetrievalWaveError(
+            "IEEE episode-2 checkpoint changed during recovery"
+        )
+    _verify_recovery_raw_bindings(root_path, raw_bindings, "episode_2_path")
+    for episode in episodes:
+        reference = episode["checkpoint_dataset"]
+        _verify_file_reference(
+            _safe_output_path(root_path, reference["path"]), reference, root_path
+        )
+
+    recovery_episode = {
+        "episode_number": 3,
+        "episode_id": "IEEEXplore-episode-003",
+        "run_id": run.run_id,
+        "status": IEEE_REPEATED_WINDOW_RECOVERY_STATUS,
+        "recovery_of_episode_number": 2,
+        "authorization_reason": "OFFLINE_REPEATED_PROVIDER_WINDOW_RECONCILIATION",
+        "authorized_at_utc": recovered_at,
+        "checkpoint_path": recovery_checkpoint_relative,
+        "checkpoint_dataset": recovery_checkpoint_reference,
+        "frozen_wave_manifest_hash": wave.manifest_hash(),
+        "frozen_query_plan_hash": wave.query_plan_hash,
+        "source_episode_checkpoint": dict(checkpoint_reference),
+        "source_attempt_manifest_hash": source_attempt_manifest_hash,
+        "source_attempt_count": IEEE_REPEATED_WINDOW_EXPECTED_ATTEMPTS,
+        "source_raw_responses": raw_bindings,
+        "rejected_raw_responses": rejected_bindings,
+        "rejection_evidence": recovery["rejection_evidence"],
+        "retained_page_count": recovery["retained_page_count"],
+        "continuation_plan": recovery["continuation_plan"],
+        "provider_total_histories": recovery["provider_total_histories"],
+        "known_daily_calls_preserved": quota_before["known_calls_after_session"],
+        "remaining_daily_calls": (
+            IEEE_DAILY_REQUEST_LIMIT - quota_before["known_calls_after_session"]
+        ),
+        "network_used": False,
+        "immutable": False,
+    }
+    source_state.update(
+        {
+            "status": IEEE_REPEATED_WINDOW_RECOVERY_STATUS,
+            "execution_episodes": [*episodes, recovery_episode],
+            "active_episode_number": 3,
+            "active_run_id": run.run_id,
+            "active_checkpoint_path": recovery_checkpoint_relative,
+            "checkpoint_path": recovery_checkpoint_relative,
+            "checkpoint_dataset": recovery_checkpoint_reference,
+            "completed_query_count": 0,
+            "total_query_count": 5,
+            "occurrence_count": len(dataset.occurrences),
+            "attempt_count": len(dataset.retrieval_attempts),
+            "preserved_source_attempt_count": IEEE_REPEATED_WINDOW_EXPECTED_ATTEMPTS,
+            "rejected_page_count": len(recovery["rejection_evidence"]),
+            "requests_this_session": 0,
+            "pause_reason": (
+                "OFFLINE_REPEATED_WINDOW_RECOVERY_COMPLETE; LIVE_RESUME_REQUIRED"
+            ),
+            "failure_reason": None,
+            "last_session_started_at_utc": recovered_at,
+            "last_session_completed_at_utc": recovered_at,
+        }
+    )
+    if source_state.get("ieee_quota") != quota_before:
+        raise ExternalRetrievalWaveError(
+            "IEEE repeated-window recovery changed the daily quota ledger"
+        )
+    if {
+        key: value for key, value in state["sources"].items() if key != "IEEEXplore"
+    } != other_sources_before:
+        raise ExternalRetrievalWaveError(
+            "IEEE repeated-window recovery changed another source component"
+        )
+    state["status"] = "RUNNING"
+    state["external_retrieval_completed_at_utc"] = None
+    state["external_retrieval_cutoff_date"] = None
+    _save_execution_state(state_path, state)
+    return state
+
+
 def execute_external_source_session(
     *,
     root: str | Path,
@@ -2145,12 +2397,12 @@ def _reparse_failed_ieee_total_drift_checkpoint(
                 )
             query_identifiers.update(parsed.native_identifiers)
             observed_totals.append(int(parsed.source_reported_total))
-            parsed_next_start = int(parsed.next_state["start_record"])
-            if parsed_next_start != expected_start + parsed.raw_item_count:
+            persisted_next_start = int(page.next_state["start_record"])
+            if persisted_next_start != expected_start + parsed.raw_item_count:
                 raise ExternalRetrievalWaveError(
                     "IEEE response created a pagination gap or overlap"
                 )
-            expected_start = parsed_next_start
+            expected_start = persisted_next_start
 
             prior_error = page.metadata.pop("completion_error", None)
             if prior_error:
@@ -2217,6 +2469,378 @@ def _reparse_failed_ieee_total_drift_checkpoint(
         "raw_response_references": raw_response_references,
         "continuation_plan": continuation_plan,
         "provider_total_histories": total_histories,
+    }
+
+
+def _reparse_failed_ieee_repeated_window_checkpoint(
+    *,
+    dataset: Any,
+    checkpoint_dir: Path,
+    root: Path,
+    wave: ProductionRetrievalWave,
+    recovered_at: str,
+) -> dict[str, Any]:
+    dataset.validate()
+    if len(dataset.retrieval_runs) != 1:
+        raise ExternalRetrievalWaveError(
+            "IEEE repeated-window recovery requires exactly one run"
+        )
+    run = dataset.retrieval_runs[0]
+    specs = _source_query_specs(
+        wave,
+        "IEEEXplore",
+        ieee_credential="offline-recovery-redacted",
+        ieee_mutable_total_mode=True,
+    )
+    if (
+        run.completion_status is not RetrievalCompletionStatus.FAILED
+        or run.retrieval_cutoff_date is not None
+        or run.query_plan_hash != _query_plan_hash(specs)
+        or len(dataset.source_queries) != len(specs)
+    ):
+        raise ExternalRetrievalWaveError(
+            "IEEE checkpoint is not an eligible repeated-window failure"
+        )
+    if len(dataset.retrieval_attempts) != IEEE_REPEATED_WINDOW_EXPECTED_ATTEMPTS:
+        raise ExternalRetrievalWaveError("IEEE episode-2 attempt count changed")
+    if len(IEEE_REPEATED_WINDOW_EXPECTED) != len(specs) or len(
+        IEEE_REPEATED_WINDOW_EXPECTED_TOTAL_HISTORIES
+    ) != len(specs):
+        raise ExternalRetrievalWaveError("IEEE repeated-window signature is incomplete")
+
+    adapter = PAGINATED_SOURCE_ADAPTERS["IEEEXplore"]
+    response_store = CheckpointStore(checkpoint_dir)
+    raw_response_references: list[tuple[str, str]] = []
+    seen_response_paths: set[str] = set()
+    rejected_page_ids: set[str] = set()
+    rejected_attempt_ids: set[str] = set()
+    rejected_occurrence_ids: set[str] = set()
+    rejection_evidence = []
+    continuation_plan = []
+    total_histories: dict[str, list[int]] = {}
+    retained_page_count = 0
+
+    for query, spec, expected, expected_history in zip(
+        dataset.source_queries,
+        specs,
+        IEEE_REPEATED_WINDOW_EXPECTED,
+        IEEE_REPEATED_WINDOW_EXPECTED_TOTAL_HISTORIES,
+        strict=True,
+    ):
+        page_count, occurrence_count, rejected_start, rejected_count, next_start = expected
+        if (
+            query.source_database != "IEEEXplore"
+            or query.query_text != spec.query_text
+            or query.query_version != spec.query_version
+            or query.metadata.get("production_query_id")
+            != spec.metadata["production_query_id"]
+            or query.metadata.get("frozen_request_specification_hash")
+            != spec.metadata["frozen_request_specification_hash"]
+            or query.completion_status is not RetrievalCompletionStatus.FAILED
+            or query.status is not ProcessingStatus.FAILED
+            or query.result_count != occurrence_count
+        ):
+            raise ExternalRetrievalWaveError(
+                "IEEE repeated-window recovery refused changed query provenance"
+            )
+        pages = sorted(
+            (
+                page
+                for page in dataset.retrieval_pages
+                if page.source_query_id == query.query_id
+            ),
+            key=lambda item: item.ordinal,
+        )
+        if (
+            len(pages) != page_count
+            or len(pages) < 2
+            or [page.ordinal for page in pages] != list(range(page_count))
+        ):
+            raise ExternalRetrievalWaveError(
+                "IEEE episode-2 page lineage is incomplete or unordered"
+            )
+
+        parsed_pages = []
+        observed_totals = []
+        query_identifiers: set[str] = set()
+        for page_index, page in enumerate(pages):
+            if (
+                page.strategy != adapter.strategy
+                or page.adapter_version != adapter.version
+                or page.status is not RetrievalCompletionStatus.COMPLETE
+                or (
+                    page_index
+                    and page.request_state != pages[page_index - 1].next_state
+                )
+            ):
+                raise ExternalRetrievalWaveError(
+                    "IEEE episode-2 pagination ordering or request state changed"
+                )
+            request = adapter.build_request(spec, page.request_state)
+            attempts = sorted(
+                (
+                    attempt
+                    for attempt in dataset.retrieval_attempts
+                    if attempt.page_id == page.page_id
+                ),
+                key=lambda item: item.attempt_number,
+            )
+            if (
+                len(attempts) != 1
+                or page.attempt_ids != [attempts[0].attempt_id]
+                or attempts[0].attempt_number != 1
+            ):
+                raise ExternalRetrievalWaveError(
+                    "IEEE repeated-window recovery requires one attempt per page"
+                )
+            attempt = attempts[0]
+            if (
+                attempt.status is not RetrievalAttemptStatus.SUCCEEDED
+                or attempt.response_status != 200
+                or attempt.error is not None
+                or not attempt.raw_response_path
+                or not attempt.raw_response_hash
+                or attempt.request_method != request.method
+                or attempt.request_url != request.url
+                or attempt.request_params != request.sanitized_params()
+                or attempt.request_headers != request.sanitized_headers()
+                or attempt.request_hash != request.request_hash()
+            ):
+                raise ExternalRetrievalWaveError(
+                    "IEEE repeated-window recovery requires exact request identity"
+                )
+            if attempt.raw_response_path in seen_response_paths:
+                raise ExternalRetrievalWaveError("IEEE raw response path is reused")
+            try:
+                response = response_store.load_response(
+                    attempt.raw_response_path, attempt.raw_response_hash
+                )
+            except (OSError, ValueError) as exc:
+                raise ExternalRetrievalWaveError(
+                    f"IEEE repeated-window raw response hash/read failure: {exc}"
+                ) from exc
+            seen_response_paths.add(attempt.raw_response_path)
+            raw_response_references.append(
+                (attempt.raw_response_path, attempt.raw_response_hash)
+            )
+            try:
+                parsed = adapter.parse_response(spec, page.request_state, response)
+            except Exception as exc:
+                raise ExternalRetrievalWaveError(
+                    f"IEEE repeated-window offline parse failed: {type(exc).__name__}: {exc}"
+                ) from exc
+            page_occurrences = sorted(
+                (
+                    occurrence
+                    for occurrence in dataset.occurrences
+                    if occurrence.retrieval_page_id == page.page_id
+                ),
+                key=lambda item: item.source_rank or 0,
+            )
+            if (
+                parsed.incomplete_reason
+                or parsed.raw_item_count != len(parsed.records)
+                or parsed.raw_item_count < 1
+                or parsed.raw_item_count > spec.limit
+                or parsed.total_is_exact
+                or len(page_occurrences) != parsed.raw_item_count
+                or [item.source_identifier for item in page_occurrences]
+                != parsed.native_identifiers
+                or page.returned_item_count != parsed.raw_item_count
+                or page.native_identifiers != parsed.native_identifiers
+                or len(set(parsed.native_identifiers)) != len(parsed.native_identifiers)
+            ):
+                raise ExternalRetrievalWaveError(
+                    "IEEE repeated-window page or occurrence accounting changed"
+                )
+            parsed_pages.append((page, attempt, parsed, page_occurrences))
+            observed_totals.append(int(parsed.source_reported_total))
+            if page_index:
+                prior_page, _, prior_parsed, _ = parsed_pages[-2]
+                expected_legacy_start = (
+                    int(prior_page.request_state["start_record"])
+                    + prior_parsed.raw_item_count
+                )
+                if int(page.request_state["start_record"]) != expected_legacy_start:
+                    raise ExternalRetrievalWaveError(
+                        "IEEE episode-2 lineage contains an unexplained pagination gap"
+                    )
+
+        previous_page, _, previous_parsed, _ = parsed_pages[-2]
+        rejected_page, rejected_attempt, rejected_parsed, rejected_occurrences = (
+            parsed_pages[-1]
+        )
+        previous_start = int(previous_page.request_state["start_record"])
+        actual_rejected_start = int(rejected_page.request_state["start_record"])
+        calculated_boundary = previous_start + int(spec.limit)
+        expected_error = (
+            "source repeated native identifiers across pages: "
+            f"{sorted(rejected_parsed.native_identifiers)!r}"
+        )
+        if (
+            query.errors != [expected_error]
+            or rejected_page.metadata.get("completion_error") != expected_error
+            or previous_parsed.raw_item_count != rejected_count
+            or rejected_parsed.raw_item_count != rejected_count
+            or actual_rejected_start != rejected_start
+            or actual_rejected_start
+            != previous_start + previous_parsed.raw_item_count
+            or calculated_boundary != next_start
+            or actual_rejected_start >= calculated_boundary
+            or previous_start // int(spec.limit)
+            != actual_rejected_start // int(spec.limit)
+            or previous_parsed.native_identifiers
+            != rejected_parsed.native_identifiers
+            or previous_parsed.source_reported_total
+            != rejected_parsed.source_reported_total
+            or [record.original_metadata for record in previous_parsed.records]
+            != [record.original_metadata for record in rejected_parsed.records]
+            or previous_parsed.terminal
+            or rejected_parsed.terminal
+        ):
+            raise ExternalRetrievalWaveError(
+                "IEEE malformed repeated-window rejection signature"
+            )
+        if observed_totals != list(expected_history):
+            raise ExternalRetrievalWaveError(
+                "IEEE complete provider-total history changed"
+            )
+
+        for page, _, parsed, _ in parsed_pages[:-1]:
+            overlap = query_identifiers.intersection(parsed.native_identifiers)
+            if overlap:
+                raise ExternalRetrievalWaveError(
+                    "IEEE retained pages contain native-identifier overlap"
+                )
+            query_identifiers.update(parsed.native_identifiers)
+        if len(query_identifiers) != occurrence_count - rejected_count:
+            raise ExternalRetrievalWaveError(
+                "IEEE retained occurrence accounting changed"
+            )
+
+        rejected_page_ids.add(rejected_page.page_id)
+        rejected_attempt_ids.add(rejected_attempt.attempt_id)
+        rejected_occurrence_ids.update(
+            occurrence.occurrence_id for occurrence in rejected_occurrences
+        )
+        previous_page.next_state = {"start_record": calculated_boundary}
+        previous_page.metadata["recovered_next_start_record"] = calculated_boundary
+        rejection_evidence.append(
+            {
+                "production_query_id": spec.metadata["production_query_id"],
+                "query_id": query.query_id,
+                "preceding_page_id": previous_page.page_id,
+                "rejected_page_id": rejected_page.page_id,
+                "rejected_attempt_id": rejected_attempt.attempt_id,
+                "rejected_request_hash": rejected_attempt.request_hash,
+                "episode_2_response_path": (
+                    checkpoint_dir / rejected_attempt.raw_response_path
+                ).relative_to(root).as_posix(),
+                "raw_response_hash": rejected_attempt.raw_response_hash,
+                "preceding_start_record": previous_start,
+                "rejected_start_record": actual_rejected_start,
+                "returned_item_count": rejected_count,
+                "corrected_next_start_record": calculated_boundary,
+                "native_identifier_manifest_hash": _hash_payload(
+                    {"native_identifiers": rejected_parsed.native_identifiers}
+                ),
+                "source_reported_total": rejected_parsed.source_reported_total,
+                "terminal_error": expected_error,
+                "classification": "REJECTED_WHOLE_PROVIDER_WINDOW_REPETITION",
+            }
+        )
+        retained_page_count += len(pages) - 1
+        query.page_ids = [page.page_id for page in pages[:-1]]
+        query.result_count = occurrence_count - rejected_count
+        query.status = ProcessingStatus.PARTIAL
+        query.completion_status = RetrievalCompletionStatus.RUNNING
+        query.completion_proof = None
+        query.errors = []
+        query.retrieval_ended_at = recovered_at
+        query.total_is_exact = False
+        query.metadata["provider_total_observations"] = observed_totals
+        query.metadata["provider_total_observation_range"] = [
+            min(observed_totals),
+            max(observed_totals),
+        ]
+        query.metadata["recovery_retained_page_count"] = len(pages) - 1
+        query.metadata["next_start_record"] = calculated_boundary
+        query.metadata["offline_repeated_window_recovery"] = True
+        query.metadata["mutable_provider_totals"] = True
+        total_histories[spec.metadata["production_query_id"]] = observed_totals
+        continuation_plan.append(
+            {
+                "production_query_id": spec.metadata["production_query_id"],
+                "next_start_record": calculated_boundary,
+                "retained_page_count": len(pages) - 1,
+                "retained_occurrence_count": occurrence_count - rejected_count,
+                "rejected_page_count": 1,
+                "observed_provider_totals": observed_totals,
+            }
+        )
+
+    if (
+        len(raw_response_references) != IEEE_REPEATED_WINDOW_EXPECTED_ATTEMPTS
+        or len(rejection_evidence) != IEEE_REPEATED_WINDOW_EXPECTED_REJECTIONS
+        or retained_page_count != IEEE_REPEATED_WINDOW_EXPECTED_VALID_PAGES
+    ):
+        raise ExternalRetrievalWaveError(
+            "IEEE repeated-window recovery aggregate accounting changed"
+        )
+
+    dataset.retrieval_pages = [
+        page for page in dataset.retrieval_pages if page.page_id not in rejected_page_ids
+    ]
+    dataset.retrieval_attempts = [
+        attempt
+        for attempt in dataset.retrieval_attempts
+        if attempt.attempt_id not in rejected_attempt_ids
+    ]
+    dataset.occurrences = [
+        occurrence
+        for occurrence in dataset.occurrences
+        if occurrence.occurrence_id not in rejected_occurrence_ids
+    ]
+    dataset.duplicate_decisions = [
+        decision
+        for decision in dataset.duplicate_decisions
+        if decision.occurrence_id not in rejected_occurrence_ids
+    ]
+    for canonical in dataset.canonical_records:
+        canonical.occurrence_ids = [
+            occurrence_id
+            for occurrence_id in canonical.occurrence_ids
+            if occurrence_id not in rejected_occurrence_ids
+        ]
+    dataset.canonical_records = [
+        canonical for canonical in dataset.canonical_records if canonical.occurrence_ids
+    ]
+    if any(
+        canonical.survivor_occurrence_id in rejected_occurrence_ids
+        for canonical in dataset.canonical_records
+    ):
+        raise ExternalRetrievalWaveError(
+            "IEEE rejected occurrence was a canonical survivor"
+        )
+
+    run.status = ProcessingStatus.PARTIAL
+    run.completion_status = RetrievalCompletionStatus.RUNNING
+    run.retrieval_completed_at = recovered_at
+    run.retrieval_cutoff_date = None
+    run.errors = [
+        "offline IEEE repeated-window recovery complete; live pagination resume pending"
+    ]
+    run.metadata.pop("pause_state", None)
+    run.metadata.pop("pause_reason", None)
+    run.metadata["provider_total_semantics"] = "MUTABLE_PAGINATION_OBSERVATION"
+    run.metadata["network_requests_during_recovery"] = 0
+    dataset.validate()
+    return {
+        "raw_response_references": raw_response_references,
+        "continuation_plan": continuation_plan,
+        "provider_total_histories": total_histories,
+        "rejection_evidence": rejection_evidence,
+        "retained_page_count": retained_page_count,
     }
 
 
@@ -2316,6 +2940,80 @@ def _validate_authorized_ieee_total_drift_recovery(
     _verify_recovery_raw_bindings(root, bindings, "failed_episode_path")
 
 
+def _validate_authorized_ieee_repeated_window_recovery(
+    source_state: dict[str, Any], root: Path
+) -> None:
+    episodes = source_state.get("execution_episodes", [])
+    if len(episodes) != 3:
+        raise ExternalRetrievalWaveError("IEEE episode-3 recovery lineage changed")
+    first, second, recovered = episodes
+    if (
+        first.get("episode_number") != 1
+        or second.get("episode_number") != 2
+        or not first.get("immutable")
+        or not second.get("immutable")
+        or second.get("status") != "FAILED"
+        or recovered.get("episode_number") != 3
+        or recovered.get("status") != IEEE_REPEATED_WINDOW_RECOVERY_STATUS
+        or recovered.get("recovery_of_episode_number") != 2
+        or recovered.get("network_used") is not False
+        or recovered.get("immutable") is not False
+        or recovered.get("retained_page_count")
+        != IEEE_REPEATED_WINDOW_EXPECTED_VALID_PAGES
+        or len(recovered.get("rejection_evidence", []))
+        != IEEE_REPEATED_WINDOW_EXPECTED_REJECTIONS
+        or recovered.get("known_daily_calls_preserved")
+        != IEEE_REPEATED_WINDOW_EXPECTED_KNOWN_CALLS
+        or source_state.get("ieee_quota", {}).get("known_calls_after_session")
+        != IEEE_REPEATED_WINDOW_EXPECTED_KNOWN_CALLS
+        or source_state.get("active_episode_number") != 3
+        or source_state.get("active_checkpoint_path")
+        != recovered.get("checkpoint_path")
+    ):
+        raise ExternalRetrievalWaveError(
+            "authorized IEEE episode-3 recovery lineage changed"
+        )
+    for episode in (first, second):
+        checkpoint = _safe_output_path(
+            root, episode["checkpoint_dataset"]["path"]
+        )
+        _verify_file_reference(checkpoint, episode["checkpoint_dataset"], root)
+    source_checkpoint = _safe_output_path(
+        root, recovered["source_episode_checkpoint"]["path"]
+    )
+    _verify_file_reference(
+        source_checkpoint, recovered["source_episode_checkpoint"], root
+    )
+    recovery_checkpoint = _safe_output_path(
+        root, recovered["checkpoint_dataset"]["path"]
+    )
+    _verify_file_reference(recovery_checkpoint, recovered["checkpoint_dataset"], root)
+    bindings = recovered.get("source_raw_responses", [])
+    if (
+        len(bindings) != IEEE_REPEATED_WINDOW_EXPECTED_ATTEMPTS
+        or len(recovered.get("rejected_raw_responses", []))
+        != IEEE_REPEATED_WINDOW_EXPECTED_REJECTIONS
+    ):
+        raise ExternalRetrievalWaveError(
+            "IEEE episode-3 raw-response manifest changed"
+        )
+    _verify_recovery_raw_bindings(root, bindings, "episode_2_path")
+    dataset = load_review_dataset(recovery_checkpoint)
+    if (
+        len(dataset.retrieval_pages) != IEEE_REPEATED_WINDOW_EXPECTED_VALID_PAGES
+        or len(dataset.retrieval_attempts)
+        != IEEE_REPEATED_WINDOW_EXPECTED_VALID_PAGES
+        or [
+            query.metadata.get("next_start_record")
+            for query in dataset.source_queries
+        ]
+        != [item[4] for item in IEEE_REPEATED_WINDOW_EXPECTED]
+    ):
+        raise ExternalRetrievalWaveError(
+            "IEEE episode-3 continuation checkpoint changed"
+        )
+
+
 def _ieee_total_drift_recovery_active(source_state: Mapping[str, Any]) -> bool:
     active_number = source_state.get("active_episode_number")
     active = next(
@@ -2328,10 +3026,20 @@ def _ieee_total_drift_recovery_active(source_state: Mapping[str, Any]) -> bool:
     )
     return bool(
         active
-        and active.get("episode_number") == 2
-        and active.get("recovery_of_episode_number") == 1
-        and active.get("authorization_reason")
-        == "OFFLINE_MUTABLE_PROVIDER_TOTAL_RECONCILIATION"
+        and (
+            (
+                active.get("episode_number") == 2
+                and active.get("recovery_of_episode_number") == 1
+                and active.get("authorization_reason")
+                == "OFFLINE_MUTABLE_PROVIDER_TOTAL_RECONCILIATION"
+            )
+            or (
+                active.get("episode_number") == 3
+                and active.get("recovery_of_episode_number") == 2
+                and active.get("authorization_reason")
+                == "OFFLINE_REPEATED_PROVIDER_WINDOW_RECONCILIATION"
+            )
+        )
     )
 
 
@@ -2359,9 +3067,29 @@ def _ieee_terminal_reconciliation(dataset: Any) -> dict[str, Any]:
             raise ExternalRetrievalWaveError(
                 "IEEE terminal reconciliation requires complete overlap-free pagination"
             )
-        observations = [
+        current_observations = [
             int(page.metadata["provider_total_observation"]) for page in pages
         ]
+        retained_page_count = query.metadata.get("recovery_retained_page_count")
+        if retained_page_count is None:
+            observations = current_observations
+        else:
+            preserved_observations = list(
+                query.metadata.get("provider_total_observations", [])
+            )
+            if (
+                not isinstance(retained_page_count, int)
+                or retained_page_count < 1
+                or retained_page_count > len(current_observations)
+                or len(preserved_observations) < retained_page_count
+            ):
+                raise ExternalRetrievalWaveError(
+                    "IEEE recovered provider-total history is malformed"
+                )
+            observations = [
+                *preserved_observations,
+                *current_observations[retained_page_count:],
+            ]
         query.metadata["provider_total_observations"] = observations
         query.metadata["provider_total_observation_range"] = [
             min(observations),
@@ -3358,10 +4086,18 @@ def _ieee_calls_on_day(root: Path, checkpoint_dir: Path, quota_day: str) -> int:
     checkpoint_path = checkpoint_dir / "review_dataset.json"
     retrieval_calls = 0
     if checkpoint_path.is_file():
+        dataset = load_review_dataset(checkpoint_path)
         retrieval_calls = sum(
             attempt.started_at[:10] == quota_day
-            for attempt in load_review_dataset(checkpoint_path).retrieval_attempts
+            for attempt in dataset.retrieval_attempts
         )
+        recovery = dataset.retrieval_runs[0].metadata.get(
+            "offline_repeated_window_recovery", {}
+        )
+        if recovery.get("quota_day_utc") == quota_day:
+            retrieval_calls += int(
+                recovery.get("quota_only_rejected_attempt_count", 0)
+            )
     return verification_calls + retrieval_calls
 
 
@@ -3379,7 +4115,55 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--authorize-ieee-total-drift-recovery", action="store_true"
     )
+    parser.add_argument(
+        "--authorize-ieee-repeated-window-recovery", action="store_true"
+    )
     args = parser.parse_args(argv)
+    if args.authorize_ieee_repeated_window_recovery:
+        if args.source != "IEEEXplore":
+            parser.error(
+                "repeated-window recovery is supported only for --source IEEEXplore"
+            )
+        if (
+            args.authorize_live_external_retrieval
+            or args.authorize_transport_retry_reset
+            or args.authorize_pubmed_parser_recovery
+            or args.authorize_europe_pmc_terminal_recovery
+            or args.authorize_ieee_total_drift_recovery
+            or args.resume
+        ):
+            parser.error(
+                "IEEE repeated-window recovery is a separate offline authorization boundary"
+            )
+        state = authorize_ieee_repeated_window_recovery(root=args.root)
+        source_state = state["sources"]["IEEEXplore"]
+        active = source_state["execution_episodes"][2]
+        print(
+            json.dumps(
+                {
+                    "execution_status": state["status"],
+                    "source": "IEEEXplore",
+                    "source_status": source_state["status"],
+                    "active_episode_number": source_state[
+                        "active_episode_number"
+                    ],
+                    "continuation_plan": active["continuation_plan"],
+                    "retained_page_count": active["retained_page_count"],
+                    "rejected_page_count": len(active["rejection_evidence"]),
+                    "known_daily_calls_preserved": active[
+                        "known_daily_calls_preserved"
+                    ],
+                    "remaining_daily_calls": active["remaining_daily_calls"],
+                    "external_retrieval_cutoff_date": state[
+                        "external_retrieval_cutoff_date"
+                    ],
+                    "network_used": False,
+                },
+                sort_keys=True,
+                indent=2,
+            )
+        )
+        return 0
     if args.authorize_ieee_total_drift_recovery:
         if args.source != "IEEEXplore":
             parser.error(
@@ -3390,6 +4174,7 @@ def main(argv: list[str] | None = None) -> int:
             or args.authorize_transport_retry_reset
             or args.authorize_pubmed_parser_recovery
             or args.authorize_europe_pmc_terminal_recovery
+            or args.authorize_ieee_repeated_window_recovery
             or args.resume
         ):
             parser.error(
@@ -3431,6 +4216,7 @@ def main(argv: list[str] | None = None) -> int:
             or args.authorize_transport_retry_reset
             or args.authorize_pubmed_parser_recovery
             or args.authorize_ieee_total_drift_recovery
+            or args.authorize_ieee_repeated_window_recovery
             or args.resume
         ):
             parser.error(
@@ -3470,6 +4256,7 @@ def main(argv: list[str] | None = None) -> int:
             or args.authorize_transport_retry_reset
             or args.authorize_europe_pmc_terminal_recovery
             or args.authorize_ieee_total_drift_recovery
+            or args.authorize_ieee_repeated_window_recovery
             or args.resume
         ):
             parser.error("parser recovery is a separate offline authorization boundary")
@@ -3512,6 +4299,7 @@ def main(argv: list[str] | None = None) -> int:
             or args.authorize_pubmed_parser_recovery
             or args.authorize_europe_pmc_terminal_recovery
             or args.authorize_ieee_total_drift_recovery
+            or args.authorize_ieee_repeated_window_recovery
             or args.resume
         ):
             parser.error(

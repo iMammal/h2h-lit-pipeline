@@ -166,6 +166,50 @@ def test_ieee_opt_in_mutable_totals_record_multiple_changes_and_exhaustion(
     ]
 
 
+def test_ieee_short_nonterminal_page_advances_to_next_request_window(tmp_path):
+    spec = _spec()
+    spec.metadata["mutable_provider_totals"] = True
+    responses = [
+        {
+            "total_records": 6,
+            "articles": [
+                {"article_number": "1", "title": "One"},
+                {"article_number": "2", "title": "Two"},
+            ],
+        },
+        {
+            "total_records": 7,
+            "articles": [{"article_number": "3", "title": "Three"}],
+        },
+        {
+            "total_records": 5,
+            "articles": [{"article_number": "5", "title": "Five"}],
+        },
+    ]
+    http = FakeHttp([FakeResponse(payload=payload) for payload in responses])
+
+    dataset = execute_paginated_retrieval_run(
+        run_id="run:ieee-short-window",
+        queries=[spec],
+        http_clients={"IEEEXplore": http},
+        checkpoint_dir=tmp_path / "short-window",
+        timestamp=Clock(),
+        retry_policy=RetryPolicy(max_attempts=1),
+    )
+
+    assert [call["params"]["start_record"] for call in http.calls] == [1, 3, 5]
+    assert [page.returned_item_count for page in dataset.retrieval_pages] == [2, 1, 1]
+    assert dataset.retrieval_pages[1].next_state == {"start_record": 5}
+    assert dataset.retrieval_pages[1].terminal is False
+    assert dataset.retrieval_pages[2].next_state is None
+    assert dataset.retrieval_pages[2].terminal is True
+    assert [
+        page.metadata["provider_total_observation"]
+        for page in dataset.retrieval_pages
+    ] == [6, 7, 5]
+    assert dataset.retrieval_runs[0].completion_status is RetrievalCompletionStatus.COMPLETE
+
+
 def test_ieee_retry_and_interrupted_checkpoint_resume(tmp_path):
     retry_http = FakeHttp(
         [
