@@ -3,11 +3,13 @@ from __future__ import annotations
 import hashlib
 import json
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
 
 from h2h_lit import provisional_validation
+from h2h_lit.inference import MockInferenceProvider
 from h2h_lit.pagination import RateLimiter, RetryPolicy
 from h2h_lit.provisional_validation import (
     PREFLIGHT_ARTIFACT_CLASS,
@@ -430,3 +432,189 @@ def test_jfr25_comparison_is_exact_first_and_creates_no_seed_occurrences() -> No
         "unique_exact_normalized_title",
     ]
     assert [item["in_750_cohort"] for item in matches] == [True, False]
+
+
+def _screening_row(canonical_id: str = "provisional-canonical:test") -> dict[str, Any]:
+    return {
+        "canonical_id": canonical_id,
+        "representative_record": {
+            "title": "Interactive life-science network analysis",
+            "abstract": (
+                "Life science network researchers use interactive visual analytics. "
+                "Algorithmic clustering assists analysts exploring relationships. "
+                "The candidate system supports review."
+            ),
+            "year": "2025",
+            "doi": "10.1000/example",
+            "source_identifier": "provider-secret-id",
+            "source_database": "ACMDigitalLibrary",
+        },
+        "occurrences": [
+            {
+                "family_code": "QF01",
+                "route": "ACM",
+                "source_database": "ACMDigitalLibrary",
+                "source_identifier": "provider-secret-id",
+            }
+        ],
+    }
+
+
+def _stage5d_payload(status: str = "YES") -> str:
+    decisions = {
+        "E1_life_science_application": (status, "Life science"),
+        "E2_relational_multiscale_relevance": (status, "network researchers"),
+        "E3_interactive_visual_analytics": (status, "interactive visual analytics"),
+        "E4_computational_assistance": (
+            status,
+            "Algorithmic clustering assists analysts",
+        ),
+        "E5_human_analytic_relationship": (status, "analysts exploring relationships"),
+        "E7_evidence_sufficiency": (status, "candidate system"),
+    }
+    payload = {
+        "criteria": {
+            key: {
+                "decision": value,
+                "certainty": "UNCERTAIN" if value == "UNCERTAIN" else "SUPPORTED",
+                "evidence": [
+                    {
+                        "quote": quote,
+                        "source_field": "abstract",
+                        "locator": "input.abstract",
+                        "claimed_start": None,
+                        "claimed_end": None,
+                    }
+                ],
+                "rationale": f"Rationale for {key}.",
+            }
+            for key, (value, quote) in decisions.items()
+        },
+        "overall_rationale": "Eligibility-only proposal.",
+    }
+    return json.dumps(payload)
+
+
+def test_stage5d_sample_is_content_route_and_jfr25_blind() -> None:
+    cohort = {
+        "artifact_hash": "a" * 64,
+        "cohort_identity_digest_sha256": "b" * 64,
+        "records": [
+            {
+                "canonical_id": f"canonical:{index:04d}",
+                "representative_record": {
+                    "title": "eligible" if index % 2 else "excluded",
+                    "abstract": "jfr25 member" if index % 3 else "other",
+                },
+                "occurrences": [
+                    {
+                        "route": "ACM" if index % 2 else "PubMed",
+                        "family_code": f"QF{index % 5 + 1:02d}",
+                    }
+                ],
+            }
+            for index in range(750)
+        ],
+    }
+    forward = provisional_validation._build_screening_sample_manifest(
+        cohort=cohort,
+        config_hash="c" * 64,
+        prompt_hash="d" * 64,
+        sample_size=250,
+    )
+    cohort["records"].reverse()
+    for row in cohort["records"]:
+        row["representative_record"]["title"] = "changed content"
+        row["representative_record"]["abstract"] = "changed content"
+        row["occurrences"] = [{"route": "changed", "family_code": "changed"}]
+    reverse = provisional_validation._build_screening_sample_manifest(
+        cohort=cohort,
+        config_hash="c" * 64,
+        prompt_hash="d" * 64,
+        sample_size=250,
+    )
+
+    assert forward["records"] == reverse["records"]
+    assert forward["actual_count"] == 250
+    assert forward["content_fields_inspected_for_selection"] == []
+    assert forward["source_or_family_inspected_for_selection"] is False
+    assert forward["jfr25_or_prior_llm_result_inspected_for_selection"] is False
+
+
+def test_stage5d_record_retries_once_and_preserves_invalid_attempt(
+    tmp_path: Path,
+) -> None:
+    provider = MockInferenceProvider(["not json", _stage5d_payload()])
+    prompt = SimpleNamespace(
+        content="frozen prompt",
+        path="prompt.md",
+        version="1.3.0",
+        content_hash="e" * 64,
+        output_schema_version="1.3.0",
+    )
+    attempts = provisional_validation._run_stage5d_record(
+        provider=provider,
+        prompt=prompt,
+        model={"name": "mock", "parameters": {}},
+        run_id="provisional-stage5d:test",
+        row=_screening_row(),
+        pilot_execution_date="2026-09-03",
+        raw_root=tmp_path,
+        retry_limit=1,
+    )
+
+    assert [item["validation_state"] for item in attempts] == ["INVALID", "VALID"]
+    assert attempts[0]["raw_response"] == "not json"
+    assert attempts[0]["failure_reason"].startswith("output validation error:")
+    assert attempts[1]["retry_of_attempt_id"] == attempts[0]["attempt_id"]
+    assert attempts[1]["proposal"]["eligibility_status"] == "UNCERTAIN"
+    assert len(list(tmp_path.glob("*.json"))) == 2
+    model_snapshot = json.dumps(provider.calls[0]["input_snapshot"], sort_keys=True)
+    assert "provider-secret-id" not in model_snapshot
+    assert "ACMDigitalLibrary" not in model_snapshot
+    assert "QF01" not in model_snapshot
+
+
+def test_human_validation_sample_is_quota_balanced_and_manifest_only_unblinds() -> None:
+    proposals = []
+    records = {}
+    specifications = [("ELIGIBLE", 13), ("EXCLUDED", 13), ("UNCERTAIN", 14)]
+    for status, count in specifications:
+        for index in range(count):
+            canonical_id = f"{status}:{index:02d}"
+            records[canonical_id] = {
+                "representative_record": {
+                    "abstract": "" if status == "UNCERTAIN" and index % 2 else "abstract"
+                }
+            }
+            proposals.append(
+                {
+                    "canonical_id": canonical_id,
+                    "proposal": {
+                        "eligibility_status": status,
+                        "primary_exclusion_reason": (
+                            f"EX_REASON_{index % 3}" if status == "EXCLUDED" else None
+                        ),
+                        "criteria": {
+                            "E1_life_science_application": {
+                                "decision": "UNCERTAIN" if status == "UNCERTAIN" else "YES"
+                            }
+                        },
+                    },
+                }
+            )
+    selected, manifest = provisional_validation._build_human_validation_sample(
+        proposals=proposals,
+        records_by_id=records,
+        quotas={"ELIGIBLE": 13, "EXCLUDED": 13, "UNCERTAIN": 14},
+        salt="fixed",
+    )
+
+    assert len(selected) == 40
+    assert manifest["final_status_counts"] == {
+        "ELIGIBLE": 13,
+        "EXCLUDED": 13,
+        "UNCERTAIN": 14,
+    }
+    assert manifest["terminal_invalid_responses_included"] is False
+    assert manifest["blinded_csv_exposes_model_proposal"] is False

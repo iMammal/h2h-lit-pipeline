@@ -4,16 +4,20 @@ from __future__ import annotations
 
 import argparse
 import base64
+import csv
 import hashlib
+import io
 import json
 import re
 import time
 import xml.etree.ElementTree as ET
-from collections.abc import Callable
+from collections import Counter, defaultdict
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from itertools import combinations
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 from h2h_lit.acm_field_execution import load_acm_final_reconciliation_manifest
@@ -50,6 +54,9 @@ EXPECTED_AUTHORIZATION_FLAGS = {
 }
 PUBMED_EXECUTION_ARTIFACT_CLASS = "PROVISIONAL_PUBMED_EXECUTION_ONLY"
 OFFLINE_STAGE_ARTIFACT_CLASS = "PROVISIONAL_ACM_PUBMED_LOCAL_VALIDATION_ONLY"
+SCREENING_ARTIFACT_CLASS = "PROVISIONAL_VALIDATION_ONLY"
+SCREENING_SAMPLE_CLASS = "PROVISIONAL_STAGE5D_INFERENCE_SAMPLE"
+SCREENING_RUN_CLASS = "PROVISIONAL_STAGE5D_ELIGIBILITY_ONLY"
 PUBMED_SEARCH_ENDPOINT = PUBMED_EUTILS + "esearch.fcgi"
 PUBMED_FETCH_ENDPOINT = PUBMED_EUTILS + "efetch.fcgi"
 
@@ -2050,6 +2057,1049 @@ def execute_offline_validation_stage(
     return summary, summary_path
 
 
+def _screening_classification() -> dict[str, Any]:
+    return {
+        "purpose": "PROVISIONAL_NONPRODUCTION_VALIDATION",
+        "artifact_state": SCREENING_ARTIFACT_CLASS,
+        "production_import_allowed": False,
+        "production_completion_claimed": False,
+        "authoritative_screening_or_adjudication": False,
+        "retrieval_cutoff": None,
+        "production_retrieval_wave_instantiated": False,
+        "disposition": "DISCARD_ONLY",
+    }
+
+
+def _verify_offline_stage_inputs(
+    *, root: Path, config_path: Path
+) -> tuple[dict[str, Any], Path, dict[str, Any], dict[str, Any]]:
+    """Revalidate the 750 cohort and every artifact bound by its upstream summary."""
+
+    config = load_validation_config(config_path)
+    build_preflight(root=root, config_path=config_path, verify_acm_artifacts=True)
+    validate_pubmed_execution_artifacts(root=root, config_path=config_path)
+    output = resolve_output_namespace(root, config["output_namespace"])
+    summary_path = output / "offline/offline_stage_summary.json"
+    summary_raw = summary_path.read_bytes()
+    summary = json.loads(summary_raw)
+    _validate_embedded_hash(summary, "artifact_hash")
+    if summary.get("artifact_class") != OFFLINE_STAGE_ARTIFACT_CLASS:
+        raise ProvisionalValidationError("unexpected provisional offline-stage artifact")
+    if summary.get("classification") != {
+        "purpose": "PROVISIONAL_NONPRODUCTION_VALIDATION",
+        "production_import_allowed": False,
+        "production_completion_claimed": False,
+        "retrieval_cutoff": None,
+        "production_retrieval_wave_instantiated": False,
+        "disposition": "DISCARD_ONLY",
+    }:
+        raise ProvisionalValidationError("offline stage no longer has discard-only classification")
+    if any(summary.get("prohibited_effects", {}).get(key) not in (False, 0, None) for key in summary.get("prohibited_effects", {})):
+        raise ProvisionalValidationError("offline stage claims a prohibited production effect")
+
+    verified: dict[str, Any] = {}
+    for name, binding in summary.get("artifacts", {}).items():
+        payload = _verify_json_artifact(output, binding)
+        _validate_embedded_hash(payload, "artifact_hash")
+        verified[name] = payload
+    if set(verified) != {
+        "acm_import_accounting",
+        "canonicalization",
+        "validation_cohort",
+        "jfr25_rediscovery",
+    }:
+        raise ProvisionalValidationError("offline-stage artifact bindings are incomplete")
+
+    cohort = verified["validation_cohort"]
+    records = cohort.get("records", [])
+    identities = [str(item.get("canonical_id", "")) for item in records]
+    if (
+        cohort.get("artifact_class") != "PROVISIONAL_DETERMINISTIC_VALIDATION_COHORT"
+        or cohort.get("actual_count") != 750
+        or len(identities) != 750
+        or len(set(identities)) != 750
+    ):
+        raise ProvisionalValidationError("the provisional validation cohort is not exactly 750 unique records")
+    if cohort.get("cohort_identity_digest_sha256") != _sha256_bytes(
+        "\n".join(sorted(identities)).encode()
+    ):
+        raise ProvisionalValidationError("the provisional cohort identity digest changed")
+    canonical_ids = {
+        item["canonical_id"] for item in verified["canonicalization"]["canonical_records"]
+    }
+    if not set(identities) <= canonical_ids:
+        raise ProvisionalValidationError("cohort identities are absent from canonicalization")
+    return (
+        config,
+        output,
+        {
+            "relative_path": summary_path.relative_to(output).as_posix(),
+            "byte_size": len(summary_raw),
+            "raw_sha256": _sha256_bytes(summary_raw),
+            "artifact_hash": summary["artifact_hash"],
+        },
+        cohort,
+    )
+
+
+def _stage5d_model_configuration(
+    *, root: Path, config: dict[str, Any]
+) -> tuple[dict[str, Any], Any, dict[str, Any]]:
+    from h2h_lit import inference as inference_core
+    from h2h_lit.pilot import load_pilot_config
+    from h2h_lit.pilot5d import load_pilot5d_config
+    from h2h_lit.review import ScreeningStage
+
+    stage5d_path, stage5d_binding = _bound_file(root, config["bindings"]["stage5d_config"])
+    prompt_path, prompt_binding = _bound_file(root, config["bindings"]["stage5d_prompt"])
+    stage5d = load_pilot5d_config(stage5d_path)
+    if Path(stage5d["prompt_path"]).as_posix() != config["bindings"]["stage5d_prompt"]["path"]:
+        raise ProvisionalValidationError("Stage 5D prompt binding changed")
+    prompt = inference_core.load_prompt_artifact(
+        prompt_path,
+        stage=ScreeningStage.TITLE_ABSTRACT,
+        version=stage5d["prompt_version"],
+        output_schema_version=stage5d["output_schema_version"],
+    )
+    if prompt.content_hash != prompt_binding["raw_sha256"]:
+        raise ProvisionalValidationError("Stage 5D prompt content hash changed")
+    base = load_pilot_config(root / stage5d["selection_config"])
+    model = json.loads(json.dumps(base["model"]))
+    model["parameters"].update(stage5d["model_parameter_overrides"])
+    if model["parameters"].get("response_schema_version") != config["screening"][
+        "output_schema_version"
+    ]:
+        raise ProvisionalValidationError("Stage 5D schema binding changed")
+    retry_limit = int(base["retry_limit_per_record"])
+    if retry_limit != 1:
+        raise ProvisionalValidationError("the frozen Stage 5D one-retry policy changed")
+    return model, prompt, {
+        "stage5d_config": stage5d_binding,
+        "stage5d_prompt": prompt_binding,
+        "retry_limit_per_record": retry_limit,
+        "retry_conditions": list(stage5d["execution_controls"]["retry_conditions"]),
+        "execution_controls": dict(stage5d["execution_controls"]),
+    }
+
+
+def _build_screening_sample_manifest(
+    *, cohort: dict[str, Any], config_hash: str, prompt_hash: str, sample_size: int
+) -> dict[str, Any]:
+    identities = [item["canonical_id"] for item in cohort["records"]]
+    salt = _sha256_bytes(
+        f"{config_hash}\x1f{cohort['artifact_hash']}\x1f{prompt_hash}\x1fstage5d".encode()
+    )
+    selected = deterministic_identity_sample(
+        identities, sample_size=sample_size, salt=salt
+    )
+    if len(selected) != sample_size:
+        raise ProvisionalValidationError("Stage 5D sample did not reach exactly 250 records")
+    rows = [
+        {
+            "selection_rank": rank,
+            "canonical_id": canonical_id,
+            "selection_sha256": _sha256_bytes(
+                f"{salt}\x1f{canonical_id}".encode()
+            ),
+        }
+        for rank, canonical_id in enumerate(selected, start=1)
+    ]
+    manifest: dict[str, Any] = {
+        "schema_version": "1.0.0",
+        "artifact_class": SCREENING_SAMPLE_CLASS,
+        "classification": _screening_classification(),
+        "cohort_artifact_hash": cohort["artifact_hash"],
+        "cohort_identity_digest_sha256": cohort["cohort_identity_digest_sha256"],
+        "selection_rule": "lowest_sha256_of_frozen_config_cohort_prompt_stage_and_canonical_identity",
+        "selection_inputs": [
+            "provisional_config_raw_sha256",
+            "cohort_artifact_hash",
+            "stage5d_prompt_hash",
+            "literal_stage5d_salt",
+            "canonical_id",
+        ],
+        "selection_salt_sha256": salt,
+        "content_fields_inspected_for_selection": [],
+        "source_or_family_inspected_for_selection": False,
+        "jfr25_or_prior_llm_result_inspected_for_selection": False,
+        "target_count": sample_size,
+        "actual_count": len(rows),
+        "records": rows,
+        "ordered_identity_digest_sha256": _sha256_bytes(
+            "\n".join(selected).encode()
+        ),
+    }
+    manifest["artifact_hash"] = _sha256_json(manifest)
+    return manifest
+
+
+def build_screening_preflight(
+    *,
+    root: str | Path,
+    config_path: str | Path,
+    generated_at_utc: str | None = None,
+) -> tuple[dict[str, Any], dict[str, Any], Path]:
+    """Prepare and fully verify a no-call Stage 5D sample and exposure report."""
+
+    root_path = Path(root).resolve()
+    config_file = Path(config_path)
+    if not config_file.is_absolute():
+        config_file = root_path / config_file
+    config, output, offline_binding, cohort = _verify_offline_stage_inputs(
+        root=root_path, config_path=config_file
+    )
+    model, prompt, stage5d = _stage5d_model_configuration(root=root_path, config=config)
+    config_raw = config_file.read_bytes()
+    config_hash = _sha256_bytes(config_raw)
+    sample = _build_screening_sample_manifest(
+        cohort=cohort,
+        config_hash=config_hash,
+        prompt_hash=prompt.content_hash,
+        sample_size=int(config["screening"]["proposal_sample_size"]),
+    )
+    by_id = {item["canonical_id"]: item for item in cohort["records"]}
+    from h2h_lit.models import LiteratureRecord
+    from h2h_lit.pilot5d import pilot5d_inference_input_for
+
+    input_characters = 0
+    missing_abstracts = 0
+    for selected in sample["records"]:
+        row = by_id[selected["canonical_id"]]
+        record_data = row["representative_record"]
+        record = SimpleNamespace(
+            canonical_id=row["canonical_id"],
+            record=LiteratureRecord(
+                title=str(record_data.get("title") or ""),
+                abstract=str(record_data.get("abstract") or ""),
+                year=record_data.get("year"),
+                doi=record_data.get("doi"),
+                source_identifier=record_data.get("source_identifier"),
+                original_metadata={},
+            ),
+        )
+        inference_input = pilot5d_inference_input_for(
+            record,
+            pilot_execution_date=(generated_at_utc or datetime.now(UTC).isoformat())[:10],
+        )
+        inference_input.metadata.pop("doi", None)
+        inference_input.metadata.pop("source_identifier", None)
+        input_characters += len(prompt.content) + len(
+            _canonical_json(inference_input.to_snapshot())
+        )
+        missing_abstracts += not bool(record.record.abstract.strip())
+
+    minimum_calls = len(sample["records"])
+    maximum_calls = minimum_calls * (stage5d["retry_limit_per_record"] + 1)
+    approximate_first_input_tokens = (input_characters + 3) // 4
+    approximate_max_input_tokens = approximate_first_input_tokens * 2
+    output_token_maximum = maximum_calls * int(model["parameters"]["max_output_tokens"])
+    prices = model["pricing_usd_per_million_tokens"]
+    cost_upper = (
+        approximate_max_input_tokens * prices["input"]
+        + output_token_maximum * prices["output"]
+    ) / 1_000_000
+    timestamp = generated_at_utc or datetime.now(UTC).isoformat().replace("+00:00", "Z")
+    preflight: dict[str, Any] = {
+        "schema_version": "1.0.0",
+        "artifact_class": "PROVISIONAL_STAGE5D_SCREENING_PREFLIGHT",
+        "classification": _screening_classification(),
+        "generated_at_utc": timestamp,
+        "config_binding": {
+            "path": config_file.relative_to(root_path).as_posix(),
+            "byte_size": len(config_raw),
+            "raw_sha256": config_hash,
+        },
+        "offline_stage_binding": offline_binding,
+        "cohort_binding": {
+            "relative_path": "offline/validation_cohort_750.json",
+            "artifact_hash": cohort["artifact_hash"],
+            "identity_digest_sha256": cohort["cohort_identity_digest_sha256"],
+            "record_count": len(cohort["records"]),
+        },
+        "sample": {
+            "record_count": len(sample["records"]),
+            "artifact_hash": sample["artifact_hash"],
+            "ordered_identity_digest_sha256": sample[
+                "ordered_identity_digest_sha256"
+            ],
+            "missing_abstract_count": missing_abstracts,
+        },
+        "stage5d": stage5d,
+        "model": model,
+        "prompt": {
+            "path": prompt.path,
+            "version": prompt.version,
+            "output_schema_version": prompt.output_schema_version,
+            "sha256": prompt.content_hash,
+        },
+        "execution_exposure": {
+            "expected_attempts_without_retries": minimum_calls,
+            "maximum_attempts_with_one_retry_each": maximum_calls,
+            "approximate_first_attempt_input_tokens": approximate_first_input_tokens,
+            "approximate_maximum_input_tokens": approximate_max_input_tokens,
+            "hard_maximum_output_tokens": output_token_maximum,
+            "estimated_cost_upper_bound_usd": round(cost_upper, 6),
+            "cost_assumptions": "four characters per input token, no cached-input discount, every record consumes its one retry and full output-token cap",
+            "serial_runtime_planning_range_minutes": [25, 75],
+            "runtime_assumption": "approximately 6-18 seconds per successful provider call; actual retries and provider latency govern",
+        },
+        "authorization": {
+            "required_flag": config["screening"]["authorization_flag"],
+            "model_calls_made": 0,
+        },
+        "safeguards": {
+            "retrieval_requests": 0,
+            "production_retrieval_wave": False,
+            "production_review_dataset": False,
+            "authoritative_screening_or_adjudication": False,
+            "production_deduplication_or_identification_closure": False,
+            "retrieval_cutoff": None,
+            "prisma": False,
+            "corpus_membership": False,
+            "jfr25_ebk25_fp19_occurrences": 0,
+            "full_text_screening": False,
+        },
+    }
+    preflight["artifact_hash"] = _sha256_json(preflight)
+    return preflight, sample, output
+
+
+def write_screening_preflight(
+    *, preflight: dict[str, Any], sample: dict[str, Any], output: Path
+) -> tuple[Path, Path]:
+    screening_root = output / "screening"
+    sample_path = screening_root / "inference_sample_manifest.json"
+    preflight_path = screening_root / "preflight.json"
+    if sample_path.exists() or preflight_path.exists():
+        raise FileExistsError("Stage 5D screening preflight already exists")
+    screening_root.mkdir(parents=True, exist_ok=True)
+    sample_artifact = _write_json(sample_path, sample)
+    sample_artifact["relative_path"] = sample_path.relative_to(output).as_posix()
+    preflight["sample_artifact"] = sample_artifact
+    preflight.pop("artifact_hash", None)
+    preflight["artifact_hash"] = _sha256_json(preflight)
+    _write_json(preflight_path, preflight)
+    return preflight_path, sample_path
+
+
+def _stage5d_input_for_cohort_record(
+    *, row: dict[str, Any], pilot_execution_date: str
+) -> Any:
+    from h2h_lit.models import LiteratureRecord
+    from h2h_lit.pilot5d import pilot5d_inference_input_for
+
+    data = row["representative_record"]
+    record = SimpleNamespace(
+        canonical_id=row["canonical_id"],
+        record=LiteratureRecord(
+            title=str(data.get("title") or ""),
+            abstract=str(data.get("abstract") or ""),
+            authors=list(data.get("authors") or []),
+            year=data.get("year"),
+            doi=data.get("doi"),
+            source_identifier=data.get("source_identifier"),
+            journal=data.get("journal"),
+            original_metadata={},
+        ),
+    )
+    inference_input = pilot5d_inference_input_for(
+        record, pilot_execution_date=pilot_execution_date
+    )
+    inference_input.metadata.pop("doi", None)
+    inference_input.metadata.pop("source_identifier", None)
+    inference_input.metadata.update(
+        {
+            "source_identity_exposed_to_model": False,
+            "query_family_or_route_exposed_to_model": False,
+            "provisional_validation_only": True,
+        }
+    )
+    return inference_input
+
+
+def _serialize_stage5d_proposal(parsed: Any) -> dict[str, Any]:
+    from h2h_lit.screening import derive_eligibility_status
+
+    criteria: dict[str, Any] = {}
+    for criterion, value in parsed.criterion_values.items():
+        criteria[criterion.value] = {
+            "decision": value.value,
+            "rationale": parsed.criterion_rationales[criterion],
+            "evidence": [
+                {
+                    "start": span.start,
+                    "end": span.end,
+                    "quote": span.quote,
+                    "locator": span.locator,
+                    "source_field": span.source_field,
+                    "claimed_start": span.claimed_start,
+                    "claimed_end": span.claimed_end,
+                    "resolution_method": span.resolution_method,
+                }
+                for span in parsed.criterion_evidence[criterion]
+            ],
+        }
+    status = derive_eligibility_status(parsed.criterion_values)
+    return {
+        "eligibility_status": status.value,
+        "reporting_label": {
+            "ELIGIBLE": "INCLUDE",
+            "EXCLUDED": "EXCLUDE",
+            "UNCERTAIN": "UNCERTAIN",
+        }[status.value],
+        "criteria": criteria,
+        "primary_exclusion_reason": (
+            parsed.primary_exclusion_reason.value
+            if parsed.primary_exclusion_reason is not None
+            else None
+        ),
+        "secondary_exclusion_reasons": [
+            item.value for item in parsed.secondary_exclusion_reasons
+        ],
+        "overall_rationale": parsed.overall_rationale,
+        "audit_flags": list(parsed.audit_flags),
+        "requires_full_text_escalation": status.value == "UNCERTAIN",
+    }
+
+
+def _load_attempt_artifact(path: Path) -> dict[str, Any]:
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    _validate_embedded_hash(payload, "artifact_hash")
+    if payload.get("artifact_class") != "PROVISIONAL_STAGE5D_MODEL_ATTEMPT":
+        raise ProvisionalValidationError("unexpected provisional model-attempt artifact")
+    if payload.get("classification") != _screening_classification():
+        raise ProvisionalValidationError("model attempt is not discard-only")
+    return payload
+
+
+def _run_stage5d_record(
+    *,
+    provider: Any,
+    prompt: Any,
+    model: dict[str, Any],
+    run_id: str,
+    row: dict[str, Any],
+    pilot_execution_date: str,
+    raw_root: Path,
+    retry_limit: int = 1,
+) -> list[dict[str, Any]]:
+    """Run or resume one record using the frozen Stage 5D parser and retry rule."""
+
+    from h2h_lit.pilot5d import parse_pilot5d_proposal
+
+    inference_input = _stage5d_input_for_cohort_record(
+        row=row, pilot_execution_date=pilot_execution_date
+    )
+    snapshot = inference_input.to_snapshot()
+    input_hash = _sha256_json(snapshot)
+    request_id = "provisional-inference-request:" + _sha256_bytes(
+        f"{run_id}\x1f{input_hash}".encode()
+    )[:24]
+    request_slug = request_id.rsplit(":", 1)[-1]
+    attempts: list[dict[str, Any]] = []
+    for attempt_number in range(1, retry_limit + 2):
+        path = raw_root / f"{request_slug}_attempt_{attempt_number:03d}.json"
+        if path.exists():
+            attempt = _load_attempt_artifact(path)
+            if (
+                attempt.get("request_id") != request_id
+                or attempt.get("attempt_number") != attempt_number
+                or attempt.get("input_hash") != input_hash
+                or attempt.get("run_id") != run_id
+            ):
+                raise ProvisionalValidationError("persisted model attempt binding changed")
+            attempts.append(attempt)
+        else:
+            started_at = datetime.now(UTC).isoformat().replace("+00:00", "Z")
+            started_clock = time.monotonic()
+            raw_response = ""
+            parsed_response: dict[str, Any] | None = None
+            proposal: dict[str, Any] | None = None
+            failure_reason: str | None = None
+            provider_metadata: dict[str, Any] = {}
+            try:
+                raw_response = provider.generate(
+                    model=model["name"],
+                    prompt=prompt.content,
+                    input_snapshot=snapshot,
+                    parameters=dict(model["parameters"]),
+                    request_id=request_id,
+                    attempt_number=attempt_number,
+                )
+                metadata_for = getattr(provider, "metadata_for", None)
+                if callable(metadata_for):
+                    provider_metadata = metadata_for(request_id, attempt_number)
+                loaded = json.loads(raw_response)
+                if not isinstance(loaded, dict):
+                    raise TypeError("top-level response must be a JSON object")
+                parsed_response = loaded
+                proposal = _serialize_stage5d_proposal(
+                    parse_pilot5d_proposal(loaded, inference_input)
+                )
+            except Exception as exc:  # noqa: BLE001 - failures are evidence
+                metadata_for = getattr(provider, "metadata_for", None)
+                if callable(metadata_for):
+                    provider_metadata = metadata_for(request_id, attempt_number)
+                prefix = (
+                    "provider error"
+                    if not raw_response
+                    else "output validation error"
+                )
+                failure_reason = f"{prefix}: {type(exc).__name__}: {exc}"
+            ended_at = datetime.now(UTC).isoformat().replace("+00:00", "Z")
+            attempt = {
+                "schema_version": "1.0.0",
+                "artifact_class": "PROVISIONAL_STAGE5D_MODEL_ATTEMPT",
+                "classification": _screening_classification(),
+                "run_id": run_id,
+                "request_id": request_id,
+                "attempt_id": f"{request_id}:attempt:{attempt_number}",
+                "attempt_number": attempt_number,
+                "retry_of_attempt_id": (
+                    attempts[-1]["attempt_id"] if attempts else None
+                ),
+                "canonical_id": row["canonical_id"],
+                "started_at_utc": started_at,
+                "ended_at_utc": ended_at,
+                "wall_clock_seconds": round(time.monotonic() - started_clock, 6),
+                "input_hash": input_hash,
+                "input_snapshot": snapshot,
+                "model_visible_source_identity": False,
+                "audit_source_provenance": {
+                    "occurrences": row["occurrences"],
+                    "representative_source_database": row["representative_record"].get(
+                        "source_database"
+                    ),
+                },
+                "prompt": {
+                    "path": prompt.path,
+                    "version": prompt.version,
+                    "sha256": prompt.content_hash,
+                    "output_schema_version": prompt.output_schema_version,
+                },
+                "model": model,
+                "raw_response": raw_response,
+                "parsed_response": parsed_response,
+                "proposal": proposal,
+                "validation_state": "VALID" if proposal is not None else "INVALID",
+                "failure_reason": failure_reason,
+                "provider_response": provider_metadata,
+            }
+            attempt["artifact_hash"] = _sha256_json(attempt)
+            _write_json(path, attempt)
+            attempts.append(attempt)
+        if attempts[-1]["validation_state"] == "VALID":
+            break
+    return attempts
+
+
+def _ranked_ids(ids: Iterable[str], *, salt: str) -> list[str]:
+    return sorted(
+        set(ids),
+        key=lambda value: (_sha256_bytes(f"{salt}\x1f{value}".encode()), value),
+    )
+
+
+def _round_robin_records(
+    records: list[dict[str, Any]], *, quota: int, salt: str, bucket: Callable[[dict[str, Any]], str]
+) -> list[dict[str, Any]]:
+    buckets: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for item in records:
+        buckets[bucket(item)].append(item)
+    for name, items in buckets.items():
+        items.sort(
+            key=lambda item: (
+                _sha256_bytes(f"{salt}\x1f{name}\x1f{item['canonical_id']}".encode()),
+                item["canonical_id"],
+            )
+        )
+    chosen: list[dict[str, Any]] = []
+    names = sorted(buckets)
+    while len(chosen) < quota and any(buckets.values()):
+        for name in names:
+            if buckets[name] and len(chosen) < quota:
+                chosen.append(buckets[name].pop(0))
+    return chosen
+
+
+def _build_human_validation_sample(
+    *,
+    proposals: list[dict[str, Any]],
+    records_by_id: dict[str, dict[str, Any]],
+    quotas: dict[str, int],
+    salt: str,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    by_status: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for item in proposals:
+        by_status[item["proposal"]["eligibility_status"]].append(item)
+    selected: list[dict[str, Any]] = []
+    initial_counts: dict[str, int] = {}
+    for status in ("ELIGIBLE", "EXCLUDED", "UNCERTAIN"):
+        available = by_status.get(status, [])
+        quota = int(quotas[status])
+        if status == "EXCLUDED":
+            chosen = _round_robin_records(
+                available,
+                quota=min(quota, len(available)),
+                salt=f"{salt}\x1fEXCLUDED",
+                bucket=lambda item: str(
+                    item["proposal"].get("primary_exclusion_reason") or "NO_REASON"
+                ),
+            )
+        elif status == "UNCERTAIN":
+            def uncertain_bucket(item: dict[str, Any]) -> str:
+                criteria = sorted(
+                    key.split("_", 1)[0]
+                    for key, value in item["proposal"]["criteria"].items()
+                    if value["decision"] == "UNCERTAIN"
+                )
+                missing = not bool(
+                    records_by_id[item["canonical_id"]]["representative_record"]
+                    .get("abstract", "")
+                    .strip()
+                )
+                return f"{'|'.join(criteria) or 'NONE'}|missing_abstract={missing}"
+
+            chosen = _round_robin_records(
+                available,
+                quota=min(quota, len(available)),
+                salt=f"{salt}\x1fUNCERTAIN",
+                bucket=uncertain_bucket,
+            )
+        else:
+            chosen_ids = _ranked_ids(
+                (item["canonical_id"] for item in available),
+                salt=f"{salt}\x1fELIGIBLE",
+            )[:quota]
+            indexed = {item["canonical_id"]: item for item in available}
+            chosen = [indexed[item] for item in chosen_ids]
+        selected.extend(chosen)
+        initial_counts[status] = len(chosen)
+
+    target = sum(quotas.values())
+    selected_ids = {item["canonical_id"] for item in selected}
+    fill_pool = [
+        item for item in proposals if item["canonical_id"] not in selected_ids
+    ]
+    fill_ids = _ranked_ids(
+        (item["canonical_id"] for item in fill_pool), salt=f"{salt}\x1fredistribution"
+    )[: max(0, target - len(selected))]
+    fill_index = {item["canonical_id"]: item for item in fill_pool}
+    selected.extend(fill_index[item] for item in fill_ids)
+    selected.sort(
+        key=lambda item: (
+            _sha256_bytes(f"{salt}\x1ffinal\x1f{item['canonical_id']}".encode()),
+            item["canonical_id"],
+        )
+    )
+    final_counts = Counter(item["proposal"]["eligibility_status"] for item in selected)
+    manifest = {
+        "target_count": target,
+        "actual_count": len(selected),
+        "requested_status_quotas": quotas,
+        "initial_quota_counts": initial_counts,
+        "redistributed_count": len(fill_ids),
+        "final_status_counts": dict(sorted(final_counts.items())),
+        "excluded_selection": "round_robin_primary_exclusion_reason",
+        "uncertain_selection": "round_robin_uncertain_criteria_and_missing_abstract_state",
+        "terminal_invalid_responses_included": False,
+        "blinded_csv_exposes_model_proposal": False,
+        "ordered_identity_digest_sha256": _sha256_bytes(
+            "\n".join(item["canonical_id"] for item in selected).encode()
+        ),
+    }
+    return selected, manifest
+
+
+def _screening_breakdown(
+    *, finals: list[dict[str, Any]], records_by_id: dict[str, dict[str, Any]]
+) -> dict[str, Any]:
+    families: dict[str, Counter[str]] = defaultdict(Counter)
+    routes: dict[str, Counter[str]] = defaultdict(Counter)
+    for item in finals:
+        label = (
+            item["proposal"]["eligibility_status"]
+            if item.get("proposal")
+            else "INVALID"
+        )
+        row = records_by_id[item["canonical_id"]]
+        for family in sorted({occurrence["family_code"] for occurrence in row["occurrences"]}):
+            families[family][label] += 1
+        for route in sorted({occurrence["route"] for occurrence in row["occurrences"]}):
+            routes[route][label] += 1
+    return {
+        "query_family_nonexclusive": {
+            key: dict(sorted(value.items())) for key, value in sorted(families.items())
+        },
+        "route_nonexclusive": {
+            key: dict(sorted(value.items())) for key, value in sorted(routes.items())
+        },
+    }
+
+
+def execute_provisional_screening_stage(
+    *, root: str | Path, config_path: str | Path, provider: Any
+) -> tuple[dict[str, Any], Path]:
+    """Run only isolated eligibility proposals against the persisted 250 sample."""
+
+    root_path = Path(root).resolve()
+    config_file = Path(config_path)
+    if not config_file.is_absolute():
+        config_file = root_path / config_file
+    expected_preflight, expected_sample, output = build_screening_preflight(
+        root=root_path, config_path=config_file
+    )
+    screening_root = output / "screening"
+    preflight_path = screening_root / "preflight.json"
+    sample_path = screening_root / "inference_sample_manifest.json"
+    if not preflight_path.is_file() or not sample_path.is_file():
+        raise ProvisionalValidationError("screening preflight must be persisted before inference")
+    preflight_raw = preflight_path.read_bytes()
+    sample_raw = sample_path.read_bytes()
+    preflight = json.loads(preflight_raw)
+    sample = json.loads(sample_raw)
+    _validate_embedded_hash(preflight, "artifact_hash")
+    _validate_embedded_hash(sample, "artifact_hash")
+    sample_binding = preflight.get("sample_artifact", {})
+    if (
+        sample_binding.get("byte_size") != len(sample_raw)
+        or sample_binding.get("sha256") != _sha256_bytes(sample_raw)
+        or sample.get("artifact_hash") != expected_sample.get("artifact_hash")
+        or sample.get("ordered_identity_digest_sha256")
+        != expected_sample.get("ordered_identity_digest_sha256")
+    ):
+        raise ProvisionalValidationError("persisted Stage 5D sample binding changed")
+    for field in ("config_binding", "offline_stage_binding", "cohort_binding", "model", "prompt", "stage5d"):
+        if preflight.get(field) != expected_preflight.get(field):
+            raise ProvisionalValidationError(f"persisted screening preflight changed: {field}")
+
+    config, _, _, cohort = _verify_offline_stage_inputs(
+        root=root_path, config_path=config_file
+    )
+    model, prompt, stage5d = _stage5d_model_configuration(root=root_path, config=config)
+    records_by_id = {item["canonical_id"]: item for item in cohort["records"]}
+    selected = [records_by_id[item["canonical_id"]] for item in sample["records"]]
+    run_id = "provisional-stage5d:" + _sha256_bytes(
+        f"{sample['artifact_hash']}\x1f{prompt.content_hash}\x1f{model['name']}\x1f{_sha256_json(model['parameters'])}".encode()
+    )[:24]
+    raw_root = screening_root / "raw_model_responses"
+    raw_root.mkdir(parents=True, exist_ok=True)
+    started_clock = time.monotonic()
+    run_started_at = datetime.now(UTC).isoformat().replace("+00:00", "Z")
+    pilot_date = run_started_at[:10]
+    all_attempts: list[dict[str, Any]] = []
+    finals: list[dict[str, Any]] = []
+    for row in selected:
+        attempts = _run_stage5d_record(
+            provider=provider,
+            prompt=prompt,
+            model=model,
+            run_id=run_id,
+            row=row,
+            pilot_execution_date=pilot_date,
+            raw_root=raw_root,
+            retry_limit=stage5d["retry_limit_per_record"],
+        )
+        all_attempts.extend(attempts)
+        finals.append(attempts[-1])
+    run_ended_at = datetime.now(UTC).isoformat().replace("+00:00", "Z")
+    wall_seconds = round(time.monotonic() - started_clock, 6)
+
+    valid_finals = [item for item in finals if item["validation_state"] == "VALID"]
+    invalid_finals = [item for item in finals if item["validation_state"] != "VALID"]
+    proposals = [
+        {
+            "canonical_id": item["canonical_id"],
+            "request_id": item["request_id"],
+            "final_attempt_id": item["attempt_id"],
+            "attempt_count": item["attempt_number"],
+            "proposal": item["proposal"],
+            "audit_source_provenance": item["audit_source_provenance"],
+        }
+        for item in valid_finals
+    ]
+    status_counts = Counter(item["proposal"]["eligibility_status"] for item in proposals)
+    primary_reasons = Counter(
+        item["proposal"]["primary_exclusion_reason"]
+        for item in proposals
+        if item["proposal"]["primary_exclusion_reason"]
+    )
+    all_reasons: Counter[str] = Counter()
+    uncertain_criteria: Counter[str] = Counter()
+    for item in proposals:
+        proposal = item["proposal"]
+        for reason in [
+            proposal["primary_exclusion_reason"],
+            *proposal["secondary_exclusion_reasons"],
+        ]:
+            if reason:
+                all_reasons[reason] += 1
+        for criterion, value in proposal["criteria"].items():
+            if value["decision"] == "UNCERTAIN":
+                uncertain_criteria[criterion] += 1
+    evidence_failures = [
+        {
+            "attempt_id": item["attempt_id"],
+            "canonical_id": item["canonical_id"],
+            "failure_reason": item["failure_reason"],
+        }
+        for item in all_attempts
+        if item.get("failure_reason")
+        and any(
+            token in item["failure_reason"].casefold()
+            for token in ("evidence", "quote", "locator", "substring", "rationale")
+        )
+    ]
+    input_tokens = output_tokens = cached_tokens = 0
+    for item in all_attempts:
+        usage = item.get("provider_response", {}).get("provider_usage") or {}
+        input_tokens += int(usage.get("input_tokens", 0) or 0)
+        output_tokens += int(usage.get("output_tokens", 0) or 0)
+        cached_tokens += int(
+            (usage.get("input_tokens_details") or {}).get("cached_tokens", 0) or 0
+        )
+    prices = model["pricing_usd_per_million_tokens"]
+    cost = (
+        (input_tokens - cached_tokens) * prices["input"]
+        + cached_tokens * prices["cached_input"]
+        + output_tokens * prices["output"]
+    ) / 1_000_000
+    attempt_bindings = []
+    for item in all_attempts:
+        slug = item["request_id"].rsplit(":", 1)[-1]
+        path = raw_root / f"{slug}_attempt_{item['attempt_number']:03d}.json"
+        raw = path.read_bytes()
+        attempt_bindings.append(
+            {
+                "attempt_id": item["attempt_id"],
+                "relative_path": path.relative_to(output).as_posix(),
+                "byte_size": len(raw),
+                "sha256": _sha256_bytes(raw),
+                "validation_state": item["validation_state"],
+            }
+        )
+
+    base = {
+        "schema_version": "1.0.0",
+        "classification": _screening_classification(),
+        "run_id": run_id,
+        "sample_artifact_hash": sample["artifact_hash"],
+        "prompt": preflight["prompt"],
+        "model": model,
+    }
+    attempt_index = {
+        **base,
+        "artifact_class": "PROVISIONAL_STAGE5D_MODEL_ATTEMPT_INDEX",
+        "attempt_count": len(all_attempts),
+        "attempt_artifacts": attempt_bindings,
+    }
+    attempt_index["artifact_hash"] = _sha256_json(attempt_index)
+    attempts_artifact = _write_json(screening_root / "model_attempts.json", attempt_index)
+
+    proposal_payload = {
+        **base,
+        "artifact_class": "PROVISIONAL_STAGE5D_VALIDATED_PROPOSALS",
+        "valid_final_proposal_count": len(proposals),
+        "proposals": proposals,
+    }
+    proposal_payload["artifact_hash"] = _sha256_json(proposal_payload)
+    proposals_artifact = _write_json(
+        screening_root / "validated_proposals.json", proposal_payload
+    )
+
+    invalid_queue = {
+        **base,
+        "artifact_class": "PROVISIONAL_STAGE5D_TERMINAL_INVALID_QUEUE",
+        "terminal_invalid_count": len(invalid_finals),
+        "records": [
+            {
+                "canonical_id": item["canonical_id"],
+                "request_id": item["request_id"],
+                "final_attempt_id": item["attempt_id"],
+                "attempt_count": item["attempt_number"],
+                "failure_reason": item["failure_reason"],
+            }
+            for item in invalid_finals
+        ],
+    }
+    invalid_queue["artifact_hash"] = _sha256_json(invalid_queue)
+    invalid_artifact = _write_json(
+        screening_root / "invalid_response_queue.json", invalid_queue
+    )
+
+    human_rows, human_detail = _build_human_validation_sample(
+        proposals=proposals,
+        records_by_id=records_by_id,
+        quotas=config["human_validation_sample"]["status_quotas"],
+        salt=_sha256_bytes(f"{sample['artifact_hash']}\x1fhuman-validation".encode()),
+    )
+    human_manifest = {
+        **base,
+        "artifact_class": "PROVISIONAL_BLINDED_HUMAN_VALIDATION_SAMPLE_MANIFEST",
+        **human_detail,
+        "records": [
+            {
+                "sample_order": index,
+                "canonical_id": item["canonical_id"],
+                "model_stratification_status": item["proposal"]["eligibility_status"],
+                "primary_exclusion_reason_for_sampling": item["proposal"].get(
+                    "primary_exclusion_reason"
+                ),
+                "uncertain_criteria_for_sampling": sorted(
+                    criterion
+                    for criterion, value in item["proposal"]["criteria"].items()
+                    if value["decision"] == "UNCERTAIN"
+                ),
+            }
+            for index, item in enumerate(human_rows, start=1)
+        ],
+        "blinding_instruction": "Do not provide this manifest to the human coder until the blinded CSV has been completed.",
+    }
+    human_manifest["artifact_hash"] = _sha256_json(human_manifest)
+    human_manifest_artifact = _write_json(
+        screening_root / "human_validation_sample_manifest.json", human_manifest
+    )
+
+    csv_buffer = io.StringIO(newline="")
+    fieldnames = [
+        "artifact_class",
+        "production_import_allowed",
+        "disposition",
+        "sample_order",
+        "canonical_id",
+        "title",
+        "abstract",
+        "publication_year",
+        "human_E1",
+        "human_E2",
+        "human_E3",
+        "human_E4",
+        "human_E5",
+        "human_E6",
+        "human_E7",
+        "human_eligibility_status",
+        "human_primary_exclusion_reason",
+        "human_notes",
+    ]
+    writer = csv.DictWriter(csv_buffer, fieldnames=fieldnames, lineterminator="\n")
+    writer.writeheader()
+    for index, item in enumerate(human_rows, start=1):
+        record = records_by_id[item["canonical_id"]]["representative_record"]
+        writer.writerow(
+            {
+                "artifact_class": SCREENING_ARTIFACT_CLASS,
+                "production_import_allowed": "false",
+                "disposition": "DISCARD_ONLY",
+                "sample_order": index,
+                "canonical_id": item["canonical_id"],
+                "title": record.get("title") or "",
+                "abstract": record.get("abstract") or "",
+                "publication_year": record.get("year") or "",
+                "human_E1": "",
+                "human_E2": "",
+                "human_E3": "",
+                "human_E4": "",
+                "human_E5": "",
+                "human_E6": "",
+                "human_E7": "",
+                "human_eligibility_status": "",
+                "human_primary_exclusion_reason": "",
+                "human_notes": "",
+            }
+        )
+    csv_raw = csv_buffer.getvalue().encode("utf-8")
+    csv_path = screening_root / "human_validation_sample.csv"
+    atomic_write(csv_path, csv_raw)
+    csv_artifact = {
+        "relative_path": csv_path.relative_to(output).as_posix(),
+        "byte_size": len(csv_raw),
+        "sha256": _sha256_bytes(csv_raw),
+        "model_proposal_status_column_present": False,
+    }
+
+    denomin = len(proposals) or 1
+    report = {
+        **base,
+        "artifact_class": SCREENING_RUN_CLASS,
+        "run_started_at_utc": run_started_at,
+        "run_ended_at_utc": run_ended_at,
+        "wall_clock_seconds": wall_seconds,
+        "selected_record_count": len(selected),
+        "total_model_attempts": len(all_attempts),
+        "first_attempt_successes": sum(
+            item["validation_state"] == "VALID" and item["attempt_number"] == 1
+            for item in finals
+        ),
+        "retry_successes": sum(
+            item["validation_state"] == "VALID" and item["attempt_number"] == 2
+            for item in finals
+        ),
+        "terminal_invalid_or_unresolved_responses": len(invalid_finals),
+        "valid_final_proposals": len(proposals),
+        "proposal_distribution": {
+            label: {
+                "count": status_counts.get(status, 0),
+                "percentage_among_valid": round(
+                    100 * status_counts.get(status, 0) / denomin, 4
+                ),
+            }
+            for status, label in (
+                ("ELIGIBLE", "INCLUDE"),
+                ("EXCLUDED", "EXCLUDE"),
+                ("UNCERTAIN", "UNCERTAIN"),
+            )
+        },
+        "primary_exclusion_reason_frequencies": dict(sorted(primary_reasons.items())),
+        "all_exclusion_reason_frequencies": dict(sorted(all_reasons.items())),
+        "uncertain_criterion_frequencies": dict(sorted(uncertain_criteria.items())),
+        "full_text_escalation_count": status_counts.get("UNCERTAIN", 0),
+        "missing_abstract_count": sum(
+            not bool(row["representative_record"].get("abstract", "").strip())
+            for row in selected
+        ),
+        "proposal_or_evidence_validation_failure_count": len(evidence_failures),
+        "proposal_or_evidence_validation_failures": evidence_failures,
+        "breakdowns": _screening_breakdown(
+            finals=finals, records_by_id=records_by_id
+        ),
+        "usage": {
+            "input_tokens": input_tokens,
+            "cached_input_tokens": cached_tokens,
+            "output_tokens": output_tokens,
+            "estimated_cost_usd": round(cost, 6),
+            "pricing_usd_per_million_tokens": prices,
+        },
+        "human_validation_sample": human_detail,
+        "methodological_limitations": [
+            "This balanced provisional validation sample is not a prevalence estimate for the retrieved literature.",
+            "Every result is a non-authoritative Stage 5D eligibility proposal.",
+            "E6 is deterministic and pilot-only; it does not establish a production retrieval cutoff.",
+        ],
+        "artifacts": {
+            "attempt_index": attempts_artifact,
+            "validated_proposals": proposals_artifact,
+            "invalid_response_queue": invalid_artifact,
+            "human_validation_sample_csv": csv_artifact,
+            "human_validation_sample_manifest": human_manifest_artifact,
+        },
+        "prohibited_effects": {
+            "retrieval_requests": 0,
+            "production_retrieval_wave": False,
+            "production_review_dataset": False,
+            "authoritative_screening_or_adjudication": False,
+            "production_deduplication_or_identification_closure": False,
+            "retrieval_cutoff": None,
+            "prisma": False,
+            "corpus_membership": False,
+            "seed_occurrences": 0,
+        },
+    }
+    report["artifact_hash"] = _sha256_json(report)
+    report_path = screening_root / "screening_report.json"
+    _write_json(report_path, report)
+    return report, report_path
+
+
 def write_preflight(report: dict[str, Any], *, root: str | Path) -> Path:
     """Persist only the preflight inside its guarded ignored namespace."""
 
@@ -2078,6 +3128,8 @@ def main() -> int:
     boundary.add_argument("--preflight", action="store_true")
     boundary.add_argument("--authorize-pubmed-execution", action="store_true")
     boundary.add_argument("--authorize-acm-provisional-import", action="store_true")
+    boundary.add_argument("--screening-preflight", action="store_true")
+    boundary.add_argument("--authorize-llm-inference", action="store_true")
     args = parser.parse_args()
 
     root = args.root.resolve()
@@ -2108,6 +3160,30 @@ def main() -> int:
         )
         print(path.relative_to(root).as_posix())
         print(summary["artifact_hash"])
+        return 0
+
+    if args.screening_preflight:
+        preflight, sample, output = build_screening_preflight(
+            root=root, config_path=args.config
+        )
+        preflight_path, sample_path = write_screening_preflight(
+            preflight=preflight, sample=sample, output=output
+        )
+        print(preflight_path.relative_to(root).as_posix())
+        print(sample_path.relative_to(root).as_posix())
+        print(preflight["artifact_hash"])
+        return 0
+
+    if args.authorize_llm_inference:
+        from h2h_lit.openai_provider import OpenAIResponsesProvider
+
+        report, path = execute_provisional_screening_stage(
+            root=root,
+            config_path=args.config,
+            provider=OpenAIResponsesProvider.from_environment(),
+        )
+        print(path.relative_to(root).as_posix())
+        print(report["artifact_hash"])
         return 0
 
     execution, path = execute_pubmed_boundary(
