@@ -3,16 +3,21 @@ from __future__ import annotations
 import hashlib
 import json
 from pathlib import Path
+from typing import Any
 
 import pytest
 
+from h2h_lit import provisional_validation
+from h2h_lit.pagination import RateLimiter, RetryPolicy
 from h2h_lit.provisional_validation import (
     PREFLIGHT_ARTIFACT_CLASS,
     ProvisionalValidationError,
     build_preflight,
     deterministic_identity_sample,
+    execute_pubmed_boundary,
     load_validation_config,
     resolve_output_namespace,
+    validate_pubmed_execution_artifacts,
 )
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -104,3 +109,204 @@ def test_identity_sampling_is_order_independent_and_eligibility_blind() -> None:
         deterministic_identity_sample(
             ["pmid:10", "pmid:10"], sample_size=1, salt="fixed"
         )
+
+
+class _Response:
+    def __init__(self, content: bytes, url: str):
+        self.status_code = 200
+        self.headers = {"content-type": "application/xml"}
+        self.content = content
+        self.text = content.decode()
+        self.url = url
+        self.request_url = url
+
+    def json(self) -> Any:
+        raise AssertionError("PubMed XML must not be parsed as JSON")
+
+    def iter_content(self, chunk_size: int = 8192):
+        for index in range(0, len(self.content), chunk_size):
+            yield self.content[index : index + chunk_size]
+
+
+class _PubMedClient:
+    def __init__(self):
+        self.calls: list[tuple[str, dict[str, Any]]] = []
+        self.enumeration_number = 0
+        self.fetch_number = 0
+
+    def post(
+        self,
+        url: str,
+        *,
+        data: dict[str, Any] | None = None,
+        params: dict[str, Any] | None = None,
+        headers: dict[str, str] | None = None,
+        timeout: float | None = None,
+        allow_redirects: bool = True,
+    ) -> _Response:
+        del params, headers, timeout, allow_redirects
+        self.enumeration_number += 1
+        start = self.enumeration_number * 1000
+        pmids = [str(start + offset) for offset in range(120)]
+        if self.enumeration_number > 1:
+            pmids[0] = "1000"
+        self.calls.append(("POST", {"url": url, "data": dict(data or {})}))
+        ids = "".join(f"<Id>{pmid}</Id>" for pmid in pmids)
+        content = (
+            f"<eSearchResult><Count>120</Count><IdList>{ids}</IdList>"
+            "<QueryTranslation>frozen</QueryTranslation></eSearchResult>"
+        ).encode()
+        return _Response(content, url)
+
+    def get(
+        self,
+        url: str,
+        *,
+        params: dict[str, Any] | None = None,
+        headers: dict[str, str] | None = None,
+        timeout: float | None = None,
+        stream: bool = False,
+        allow_redirects: bool = True,
+    ) -> _Response:
+        del headers, timeout, stream, allow_redirects
+        self.fetch_number += 1
+        request = dict(params or {})
+        pmids = request["id"].split(",")
+        self.calls.append(("GET", {"url": url, "params": request}))
+        articles = []
+        for index, pmid in enumerate(pmids):
+            abstract = "" if index % 10 == 0 else f"<AbstractText>Abstract {pmid}</AbstractText>"
+            if self.fetch_number == 3 and index == 0:
+                articles.append(
+                    "<PubmedBookArticle><BookDocument>"
+                    f"<PMID>{pmid}</PMID><ArticleIdList><ArticleId IdType='doi'>"
+                    "10.1000/book</ArticleId></ArticleIdList><Book><Publisher>"
+                    "<PublisherName>Publisher</PublisherName></Publisher>"
+                    "<BookTitle>Book title</BookTitle><PubDate><Year>2025</Year>"
+                    "</PubDate><AuthorList><Author><LastName>Author</LastName>"
+                    "<Initials>A</Initials></Author></AuthorList></Book>"
+                    "<Abstract></Abstract></BookDocument></PubmedBookArticle>"
+                )
+                continue
+            articles.append(
+                "<PubmedArticle><MedlineCitation>"
+                f"<PMID>{pmid}</PMID><Article><ArticleTitle>Title {pmid}</ArticleTitle>"
+                f"<Abstract>{abstract}</Abstract><Journal><Title>Journal</Title>"
+                "<JournalIssue><PubDate><Year>2025</Year></PubDate></JournalIssue></Journal>"
+                "</Article></MedlineCitation></PubmedArticle>"
+            )
+        return _Response(
+            ("<PubmedArticleSet>" + "".join(articles) + "</PubmedArticleSet>").encode(),
+            url,
+        )
+
+
+def test_pubmed_boundary_enumerates_all_before_sampled_metadata_fetch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    output = tmp_path / "star-pipeline-validation-001"
+    monkeypatch.setattr(
+        provisional_validation,
+        "resolve_output_namespace",
+        lambda root, configured: output,
+    )
+    monkeypatch.setattr(
+        provisional_validation,
+        "build_preflight",
+        lambda **kwargs: {"preflight_hash": "a" * 64},
+    )
+    client = _PubMedClient()
+
+    execution, path = execute_pubmed_boundary(
+        root=ROOT,
+        config_path=CONFIG,
+        http=client,
+        retry_policy=RetryPolicy(max_attempts=1),
+        limiter=RateLimiter({"PubMed": 0}),
+        retry_sleep=lambda delay: None,
+    )
+
+    assert path == output / "pubmed/pubmed_execution.json"
+    assert [method for method, _ in client.calls] == ["POST"] * 5 + ["GET"] * 5
+    assert execution["request_accounting"]["logical_request_count"] == 10
+    assert execution["request_accounting"]["actual_attempt_count"] == 10
+    assert execution["request_accounting"]["retry_count"] == 0
+    assert execution["classification"]["retrieval_cutoff"] is None
+    assert execution["classification"]["production_completion_claimed"] is False
+    assert execution["classification"]["production_retrieval_wave_instantiated"] is False
+    assert execution["downstream_effects"] == {
+        "acm_imported": False,
+        "cross_source_deduplication": False,
+        "llm_inference": False,
+        "screening": False,
+        "jfr25_comparison": False,
+        "prisma": False,
+        "corpus_membership": False,
+    }
+    assert execution["complete_identity_enumeration_overlap"][
+        "summed_family_identity_count"
+    ] == 600
+    assert execution["complete_identity_enumeration_overlap"][
+        "unique_pmid_count_across_families"
+    ] == 596
+    assert len(execution["families"]) == 5
+    for family in execution["families"]:
+        assert family["complete_identity_enumeration"]["semantic_state"] == (
+            "COMPLETE_IDENTITY_ENUMERATION"
+        )
+        assert family["metadata_selection"]["selection_count"] == 100
+        assert family["metadata_fetch"]["success_count"] == 100
+        assert family["metadata_fetch"]["failure_count"] == 0
+        assert family["metadata_fetch"]["missing_abstract_count"] == 10
+    assert len(list((output / "pubmed/raw_responses").glob("*.json"))) == 10
+    verification = validate_pubmed_execution_artifacts(root=ROOT, config_path=CONFIG)
+    assert verification["status"] == "VERIFIED_PROVISIONAL_PUBMED_EXECUTION"
+    assert verification["family_artifact_count"] == 5
+    assert verification["raw_response_artifact_count"] == 10
+
+
+class _FailAfterEightClient(_PubMedClient):
+    def get(self, *args: Any, **kwargs: Any) -> _Response:
+        if self.fetch_number == 3:
+            raise OSError("simulated interruption")
+        return super().get(*args, **kwargs)
+
+
+def test_pubmed_boundary_resumes_only_verified_partial_artifacts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    output = tmp_path / "star-pipeline-validation-001"
+    monkeypatch.setattr(
+        provisional_validation,
+        "resolve_output_namespace",
+        lambda root, configured: output,
+    )
+    monkeypatch.setattr(
+        provisional_validation,
+        "build_preflight",
+        lambda **kwargs: {"preflight_hash": "a" * 64},
+    )
+    interrupted = _FailAfterEightClient()
+    with pytest.raises(ProvisionalValidationError, match="attempts exhausted"):
+        execute_pubmed_boundary(
+            root=ROOT,
+            config_path=CONFIG,
+            http=interrupted,
+            retry_policy=RetryPolicy(max_attempts=1),
+            limiter=RateLimiter({"PubMed": 0}),
+            retry_sleep=lambda delay: None,
+        )
+    assert len(interrupted.calls) == 8
+
+    resumed = _PubMedClient()
+    execution, _ = execute_pubmed_boundary(
+        root=ROOT,
+        config_path=CONFIG,
+        http=resumed,
+        retry_policy=RetryPolicy(max_attempts=1),
+        limiter=RateLimiter({"PubMed": 0}),
+        retry_sleep=lambda delay: None,
+    )
+    assert [method for method, _ in resumed.calls] == ["GET", "GET"]
+    assert execution["request_accounting"]["logical_request_count"] == 10
+    assert execution["request_accounting"]["actual_attempt_count"] == 10
