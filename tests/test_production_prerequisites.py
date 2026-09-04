@@ -10,9 +10,13 @@ from h2h_lit.production_prerequisites import (
     ACM_FINAL_RECONCILIATION_PATH,
     EXPECTED_PLAN_HASH,
     EXPECTED_PLAN_RAW_SHA256,
+    IEEE_VERIFICATION_MANIFEST_PATH,
     PRODUCTION_SELECTION,
     ProductionPrerequisiteError,
     ProductionPrerequisitePackage,
+    _build_external_retrieval_gate,
+    _build_identification_closure_gate,
+    _build_ieee,
     build_prerequisite_payloads,
     load_prerequisite_package,
 )
@@ -41,7 +45,9 @@ def test_frozen_plan_and_prerequisite_package_hashes_validate() -> None:
     package = _package()
     assert package.payload["package_version"] == "1.1.0"
     assert package.payload["package_hash"] == package.package_hash()
-    assert package.payload["overall_status"] == "BLOCKED_EXTERNAL_INPUT"
+    assert package.payload["overall_status"] == (
+        "EXTERNAL_RETRIEVAL_READY_IDENTIFICATION_CLOSURE_BLOCKED"
+    )
 
 
 def test_package_regenerates_deterministically_from_frozen_evidence() -> None:
@@ -58,18 +64,20 @@ def test_package_regenerates_deterministically_from_frozen_evidence() -> None:
             CHILD_ROOT / filename
         ).read_text(encoding="utf-8")
     assert tracked["package_hash"] == package.package_hash()
-    assert tracked["updated_at"] == "2026-09-03T18:29:49Z"
+    assert tracked["updated_at"] == "2026-09-04T11:59:02Z"
 
 
-def test_ieee_absent_credential_is_explicit_and_never_persisted() -> None:
+def test_ieee_verified_credential_is_explicit_and_never_persisted() -> None:
     ieee = json.loads((CHILD_ROOT / "ieee_readiness.json").read_text())
-    assert ieee["status"] == "BLOCKED_CREDENTIAL"
+    assert ieee["status"] == "VERIFIED_READY_FOR_RETRIEVAL"
     assert ieee["credential"] == {
-        "present": False,
+        "present": True,
+        "present_at_verification": True,
         "required_name": "IEEE_XPLORE_API_KEY",
+        "verified": True,
         "value_persisted": False,
     }
-    assert ieee["verification_executed"] is False
+    assert ieee["verification_executed"] is True
     assert len(ieee["queries"]) == 5
     assert len(ieee["verification_requests"]) == 5
     serialized = json.dumps(ieee)
@@ -79,6 +87,9 @@ def test_ieee_absent_credential_is_explicit_and_never_persisted() -> None:
         assert item["request"]["credential_reference"] == "IEEE_XPLORE_API_KEY"
         assert item["request"]["params"]["max_records"] == 1
         assert item["request"]["params"]["start_record"] == 1
+        assert item["execution_status"] == "SUCCEEDED"
+        assert item["attempt_count"] == 1
+        assert item["final_http_status"] == 200
         assert len(item["request_hash"]) == 64
 
 
@@ -159,6 +170,7 @@ def test_source_windows_use_only_frozen_sizing_and_do_not_partition() -> None:
     windows = json.loads((CHILD_ROOT / "source_window_review.json").read_text())
     assert windows["derivation"] == (
         "frozen_v0_3_and_final_v0_4_sizing_plus_final_acm_retrieval_evidence"
+        "_plus_ieee_verification"
     )
     assert windows["automatic_partitioning"] is False
     assert windows["known_overflows"] == []
@@ -170,13 +182,22 @@ def test_source_windows_use_only_frozen_sizing_and_do_not_partition() -> None:
         for item in windows["items"]
         if item["state"] == "RESOLVED_RETRIEVAL_EVIDENCE"
     ]
-    assert len(clear) == 20
+    assert len(clear) == 25
     assert len(acm) == 5
-    assert len(unknown) == 5
-    assert {item["source"] for item in unknown} == {"IEEEXplore"}
+    assert len(unknown) == 0
     assert {item["source"] for item in acm} == {"ACMDigitalLibrary"}
-    assert all(item["evidence_path"] is None for item in unknown)
-    assert all(item["evidence_path"].startswith("outputs/query_sizing/") for item in clear)
+    ieee = [item for item in clear if item["source"] == "IEEEXplore"]
+    assert len(ieee) == 5
+    assert all(
+        item["evidence_path"]
+        == "provenance/star_ieee_xplore_verification_2026-09-04_manifest.json"
+        for item in ieee
+    )
+    assert all(
+        item["evidence_path"].startswith("outputs/query_sizing/")
+        for item in clear
+        if item["source"] != "IEEEXplore"
+    )
     assert all(item["evidence_path"] == ACM_FINAL_RECONCILIATION_PATH for item in acm)
     assert {
         (item["family_id"], item["variant_id"])
@@ -208,11 +229,13 @@ def test_phase4a_contract_is_compatible_but_not_ready_and_crossref_is_support_on
     assert package["states"]["FP19"] == "UNPOPULATED_REQUIRES_CURATOR_INPUT"
     assert package["states"]["acm"] == "RETRIEVAL_EVIDENCE_COMPLETE_NOT_IMPORTED"
     assert "ACM_OPERATOR_EVIDENCE_MISSING" not in phase4a["readiness_issues"]
-    assert package["overall_status"] == "BLOCKED_EXTERNAL_INPUT"
+    assert package["overall_status"] == (
+        "EXTERNAL_RETRIEVAL_READY_IDENTIFICATION_CLOSURE_BLOCKED"
+    )
 
     external = phase4a["external_retrieval_execution"]
-    assert external["status"] == "BLOCKED_EXTERNAL_INPUT"
-    assert external["ready"] is False
+    assert external["status"] == "READY"
+    assert external["ready"] is True
     assert external["required_identification_sources"] == [
         "PubMed",
         "EuropePMC",
@@ -223,10 +246,7 @@ def test_phase4a_contract_is_compatible_but_not_ready_and_crossref_is_support_on
     ]
     assert external["required_support_sources"] == ["CrossRef"]
     assert external["nonblocking_offline_identification_source"] == "PriorSurveySeed"
-    assert external["blocking_issues"] == [
-        "IEEE_BLOCKED_CREDENTIAL",
-        "SUPPLEMENTAL_SOURCE_WINDOWS_UNKNOWN",
-    ]
+    assert external["blocking_issues"] == []
     assert all("SEED" not in issue for issue in external["blocking_issues"])
     assert package["blocking_reasons"] == external["blocking_reasons"]
 
@@ -267,6 +287,55 @@ def test_seed_manifests_block_identification_closure_not_external_retrieval() ->
         "requires_identification_set_closure": True,
         "requires_completed_external_retrieval": True,
     }
+
+
+def test_verified_ieee_clears_only_external_gate_and_not_identification_closure(
+    tmp_path: Path,
+) -> None:
+    manifest = {
+        "manifest_version": "1.0.0",
+        "manifest_hash": "a" * 64,
+        "completed_at_utc": "2026-09-04T12:00:00Z",
+        "source_window_state": "RESOLVED_CLEAR",
+        "requests": [
+            {
+                "family_id": family_id,
+                "provider_count": index,
+                "attempts": [{"outcome": "SUCCEEDED"}],
+                "final_http_status": 200,
+                "source_window": {
+                    "state": "RESOLVED_CLEAR",
+                    "status": "exact_total_no_declared_hard_window",
+                },
+            }
+            for index, family_id in enumerate(PRODUCTION_SELECTION, start=1)
+        ],
+    }
+    manifest_path = tmp_path / IEEE_VERIFICATION_MANIFEST_PATH
+    manifest_path.parent.mkdir(parents=True)
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    plan = json.loads(PLAN_PATH.read_text(encoding="utf-8"))
+    ieee = _build_ieee(plan, "2026-09-02T00:54:40Z", False, manifest, tmp_path)
+    acm = json.loads((CHILD_ROOT / "acm_operator_spec.json").read_text())
+    external = _build_external_retrieval_gate(
+        ieee, acm, {"unresolved_items": []}
+    )
+    assert ieee["status"] == "VERIFIED_READY_FOR_RETRIEVAL"
+    assert ieee["verification_executed"] is True
+    assert external["status"] == "READY"
+    assert external["ready"] is True
+    assert external["blocking_issues"] == []
+
+    seeds = {
+        seed_id: json.loads(
+            (CHILD_ROOT / f"seed_{seed_id.lower()}.json").read_text()
+        )
+        for seed_id in ("EBK25", "JFR25", "FP19")
+    }
+    closure = _build_identification_closure_gate(seeds)
+    assert closure["ready"] is False
+    assert closure["pending_manifest_seed_set_ids"] == ["EBK25", "FP19"]
+    assert closure["full_wave_finalization_allowed"] is False
 
 
 def test_external_gate_rejects_seed_blocker_even_with_valid_package_hash() -> None:

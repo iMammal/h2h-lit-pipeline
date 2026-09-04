@@ -72,6 +72,9 @@ SIZING_EVIDENCE = {
 ACM_FINAL_RECONCILIATION_PATH = (
     "provenance/star_acm_field_execution_2026-09-03_final_reconciliation_manifest.json"
 )
+IEEE_VERIFICATION_MANIFEST_PATH = (
+    "provenance/star_ieee_xplore_verification_2026-09-04_manifest.json"
+)
 
 
 class ProductionPrerequisiteError(ValueError):
@@ -127,11 +130,13 @@ class ProductionPrerequisitePackage:
                 )
             children[ref["artifact_id"]] = child
 
-        _validate_ieee(children["star-ieee-readiness-v1"], plan.payload)
+        _validate_ieee(children["star-ieee-readiness-v1"], plan.payload, root_path)
         _validate_acm(children["star-acm-operator-spec-v1"], plan.payload, root_path)
         for seed_id in SEED_SET_IDS:
             _validate_seed(children[f"star-seed-{seed_id.lower()}-v1"], seed_id)
-        _validate_windows(children["star-source-window-review-v1"], plan.payload)
+        _validate_windows(
+            children["star-source-window-review-v1"], plan.payload, root_path
+        )
         _validate_phase4a_compatibility(
             data["phase4a_compatibility"], children=children
         )
@@ -160,11 +165,20 @@ def build_prerequisite_payloads(
     plan = load_production_query_plan(plan_file, root=root_path)
     _validate_expected_plan(plan_file, plan.payload, root_path)
 
-    ieee = _build_ieee(plan.payload, generated_at, ieee_credential_present)
+    ieee_verification = _load_ieee_verification(root_path)
+    ieee = _build_ieee(
+        plan.payload,
+        generated_at,
+        ieee_credential_present,
+        ieee_verification,
+        root_path,
+    )
     acm_final = _load_final_acm_reconciliation(root_path)
     acm = _build_acm(plan.payload, generated_at, acm_final, root_path)
     seeds = {seed_id: _build_seed(seed_id, root_path) for seed_id in SEED_SET_IDS}
-    windows = _build_source_windows(plan.payload, root_path, acm_final)
+    windows = _build_source_windows(
+        plan.payload, root_path, acm_final, ieee_verification
+    )
     children = {
         "ieee_readiness.json": _finalize_artifact(ieee),
         "acm_operator_spec.json": _finalize_artifact(acm),
@@ -204,6 +218,11 @@ def build_prerequisite_payloads(
         "updated_at": max(
             [generated_at]
             + ([str(acm_final["reconciled_at_utc"])] if acm_final else [])
+            + (
+                [str(ieee_verification["completed_at_utc"])]
+                if ieee_verification
+                else []
+            )
             + [
                 str(seed.get("acquired_at"))
                 for seed in seeds.values()
@@ -220,7 +239,11 @@ def build_prerequisite_payloads(
             **{seed_id: seeds[seed_id]["status"] for seed_id in SEED_SET_IDS},
             "source_windows": windows["status"],
         },
-        "overall_status": "BLOCKED_EXTERNAL_INPUT",
+        "overall_status": (
+            "EXTERNAL_RETRIEVAL_READY_IDENTIFICATION_CLOSURE_BLOCKED"
+            if external_gate["ready"]
+            else "BLOCKED_EXTERNAL_INPUT"
+        ),
         "blocking_reasons": external_gate["blocking_reasons"],
         "phase4a_compatibility": {
             "wave_schema_version": "1.1.0",
@@ -370,7 +393,11 @@ def _build_identification_closure_gate(
 
 
 def _build_ieee(
-    plan: dict[str, Any], generated_at: str, credential_present: bool
+    plan: dict[str, Any],
+    generated_at: str,
+    credential_present: bool,
+    verification: dict[str, Any] | None = None,
+    root: Path | None = None,
 ) -> dict[str, Any]:
     queries = _queries_for(plan, "IEEEXplore")
     verification_requests = []
@@ -397,7 +424,7 @@ def _build_ieee(
                 "execution_status": "NOT_EXECUTED",
             }
         )
-    return {
+    payload = {
         "schema_version": PREREQUISITE_SCHEMA_VERSION,
         "artifact_id": "star-ieee-readiness-v1",
         "artifact_version": "1.0.0",
@@ -471,6 +498,57 @@ def _build_ieee(
         },
         "artifact_hash": None,
     }
+    if verification is None:
+        return payload
+    if root is None:
+        raise ProductionPrerequisiteError(
+            "IEEE verification binding requires a repository root"
+        )
+    observations = {
+        item["family_id"]: item for item in verification["requests"]
+    }
+    for item in payload["verification_requests"]:
+        observed = observations[item["family_id"]]
+        item.update(
+            {
+                "execution_status": "SUCCEEDED",
+                "provider_count": observed["provider_count"],
+                "attempt_count": len(observed["attempts"]),
+                "final_http_status": observed["final_http_status"],
+                "source_window_state": observed["source_window"]["state"],
+            }
+        )
+    manifest_path = root / IEEE_VERIFICATION_MANIFEST_PATH
+    payload.update(
+        {
+            "status": (
+                "VERIFIED_READY_FOR_RETRIEVAL"
+                if verification["source_window_state"] == "RESOLVED_CLEAR"
+                else "VERIFIED_PARTITION_REVIEW_REQUIRED"
+            ),
+            "assessed_at": verification["completed_at_utc"],
+            "credential": {
+                "required_name": "IEEE_XPLORE_API_KEY",
+                "present": True,
+                "present_at_verification": True,
+                "verified": True,
+                "value_persisted": False,
+            },
+            "verification_executed": True,
+            "verification_evidence": _file_reference(
+                manifest_path,
+                root,
+                verification["manifest_hash"],
+                verification["manifest_version"],
+            ),
+            "quota_access": {
+                "status": "VERIFIED_ACCESSIBLE_QUOTA_NOT_INFERRED",
+                "quota": None,
+                "verification_required": False,
+            },
+        }
+    )
+    return payload
 
 
 def _build_acm(
@@ -659,6 +737,7 @@ def _build_source_windows(
     plan: dict[str, Any],
     root: Path,
     final_acm_reconciliation: dict[str, Any] | None,
+    ieee_verification: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     loaded_runs: dict[str, dict[str, Any]] = {}
     items = []
@@ -709,6 +788,15 @@ def _build_source_windows(
                 if source == "ACMDigitalLibrary" and final_acm_reconciliation
                 else None
             )
+            ieee_observation = (
+                next(
+                    item
+                    for item in ieee_verification["requests"]
+                    if item["family_id"] == family_id
+                )
+                if source == "IEEEXplore" and ieee_verification
+                else None
+            )
             items.append(
                 {
                     "family_id": family_id,
@@ -717,16 +805,24 @@ def _build_source_windows(
                     "state": (
                         "RESOLVED_RETRIEVAL_EVIDENCE"
                         if acm_family
+                        else ieee_observation["source_window"]["state"]
+                        if ieee_observation
                         else "UNKNOWN_UNSIZED"
                     ),
                     "reported_count": (
                         acm_family["field_union"]["unique_stable_identity_count"]
                         if acm_family
+                        else ieee_observation["provider_count"]
+                        if ieee_observation
                         else None
                     ),
                     "hard_window": _plan_query(plan, family_id, source)["hard_window"],
                     "window_status": (
-                        "field_decomposed_export_complete" if acm_family else "unknown"
+                        "field_decomposed_export_complete"
+                        if acm_family
+                        else ieee_observation["source_window"]["status"]
+                        if ieee_observation
+                        else "unknown"
                     ),
                     "evidence_path": (
                         ACM_FINAL_RECONCILIATION_PATH if acm_family else None
@@ -734,32 +830,46 @@ def _build_source_windows(
                     "evidence_run_hash": (
                         final_acm_reconciliation["manifest_hash"]
                         if acm_family
+                        else ieee_verification["manifest_hash"]
+                        if ieee_observation
                         else None
                     ),
                     "candidate_query_id": None,
+                    **(
+                        {"evidence_path": IEEE_VERIFICATION_MANIFEST_PATH}
+                        if ieee_observation
+                        else {}
+                    ),
                 }
             )
+    unresolved = [
+        f"{item['family_id']}:{item['source']}"
+        for item in items
+        if item["state"] in {"UNKNOWN_UNSIZED", "UNRESOLVED_PARTITION_REVIEW"}
+    ]
+    overflows = [
+        f"{item['family_id']}:{item['source']}"
+        for item in items
+        if item["state"] == "UNRESOLVED_PARTITION_REVIEW"
+    ]
     return {
         "schema_version": PREREQUISITE_SCHEMA_VERSION,
         "artifact_id": "star-source-window-review-v1",
         "artifact_version": "1.0.0",
-        "status": "UNRESOLVED_SUPPLEMENTAL_SOURCES",
+        "status": "RESOLVED" if not unresolved else "UNRESOLVED_SUPPLEMENTAL_SOURCES",
         "derivation": (
             "frozen_v0_3_and_final_v0_4_sizing_plus_final_acm_retrieval_evidence"
+            + ("_plus_ieee_verification" if ieee_verification else "")
         ),
         "automatic_partitioning": False,
-        "known_overflows": [],
-        "unresolved_items": [
-            f"{item['family_id']}:{item['source']}"
-            for item in items
-            if item["state"] == "UNKNOWN_UNSIZED"
-        ],
+        "known_overflows": overflows,
+        "unresolved_items": unresolved,
         "items": items,
         "artifact_hash": None,
     }
 
 
-def _validate_ieee(data: dict[str, Any], plan: dict[str, Any]) -> None:
+def _validate_ieee(data: dict[str, Any], plan: dict[str, Any], root: Path) -> None:
     if data["credential"]["required_name"] != "IEEE_XPLORE_API_KEY":
         raise ProductionPrerequisiteError("IEEE credential reference changed")
     if data["credential"]["value_persisted"] is not False:
@@ -770,8 +880,26 @@ def _validate_ieee(data: dict[str, Any], plan: dict[str, Any]) -> None:
     actual = data["queries"]
     if [item["query_text"] for item in actual] != [item["query_text"] for item in expected]:
         raise ProductionPrerequisiteError("IEEE production queries changed")
-    if data["verification_executed"] is not False:
-        raise ProductionPrerequisiteError("IEEE verification must remain unexecuted")
+    if data["verification_executed"] is False:
+        if data["status"] not in {"BLOCKED_CREDENTIAL", "READY_FOR_VERIFICATION"}:
+            raise ProductionPrerequisiteError("IEEE unexecuted status is invalid")
+        return
+    if data["status"] not in {
+        "VERIFIED_READY_FOR_RETRIEVAL",
+        "VERIFIED_PARTITION_REVIEW_REQUIRED",
+    }:
+        raise ProductionPrerequisiteError("IEEE executed status is invalid")
+    if not data["credential"].get("present_at_verification"):
+        raise ProductionPrerequisiteError("IEEE credential presence was not recorded")
+    if not data["credential"].get("verified"):
+        raise ProductionPrerequisiteError("IEEE credential was not verified")
+    evidence = data.get("verification_evidence", {})
+    if evidence.get("path") != IEEE_VERIFICATION_MANIFEST_PATH:
+        raise ProductionPrerequisiteError("IEEE verification evidence path changed")
+    _validate_file_reference(root / _safe_relative_path(evidence["path"]), evidence)
+    manifest = _load_ieee_verification(root)
+    if manifest is None or manifest["manifest_hash"] != evidence.get("canonical_hash"):
+        raise ProductionPrerequisiteError("IEEE verification evidence binding changed")
 
 
 def _validate_acm(data: dict[str, Any], plan: dict[str, Any], root: Path) -> None:
@@ -863,9 +991,9 @@ def _validate_seed(data: dict[str, Any], seed_set_id: str) -> None:
         raise ProductionPrerequisiteError("unpopulated seed cannot create occurrences")
 
 
-def _validate_windows(data: dict[str, Any], plan: dict[str, Any]) -> None:
-    if data["automatic_partitioning"] or data["known_overflows"]:
-        raise ProductionPrerequisiteError("source-window review invented a partition/overflow")
+def _validate_windows(data: dict[str, Any], plan: dict[str, Any], root: Path) -> None:
+    if data["automatic_partitioning"]:
+        raise ProductionPrerequisiteError("source-window review invented a partition")
     expected_pairs = {
         (family_id, source)
         for family_id in PRODUCTION_SELECTION
@@ -885,6 +1013,127 @@ def _validate_windows(data: dict[str, Any], plan: dict[str, Any]) -> None:
         plan_item = _plan_query(plan, item["family_id"], item["source"])
         if item["variant_id"] != plan_item["variant_id"]:
             raise ProductionPrerequisiteError("source-window variant changed")
+    ieee_items = [item for item in data["items"] if item["source"] == "IEEEXplore"]
+    if any(item["state"] != "UNKNOWN_UNSIZED" for item in ieee_items):
+        verification = _load_ieee_verification(root)
+        if verification is None:
+            raise ProductionPrerequisiteError("IEEE source windows lack verification evidence")
+        observed = {item["family_id"]: item for item in verification["requests"]}
+        for item in ieee_items:
+            source = observed[item["family_id"]]
+            if (
+                item["reported_count"] != source["provider_count"]
+                or item["state"] != source["source_window"]["state"]
+                or item["evidence_run_hash"] != verification["manifest_hash"]
+            ):
+                raise ProductionPrerequisiteError("IEEE source-window evidence changed")
+
+
+def _load_ieee_verification(root: Path) -> dict[str, Any] | None:
+    path = root / IEEE_VERIFICATION_MANIFEST_PATH
+    if not path.is_file():
+        return None
+    data = json.loads(path.read_text(encoding="utf-8"))
+    material = dict(data)
+    expected_hash = material.pop("manifest_hash", None)
+    if expected_hash != _sha256(_canonical_json(material).encode("utf-8")):
+        raise ProductionPrerequisiteError("IEEE verification manifest hash mismatch")
+    if data.get("schema_version") != "1.0.0" or data.get("manifest_version") != "1.0.0":
+        raise ProductionPrerequisiteError("unsupported IEEE verification manifest version")
+    if data.get("manifest_id") != "star-ieee-xplore-verification-2026-09-04":
+        raise ProductionPrerequisiteError("IEEE verification manifest ID changed")
+    if data.get("status") not in {
+        "VERIFIED_READY_FOR_RETRIEVAL",
+        "VERIFIED_PARTITION_REVIEW_REQUIRED",
+    }:
+        raise ProductionPrerequisiteError("IEEE verification did not complete successfully")
+    credential = data.get("credential", {})
+    if credential != {
+        "required_name": "IEEE_XPLORE_API_KEY",
+        "present_at_execution": True,
+        "verified": True,
+        "value_persisted": False,
+    }:
+        raise ProductionPrerequisiteError("IEEE credential provenance is invalid")
+    if data.get("downstream_side_effects") != []:
+        raise ProductionPrerequisiteError("IEEE verification created downstream state")
+    plan_ref = data.get("production_query_plan", {})
+    if (
+        plan_ref.get("path") != "config/star_production_query_plan_v1.json"
+        or plan_ref.get("raw_sha256") != EXPECTED_PLAN_RAW_SHA256
+        or plan_ref.get("canonical_hash") != EXPECTED_PLAN_HASH
+    ):
+        raise ProductionPrerequisiteError("IEEE verification plan binding changed")
+    plan_payload = load_production_query_plan(
+        root / "config/star_production_query_plan_v1.json", root=root
+    ).payload
+    expected = _build_ieee(
+        plan_payload,
+        str(data["started_at_utc"]),
+        False,
+    )["verification_requests"]
+    expected_by_family = {item["family_id"]: item for item in expected}
+    requests = data.get("requests", [])
+    if [item.get("family_id") for item in requests] != list(PRODUCTION_SELECTION):
+        raise ProductionPrerequisiteError("IEEE verification family coverage changed")
+    for item in requests:
+        frozen = expected_by_family[item["family_id"]]
+        plan_item = _plan_query(plan_payload, item["family_id"], "IEEEXplore")
+        if (
+            item.get("query_id") != frozen["query_id"]
+            or item.get("query_text_sha256") != frozen["query_text_sha256"]
+            or item.get("request_hash") != frozen["request_hash"]
+            or item.get("execution_status") != "SUCCEEDED"
+            or item.get("final_http_status") != 200
+        ):
+            raise ProductionPrerequisiteError("IEEE verification request binding changed")
+        count = item.get("provider_count")
+        if not isinstance(count, int) or isinstance(count, bool) or count < 0:
+            raise ProductionPrerequisiteError("IEEE provider count is invalid")
+        attempts = item.get("attempts", [])
+        if not attempts or attempts[-1].get("outcome") != "SUCCEEDED":
+            raise ProductionPrerequisiteError("IEEE verification attempt accounting changed")
+        source_window = item.get("source_window", {})
+        hard_window = plan_item.get("hard_window")
+        expected_window_state = (
+            "UNRESOLVED_PARTITION_REVIEW"
+            if hard_window is not None and count > hard_window
+            else "RESOLVED_CLEAR"
+        )
+        if (
+            source_window.get("hard_window") != hard_window
+            or source_window.get("state") != expected_window_state
+            or source_window.get("partitioning_invented") is not False
+        ):
+            raise ProductionPrerequisiteError("IEEE source-window derivation changed")
+        for attempt in attempts:
+            response = attempt.get("response_artifact")
+            if response is None:
+                continue
+            relative = _safe_relative_path(response["path"])
+            if relative.parts[:2] != ("artifacts", "ieee_verification"):
+                raise ProductionPrerequisiteError(
+                    "IEEE response evidence left the ignored artifact hierarchy"
+                )
+            _validate_file_reference(root / relative, response)
+    expected_overall = (
+        "RESOLVED_CLEAR"
+        if all(
+            item["source_window"]["state"] == "RESOLVED_CLEAR"
+            for item in requests
+        )
+        else "UNRESOLVED_PARTITION_REVIEW"
+    )
+    if data.get("source_window_state") != expected_overall:
+        raise ProductionPrerequisiteError("IEEE overall source-window state changed")
+    expected_status = (
+        "VERIFIED_READY_FOR_RETRIEVAL"
+        if expected_overall == "RESOLVED_CLEAR"
+        else "VERIFIED_PARTITION_REVIEW_REQUIRED"
+    )
+    if data.get("status") != expected_status:
+        raise ProductionPrerequisiteError("IEEE verification readiness state changed")
+    return data
 
 
 def _load_final_acm_reconciliation(root: Path) -> dict[str, Any] | None:
