@@ -10,6 +10,8 @@ import pytest
 from h2h_lit.artifact_import import merge_identification_datasets
 from h2h_lit.models import ProcessingStatus
 from h2h_lit.production_wave import (
+    EXTERNAL_IDENTIFICATION_SOURCES_V2,
+    EXTERNAL_RETRIEVAL_EXECUTION_SCOPE,
     REQUIRED_PRODUCTION_SOURCES,
     SOURCE_CONTRACTS,
     ArtifactKind,
@@ -275,6 +277,64 @@ def test_complete_wave_plan_is_ready_but_not_executed_or_finalizable(tmp_path):
     assert report.finalizable is False
     assert report.recommended_status is ProductionWaveStatus.READY
     assert wave.retrieval_cutoff_date is None
+
+
+def test_external_scope_defers_seed_without_weakening_full_wave_contract(tmp_path):
+    wave = _wave(tmp_path, status=ProductionWaveStatus.PLANNED)
+    wave.schema_version = "1.1.0"
+    wave.required_sources = list(EXTERNAL_IDENTIFICATION_SOURCES_V2)
+    wave.support_sources = ["CrossRef"]
+    wave.query_families = [
+        item
+        for item in wave.query_families
+        if item.source_database not in {"CrossRef", "PriorSurveySeed"}
+    ]
+    wave.metadata = {
+        "execution_scope": EXTERNAL_RETRIEVAL_EXECUTION_SCOPE,
+        "deferred_identification_sources": ["PriorSurveySeed"],
+        "identification_set_closure_allowed": False,
+    }
+    wave.query_plan_hash = compute_query_plan_hash(wave)
+
+    report = preflight_production_wave(
+        wave,
+        manifest_root=tmp_path,
+        configured_credentials={"IEEEXplore": {"api_key"}},
+    )
+    assert report.ready is True
+    assert report.execution_complete is False
+    assert report.finalizable is False
+    assert all(
+        item.source_database != "PriorSurveySeed" for item in wave.query_families
+    )
+
+
+def test_external_scope_requires_explicit_identification_closure_guard(tmp_path):
+    wave = _wave(tmp_path, status=ProductionWaveStatus.PLANNED)
+    wave.schema_version = "1.1.0"
+    wave.required_sources = list(EXTERNAL_IDENTIFICATION_SOURCES_V2)
+    wave.support_sources = ["CrossRef"]
+    wave.query_families = [
+        item
+        for item in wave.query_families
+        if item.source_database not in {"CrossRef", "PriorSurveySeed"}
+    ]
+    wave.metadata = {
+        "execution_scope": EXTERNAL_RETRIEVAL_EXECUTION_SCOPE,
+        "deferred_identification_sources": ["PriorSurveySeed"],
+        "identification_set_closure_allowed": True,
+    }
+    wave.query_plan_hash = compute_query_plan_hash(wave)
+
+    report = preflight_production_wave(
+        wave,
+        manifest_root=tmp_path,
+        configured_credentials={"IEEEXplore": {"api_key"}},
+    )
+    assert report.ready is False
+    assert "EXTERNAL_SCOPE_CLOSURE_GUARD_MISSING" in {
+        item.code for item in report.issues
+    }
 
 
 def test_incomplete_wave_reports_every_missing_required_source(tmp_path):

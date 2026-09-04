@@ -49,6 +49,12 @@ REQUIRED_IDENTIFICATION_SOURCES_V2 = (
     "PriorSurveySeed",
 )
 REQUIRED_SUPPORT_SOURCES_V2 = ("CrossRef",)
+EXTERNAL_IDENTIFICATION_SOURCES_V2 = tuple(
+    source
+    for source in REQUIRED_IDENTIFICATION_SOURCES_V2
+    if source != "PriorSurveySeed"
+)
+EXTERNAL_RETRIEVAL_EXECUTION_SCOPE = "external_retrieval"
 
 
 class ProductionWaveStatus(str, Enum):
@@ -368,12 +374,15 @@ def preflight_production_wave(
     planning_issues: list[PreflightIssue] = []
     input_issues: list[PreflightIssue] = []
     execution_issues: list[PreflightIssue] = []
+    artifact_validation_cache: dict[Path, dict[str, Any]] = {}
 
     _validate_wave_identity(wave, planning_issues)
     _validate_query_families(wave, planning_issues)
     for family in wave.query_families:
         _validate_credentials(family, credentials, input_issues)
-        _validate_required_artifact(family, root, input_issues)
+        _validate_required_artifact(
+            family, root, input_issues, artifact_validation_cache
+        )
 
     planning_complete = not planning_issues
     required_inputs_available = not input_issues
@@ -432,8 +441,22 @@ def _validate_wave_identity(
                 "UNSUPPORTED_SCHEMA", "wave schema_version must be 1.0.0 or 1.1.0"
             )
         )
+    execution_scope = wave.metadata.get("execution_scope")
+    if execution_scope not in {None, EXTERNAL_RETRIEVAL_EXECUTION_SCOPE}:
+        issues.append(
+            PreflightIssue(
+                "UNSUPPORTED_EXECUTION_SCOPE",
+                f"unsupported execution scope {execution_scope!r}",
+            )
+        )
+    external_scope = (
+        wave.schema_version == "1.1.0"
+        and execution_scope == EXTERNAL_RETRIEVAL_EXECUTION_SCOPE
+    )
     expected_sources = (
-        REQUIRED_IDENTIFICATION_SOURCES_V2
+        EXTERNAL_IDENTIFICATION_SOURCES_V2
+        if external_scope
+        else REQUIRED_IDENTIFICATION_SOURCES_V2
         if wave.schema_version == "1.1.0"
         else REQUIRED_PRODUCTION_SOURCES
     )
@@ -444,6 +467,30 @@ def _validate_wave_identity(
                 "required_sources must contain the exact ordered production source inventory",
             )
         )
+    if external_scope:
+        if wave.metadata.get("deferred_identification_sources") != [
+            "PriorSurveySeed"
+        ]:
+            issues.append(
+                PreflightIssue(
+                    "EXTERNAL_SCOPE_DEFERRED_SOURCE_MISMATCH",
+                    "external-retrieval scope must defer only PriorSurveySeed",
+                )
+            )
+        if wave.metadata.get("identification_set_closure_allowed") is not False:
+            issues.append(
+                PreflightIssue(
+                    "EXTERNAL_SCOPE_CLOSURE_GUARD_MISSING",
+                    "external-retrieval scope must prohibit identification-set closure",
+                )
+            )
+        if wave.status is ProductionWaveStatus.FINALIZED:
+            issues.append(
+                PreflightIssue(
+                    "EXTERNAL_SCOPE_FINALIZATION_PROHIBITED",
+                    "an external-only wave cannot represent full-wave finalization",
+                )
+            )
     expected_support = (
         list(REQUIRED_SUPPORT_SOURCES_V2) if wave.schema_version == "1.1.0" else []
     )
@@ -832,7 +879,10 @@ def _validate_credentials(
 
 
 def _validate_required_artifact(
-    family: ProductionQueryFamily, root: Path, issues: list[PreflightIssue]
+    family: ProductionQueryFamily,
+    root: Path,
+    issues: list[PreflightIssue],
+    validation_cache: dict[Path, dict[str, Any]],
 ) -> None:
     required = family.required_artifact
     if required is None:
@@ -869,7 +919,15 @@ def _validate_required_artifact(
     try:
         payload = json.loads(raw)
         if required.kind is ArtifactKind.ACM_EXPORT_MANIFEST:
-            _validate_acm_artifact(family, required, path, payload, issues)
+            _validate_acm_artifact(
+                family,
+                required,
+                path,
+                payload,
+                root,
+                issues,
+                validation_cache,
+            )
         else:
             _validate_seed_artifact(family, required, path, payload, issues)
     except (ValueError, TypeError, KeyError, json.JSONDecodeError) as exc:
@@ -887,8 +945,17 @@ def _validate_acm_artifact(
     required: RequiredArtifact,
     path: Path,
     payload: dict[str, Any],
+    root: Path,
     issues: list[PreflightIssue],
+    validation_cache: dict[Path, dict[str, Any]],
 ) -> None:
+    if payload.get("manifest_id") == (
+        "star-acm-field-execution-2026-09-03-final-reconciliation"
+    ):
+        _validate_acm_final_reconciliation_artifact(
+            family, required, path, root, issues, validation_cache
+        )
+        return
     dataset = import_acm_bibtex_manifest(path)
     if dataset.retrieval_runs[0].completion_status is not RetrievalCompletionStatus.COMPLETE:
         raise ValueError("ACM import does not satisfy artifact completion checks")
@@ -928,6 +995,91 @@ def _validate_acm_artifact(
                 family.query_family_id,
             )
         )
+
+
+def _validate_acm_final_reconciliation_artifact(
+    family: ProductionQueryFamily,
+    required: RequiredArtifact,
+    path: Path,
+    root: Path,
+    issues: list[PreflightIssue],
+    validation_cache: dict[Path, dict[str, Any]],
+) -> None:
+    # Import lazily to avoid the production-query-plan/production-wave import cycle.
+    from h2h_lit.acm_field_execution import (
+        load_acm_final_reconciliation_manifest,
+    )
+
+    manifest = validation_cache.get(path)
+    if manifest is None:
+        manifest = load_acm_final_reconciliation_manifest(
+            path, root=root, verify_artifacts=True
+        )
+        validation_cache[path] = manifest
+    matches = [
+        item
+        for item in manifest.get("families", [])
+        if item.get("parent_query_id") == family.query_family_id
+    ]
+    if len(matches) != 1:
+        issues.append(
+            PreflightIssue(
+                "ACM_ARTIFACT_PLAN_MISMATCH",
+                "ACM reconciliation must contain exactly one matching parent query",
+                family.query_family_id,
+            )
+        )
+        return
+    reconciled_family = matches[0]
+    field_union = reconciled_family.get("field_union", {})
+    if (
+        field_union.get("state") != "COMPLETE_SET_RECONCILED_NOT_IMPORTED"
+        or field_union.get("unique_stable_identity_count") != required.expected_total
+    ):
+        issues.append(
+            PreflightIssue(
+                "ACM_ARTIFACT_TOTAL_MISMATCH",
+                "ACM field union is incomplete or differs from the frozen expectation",
+                family.query_family_id,
+            )
+        )
+    if {item.get("field_key") for item in reconciled_family.get("children", [])} != {
+        "title",
+        "keyword",
+        "abstract",
+    }:
+        issues.append(
+            PreflightIssue(
+                "ACM_ARTIFACT_FIELD_MISMATCH",
+                "ACM reconciliation must contain title, keyword, and abstract children",
+                family.query_family_id,
+            )
+        )
+    if required.expected_chunks:
+        issues.append(
+            PreflightIssue(
+                "ACM_CHUNK_PLAN_MISMATCH",
+                "field-decomposed ACM reconciliation binds selected artifacts internally",
+                family.query_family_id,
+            )
+        )
+    expected_parameters = {
+        "field_selections": ["Title", "Abstract", "Author Keywords"],
+        "collection_scope": "acm_publications",
+        "filters": {},
+        "sort": "publicationDate asc",
+        "export_format": "BibTeX",
+        "ui_reported_total": required.expected_total,
+    }
+    for key, expected in expected_parameters.items():
+        if family.native_parameters.get(key) != expected:
+            issues.append(
+                PreflightIssue(
+                    "ACM_ARTIFACT_PLAN_MISMATCH",
+                    f"ACM wave parameter {key} does not match reconciled evidence",
+                    family.query_family_id,
+                )
+            )
 
 
 def _validate_seed_artifact(
