@@ -14,12 +14,180 @@ from h2h_lit.artifact_import import (
     build_artifact_review_dataset,
     stable_id,
 )
-from h2h_lit.bibtex_io import parse_entry_fields, record_from_bibtex_fields, split_bib_entries
+from h2h_lit.bibtex_io import (
+    parse_bibtex_with_diagnostics,
+    parse_entry_fields,
+    record_from_bibtex_fields,
+    split_bib_entries,
+)
 from h2h_lit.models import LiteratureRecord, ProcessingStatus, ProvenanceEvent, ProvenanceKind
 from h2h_lit.pagination import malformed_identifier, redact_url
 from h2h_lit.review import IdentificationRoute, ReviewDataset
 
 SOURCE_DATABASE = "ACMDigitalLibrary"
+
+
+def import_acm_selected_reconciliation(
+    manifest_path: str | Path,
+    *,
+    root: str | Path,
+    query_text_by_parent: dict[str, str],
+    query_version: str,
+    run_id_prefix: str,
+    protocol_version: str = "1.0.0",
+    rubric_version: str = "1.0.0",
+    software_version: str | None = None,
+) -> dict[str, ReviewDataset]:
+    """Import only final-selected ACM artifacts, retaining field-level provenance."""
+
+    from h2h_lit.acm_field_execution import (  # local import avoids module cycle
+        load_acm_final_reconciliation_manifest,
+    )
+
+    root_path = Path(root).resolve()
+    path = Path(manifest_path).resolve()
+    manifest = load_acm_final_reconciliation_manifest(
+        path, root=root_path, verify_artifacts=True
+    )
+    datasets: dict[str, ReviewDataset] = {}
+    for family in manifest["families"]:
+        parent_query_id = family["parent_query_id"]
+        query_text = query_text_by_parent.get(parent_query_id)
+        if query_text is None:
+            raise ValueError(f"missing frozen ACM query text for {parent_query_id}")
+        chunks: list[ArtifactChunk] = []
+        next_record = 1
+        malformed_total = 0
+        for child in family["children"]:
+            for artifact in child["selected_artifacts"]:
+                relative = _relative_artifact_path(artifact["relative_path"])
+                artifact_path = root_path / relative
+                raw = artifact_path.read_bytes()
+                raw_hash = hashlib.sha256(raw).hexdigest()
+                if (
+                    len(raw) != artifact["byte_size"]
+                    or raw_hash != artifact["raw_sha256"]
+                ):
+                    raise ValueError(f"ACM selected artifact binding changed: {relative}")
+                text = raw.decode("utf-8")
+                diagnostic = parse_bibtex_with_diagnostics(text)
+                if (
+                    diagnostic.physical_header_count
+                    != artifact["physical_header_count"]
+                    or diagnostic.accounted_record_count
+                    != artifact["total_accounted_entry_count"]
+                    or len(diagnostic.issues) != artifact["malformed_entry_count"]
+                ):
+                    raise ValueError(f"ACM parser accounting changed: {relative}")
+                items: list[ArtifactItem] = []
+                artifact_malformed = 0
+                for rank, raw_entry in enumerate(split_bib_entries(text), start=1):
+                    item, item_error = _entry_item(
+                        raw_entry,
+                        rank=rank,
+                        query=query_text,
+                        imported_at=manifest["reconciled_at_utc"],
+                    )
+                    if item_error:
+                        artifact_malformed += 1
+                        item.metadata.update(
+                            {
+                                "malformed_but_identified": True,
+                                "parse_warning": item_error,
+                            }
+                        )
+                    item.metadata.update(
+                        {
+                            "family_id": family["family_id"],
+                            "parent_query_id": parent_query_id,
+                            "child_query_id": child["child_query_id"],
+                            "field_key": child["field_key"],
+                            "final_reconciliation_manifest_hash": manifest[
+                                "manifest_hash"
+                            ],
+                        }
+                    )
+                    items.append(item)
+                if artifact_malformed != artifact["malformed_entry_count"]:
+                    raise ValueError(f"ACM malformed accounting changed: {relative}")
+                malformed_total += artifact_malformed
+                first_record = next_record
+                last_record = first_record + len(items) - 1
+                chunks.append(
+                    ArtifactChunk(
+                        chunk_id=(
+                            f"{child['field_key']}:"
+                            f"{hashlib.sha256(relative.encode()).hexdigest()[:16]}"
+                        ),
+                        ordinal=len(chunks),
+                        first_record=first_record,
+                        last_record=last_record,
+                        relative_path=relative,
+                        artifact_hash=raw_hash,
+                        items=items,
+                        metadata={
+                            "child_query_id": child["child_query_id"],
+                            "field_key": child["field_key"],
+                            "malformed_but_identified_count": artifact_malformed,
+                            "declared_artifact_sha256": artifact["raw_sha256"],
+                        },
+                    )
+                )
+                next_record = last_record + 1
+        raw_occurrence_count = next_record - 1
+        dataset = build_artifact_review_dataset(
+            ArtifactImportPlan(
+                run_id=f"{run_id_prefix}:{family['family_id']}",
+                query_id=parent_query_id,
+                source_database=SOURCE_DATABASE,
+                query_text=query_text,
+                query_version=query_version,
+                manifest_hash=manifest["manifest_hash"],
+                started_at=min(
+                    child["execution_time_provider_observation"]["observed_at_utc"]
+                    for child in family["children"]
+                ),
+                completed_at=manifest["reconciled_at_utc"],
+                reported_total=raw_occurrence_count,
+                operator_id="UNRECORDED_OPERATOR_ID",
+                chunks=chunks,
+                identification_route=IdentificationRoute.DATABASE,
+                fields=["Title", "Author Keywords", "Abstract"],
+                filters={},
+                metadata={
+                    "workflow": "field_decomposed_selected_artifact_import",
+                    "collection_scope": "acm_publications",
+                    "sort": "publicationDate asc",
+                    "export_format": "BibTeX",
+                    "family_id": family["family_id"],
+                    "field_union_unique_stable_identity_count": family[
+                        "field_union"
+                    ]["unique_stable_identity_count"],
+                    "field_union_identity_digest_sha256": family["field_union"][
+                        "stable_identity_union_digest_sha256"
+                    ],
+                    "malformed_but_identified_count": malformed_total,
+                    "calibration_superseded_and_error_attempts_imported": False,
+                    "final_reconciliation_manifest_path": path.relative_to(
+                        root_path
+                    ).as_posix(),
+                },
+            ),
+            protocol_version=protocol_version,
+            rubric_version=rubric_version,
+            software_version=software_version,
+        )
+        if len(dataset.occurrences) != raw_occurrence_count:
+            raise ValueError("ACM selected occurrence accounting diverged")
+        if sum(
+            bool(item.metadata.get("malformed_but_identified"))
+            for item in dataset.occurrences
+        ) != malformed_total:
+            raise ValueError("ACM malformed identity accounting diverged")
+        datasets[family["family_id"]] = dataset
+    if len(datasets) != 5:
+        raise ValueError("ACM selected import must cover exactly five families")
+    return datasets
 
 
 def import_acm_bibtex_manifest(

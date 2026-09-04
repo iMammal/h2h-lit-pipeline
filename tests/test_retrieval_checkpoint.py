@@ -70,12 +70,18 @@ def test_pubmed_freezes_id_manifest_and_fetches_deterministic_batches(tmp_path):
         )
         return f"<PubmedArticleSet>{articles}</PubmedArticleSet>".encode()
 
-    dataset = _run(
-        tmp_path,
-        "PubMed",
+    dataset_http = FakeHttp(
         [FakeResponse(content=search), FakeResponse(content=fetch("1", "2")),
-         FakeResponse(content=fetch("3"))],
-        RetrievalQuerySpec("PubMed", "cells", "pubmed-v2", limit=2),
+         FakeResponse(content=fetch("3"))]
+    )
+    dataset = execute_paginated_retrieval_run(
+        run_id="run:pubmed",
+        queries=[RetrievalQuerySpec("PubMed", "cells", "pubmed-v2", limit=2)],
+        http_clients={"PubMed": dataset_http},
+        checkpoint_dir=tmp_path / "PubMed",
+        timestamp=Clock(),
+        retry_policy=RetryPolicy(max_attempts=1),
+        retry_sleep=lambda _: None,
     )
 
     assert [page.returned_item_count for page in dataset.retrieval_pages] == [0, 2, 1]
@@ -83,6 +89,7 @@ def test_pubmed_freezes_id_manifest_and_fetches_deterministic_batches(tmp_path):
     assert dataset.source_queries[0].completion_proof == "pubmed_exact_id_manifest_fetched"
     assert [item.source_identifier for item in dataset.occurrences] == ["1", "2", "3"]
     assert dataset.retrieval_runs[0].retrieval_cutoff_date == "2026-08-31"
+    assert [call["method"] for call in dataset_http.calls] == ["POST", "GET", "GET"]
 
 
 def test_europe_pmc_cursor_chain_is_complete_and_auditable(tmp_path):
@@ -480,6 +487,99 @@ def test_resume_after_committed_page_does_not_repeat_or_skip_records(tmp_path):
         "10.1/one", "10.1/two", "10.1/three"
     ]
     assert len({item.occurrence_id for item in dataset.occurrences}) == 3
+
+
+def test_request_budget_pauses_cleanly_and_resume_completes(tmp_path):
+    checkpoint = tmp_path / "budgeted"
+    spec = RetrievalQuerySpec("CrossRef", "cells", "crossref-v2", limit=2)
+    first_http = FakeHttp(
+        [
+            FakeResponse(
+                payload=_crossref_page(
+                    [
+                        _crossref_item("10.1/one", title="One"),
+                        _crossref_item("10.1/two", title="Two"),
+                    ],
+                    total=3,
+                    cursor="cursor-2",
+                )
+            )
+        ]
+    )
+    paused = execute_paginated_retrieval_run(
+        run_id="run:budgeted",
+        queries=[spec],
+        http_clients={"CrossRef": first_http},
+        checkpoint_dir=checkpoint,
+        timestamp=Clock(),
+        retry_policy=RetryPolicy(max_attempts=1),
+        request_budget=1,
+    )
+
+    assert len(first_http.calls) == 1
+    assert paused.retrieval_runs[0].completion_status is RetrievalCompletionStatus.RUNNING
+    assert paused.retrieval_runs[0].retrieval_cutoff_date is None
+    assert paused.retrieval_runs[0].metadata["pause_state"] == (
+        "REQUEST_BUDGET_EXHAUSTED"
+    )
+
+    second_http = FakeHttp(
+            [
+                FakeResponse(
+                    payload=_crossref_page(
+                        [_crossref_item("10.1/three", title="Three")], total=3
+                    )
+                )
+            ]
+    )
+    completed = execute_paginated_retrieval_run(
+        run_id="run:budgeted",
+        queries=[spec],
+        http_clients={"CrossRef": second_http},
+        checkpoint_dir=checkpoint,
+        resume=True,
+        timestamp=Clock(),
+        retry_policy=RetryPolicy(max_attempts=1),
+        request_budget=1,
+    )
+    assert completed.retrieval_runs[0].completion_status is RetrievalCompletionStatus.COMPLETE
+    assert len(completed.occurrences) == 3
+    assert len(second_http.calls) == 1
+
+
+def test_provider_quota_response_is_resumable_not_terminal_failure(tmp_path):
+    checkpoint = tmp_path / "provider-quota"
+    spec = RetrievalQuerySpec("CrossRef", "cells", "crossref-v2", limit=1)
+    paused = execute_paginated_retrieval_run(
+        run_id="run:provider-quota",
+        queries=[spec],
+        http_clients={"CrossRef": FakeHttp([FakeResponse(status_code=429)])},
+        checkpoint_dir=checkpoint,
+        timestamp=Clock(),
+        retry_policy=RetryPolicy(max_attempts=1),
+        pause_status_codes=frozenset({429}),
+    )
+    assert paused.retrieval_runs[0].metadata["pause_state"] == (
+        "PROVIDER_QUOTA_EXHAUSTED"
+    )
+    assert paused.source_queries[0].completion_status is RetrievalCompletionStatus.RUNNING
+
+    completed = execute_paginated_retrieval_run(
+        run_id="run:provider-quota",
+        queries=[spec],
+        http_clients={
+            "CrossRef": FakeHttp([FakeResponse(payload=_crossref_page([], total=0))])
+        },
+        checkpoint_dir=checkpoint,
+        resume=True,
+        timestamp=Clock(),
+        retry_policy=RetryPolicy(max_attempts=1),
+        pause_status_codes=frozenset({429}),
+    )
+    assert completed.retrieval_runs[0].completion_status is (
+        RetrievalCompletionStatus.COMPLETE
+    )
+    assert [item.attempt_number for item in completed.retrieval_attempts] == [1, 2]
 
 
 class InterruptingParser:

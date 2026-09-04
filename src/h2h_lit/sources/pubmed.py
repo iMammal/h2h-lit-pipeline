@@ -95,7 +95,7 @@ class PubMedPaginator:
             })
             if spec.credentials.get("api_key"):
                 params["api_key"] = spec.credentials["api_key"]
-            return PageRequest("GET", EUTILS + "esearch.fcgi", params=params, state=state)
+            return PageRequest("POST", EUTILS + "esearch.fcgi", params=params, state=state)
         ids = list(state["pmids"])
         index = int(state["index"])
         batch = ids[index : index + spec.limit]

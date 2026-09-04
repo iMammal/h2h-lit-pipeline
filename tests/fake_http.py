@@ -36,13 +36,19 @@ class FakeHttp:
         self.calls = []
 
     def get(self, url, **kwargs):
-        self.calls.append({"url": url, **kwargs})
+        return self._request("GET", url, **kwargs)
+
+    def post(self, url, **kwargs):
+        return self._request("POST", url, **kwargs)
+
+    def _request(self, method, url, **kwargs):
+        self.calls.append({"method": method, "url": url, **kwargs})
         if not self.responses:
             raise AssertionError(f"No fake response queued for {url}")
         response = self.responses.pop(0)
         if isinstance(response, Exception):
             raise response
         if response.request_url is None:
-            params = kwargs.get("params") or {}
+            params = kwargs.get("params") or kwargs.get("data") or {}
             response.request_url = f"{url}?{urlencode(params, doseq=True)}" if params else url
         return response

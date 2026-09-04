@@ -359,6 +359,8 @@ def execute_paginated_retrieval_run(
     retry_policy: RetryPolicy | None = None,
     rate_limiter: RateLimiter | None = None,
     retry_sleep: Callable[[float], None] = time.sleep,
+    request_budget: int | None = None,
+    pause_status_codes: frozenset[int] = frozenset(),
 ) -> ReviewDataset:
     """Execute a complete, checkpointed retrieval wave without scientific filtering."""
 
@@ -371,6 +373,8 @@ def execute_paginated_retrieval_run(
         raise ValueError("retrieval page sizes must be positive")
     if not query_plan_version.strip():
         raise ValueError("query_plan_version must not be empty")
+    if request_budget is not None and request_budget < 0:
+        raise ValueError("request budget cannot be negative")
     retry_policy = retry_policy or RetryPolicy()
     for spec in specs:
         if spec.source_database not in adapters:
@@ -485,6 +489,10 @@ def execute_paginated_retrieval_run(
         store.save_dataset(dataset)
 
     run = dataset.retrieval_runs[0]
+    run.metadata.pop("pause_state", None)
+    run.metadata.pop("pause_reason", None)
+    run.metadata.pop("session_request_count", None)
+    requests_made = 0
     limiter = rate_limiter
     if limiter is None:
         live = any(
@@ -503,6 +511,8 @@ def execute_paginated_retrieval_run(
         }:
             continue
         query.completion_status = RetrievalCompletionStatus.RUNNING
+        query.metadata.pop("pause_state", None)
+        query.metadata.pop("pause_reason", None)
         adapter = adapters[spec.source_database]
         existing_query_pages = [
             item for item in dataset.retrieval_pages if item.source_query_id == query_id
@@ -568,7 +578,25 @@ def execute_paginated_retrieval_run(
                     interrupted.ended_at = timestamp()
                     interrupted.error = "interrupted before response persistence"
 
-            while response is None and len(existing_attempts) < retry_policy.max_attempts:
+            while response is None and _ordinary_attempt_count(
+                existing_attempts
+            ) < retry_policy.max_attempts:
+                if request_budget is not None and requests_made >= request_budget:
+                    return _pause_retrieval(
+                        store,
+                        dataset,
+                        query,
+                        pause_state="REQUEST_BUDGET_EXHAUSTED",
+                        reason=(
+                            f"invocation request budget {request_budget} exhausted before "
+                            "the next provider request"
+                        ),
+                        requests_made=requests_made,
+                        timestamp=timestamp,
+                        protocol_version=protocol_version,
+                        rubric_version=rubric_version,
+                        software_version=software_version,
+                    )
                 attempt_number = len(existing_attempts) + 1
                 attempt_id = _stable_id("attempt", page.page_id, str(attempt_number))
                 rate_delay = limiter.wait(spec.source_database)
@@ -594,12 +622,25 @@ def execute_paginated_retrieval_run(
                 _touch(dataset, query, attempt.started_at)
                 _save_checkpoint(store, dataset, protocol_version, rubric_version, software_version)
                 try:
-                    raw_response = http_clients[spec.source_database].get(
-                        request.url,
-                        params=request.params,
-                        headers=request.headers or None,
-                        timeout=request.timeout,
-                    )
+                    requests_made += 1
+                    if request.method.upper() == "GET":
+                        raw_response = http_clients[spec.source_database].get(
+                            request.url,
+                            params=request.params,
+                            headers=request.headers or None,
+                            timeout=request.timeout,
+                        )
+                    elif request.method.upper() == "POST":
+                        raw_response = http_clients[spec.source_database].post(
+                            request.url,
+                            data=request.params,
+                            headers=request.headers or None,
+                            timeout=request.timeout,
+                        )
+                    else:
+                        raise ValueError(
+                            f"unsupported paginated request method {request.method!r}"
+                        )
                     relative_path, response_hash = store.save_response(attempt_id, raw_response)
                     attempt.raw_response_path = relative_path
                     attempt.raw_response_hash = response_hash
@@ -632,6 +673,25 @@ def execute_paginated_retrieval_run(
                 break
 
             attempt = existing_attempts[-1]
+            if response.status_code in pause_status_codes:
+                attempt.status = RetrievalAttemptStatus.FAILED
+                attempt.ended_at = timestamp()
+                attempt.error = (
+                    f"PROVIDER_QUOTA_EXHAUSTED_HTTP_{response.status_code}"
+                )
+                _touch(dataset, query, attempt.ended_at)
+                return _pause_retrieval(
+                    store,
+                    dataset,
+                    query,
+                    pause_state="PROVIDER_QUOTA_EXHAUSTED",
+                    reason=attempt.error,
+                    requests_made=requests_made,
+                    timestamp=timestamp,
+                    protocol_version=protocol_version,
+                    rubric_version=rubric_version,
+                    software_version=software_version,
+                )
             if not 200 <= response.status_code < 300:
                 attempt.status = RetrievalAttemptStatus.FAILED
                 attempt.ended_at = timestamp()
@@ -758,6 +818,9 @@ def execute_paginated_retrieval_run(
         run.completion_status = RetrievalCompletionStatus.COMPLETE
         run.retrieval_cutoff_date = _utc_date(completed_at)
         run.errors = []
+        run.metadata.pop("pause_state", None)
+        run.metadata.pop("pause_reason", None)
+        run.metadata["session_request_count"] = requests_made
     else:
         run.status = (
             ProcessingStatus.FAILED
@@ -777,6 +840,48 @@ def execute_paginated_retrieval_run(
             f"{item.query_id}: {error}" for item in incomplete for error in item.errors
         ] or ["retrieval wave incomplete"]
     _save_checkpoint(store, dataset, protocol_version, rubric_version, software_version)
+    dataset.validate()
+    return dataset
+
+
+def _ordinary_attempt_count(attempts: list[RetrievalAttempt]) -> int:
+    return sum(
+        not str(item.error or "").startswith("PROVIDER_QUOTA_EXHAUSTED_HTTP_")
+        for item in attempts
+    )
+
+
+def _pause_retrieval(
+    store: CheckpointStore,
+    dataset: ReviewDataset,
+    query: SourceQuery,
+    *,
+    pause_state: str,
+    reason: str,
+    requests_made: int,
+    timestamp: TimestampFactory,
+    protocol_version: str,
+    rubric_version: str,
+    software_version: str | None,
+) -> ReviewDataset:
+    paused_at = timestamp()
+    query.status = ProcessingStatus.PARTIAL
+    query.completion_status = RetrievalCompletionStatus.RUNNING
+    query.retrieval_ended_at = paused_at
+    query.metadata["pause_state"] = pause_state
+    query.metadata["pause_reason"] = reason
+    run = dataset.retrieval_runs[0]
+    run.status = ProcessingStatus.PARTIAL
+    run.completion_status = RetrievalCompletionStatus.RUNNING
+    run.retrieval_cutoff_date = None
+    run.retrieval_completed_at = paused_at
+    run.errors = [reason]
+    run.metadata["pause_state"] = pause_state
+    run.metadata["pause_reason"] = reason
+    run.metadata["session_request_count"] = requests_made
+    _save_checkpoint(
+        store, dataset, protocol_version, rubric_version, software_version
+    )
     dataset.validate()
     return dataset
 

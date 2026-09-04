@@ -6,12 +6,17 @@ import argparse
 import hashlib
 import json
 import math
-from collections.abc import Mapping
+import os
+import time
+from collections.abc import Callable, Mapping
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 from h2h_lit.acm_field_execution import load_acm_final_reconciliation_manifest
-from h2h_lit.checkpoint import atomic_write
+from h2h_lit.checkpoint import CheckpointStore, atomic_write
+from h2h_lit.http import HttpClient, RequestsHttpClient
+from h2h_lit.pagination import PageRequest, RateLimiter, RetryPolicy
 from h2h_lit.production_prerequisites import load_prerequisite_package
 from h2h_lit.production_query_plan import load_production_query_plan
 from h2h_lit.production_wave import (
@@ -30,6 +35,15 @@ from h2h_lit.production_wave import (
     preflight_production_wave,
     save_production_wave,
 )
+from h2h_lit.query_development import load_semantic_control_set
+from h2h_lit.retrieval import (
+    RetrievalQuerySpec,
+    execute_paginated_retrieval_run,
+    load_review_dataset,
+    save_review_dataset,
+)
+from h2h_lit.review import RetrievalCompletionStatus
+from h2h_lit.sources.acm_dl import import_acm_selected_reconciliation
 
 PLAN_PATH = "config/star_production_query_plan_v1.json"
 PREREQUISITE_PATH = "config/star_retrieval_prerequisites_v1.json"
@@ -45,6 +59,17 @@ PREFLIGHT_PATH = f"{OUTPUT_ROOT}/preflight.json"
 WAVE_ID = "star-external-retrieval-wave-001"
 WAVE_VERSION = "1.0.0"
 READY_STATUS = "READY_FOR_EXTERNAL_RETRIEVAL_EXECUTION"
+EXECUTION_ROOT = f"{OUTPUT_ROOT}/execution"
+EXECUTION_STATE_PATH = f"{EXECUTION_ROOT}/execution_state.json"
+IEEE_CREDENTIAL_NAME = "IEEE_XPLORE_API_KEY"
+IEEE_DAILY_REQUEST_LIMIT = 200
+IEEE_VERIFICATION_PATH = (
+    "provenance/star_ieee_xplore_verification_2026-09-04_manifest.json"
+)
+SEMANTIC_CONTROL_PATH = "config/star_query_semantic_controls_v0_3.json"
+SEMANTIC_CONTROL_GATE_PATH = (
+    f"{EXECUTION_ROOT}/SemanticScholar/control_gate/control_gate.json"
+)
 
 
 class ExternalRetrievalWaveError(ValueError):
@@ -578,10 +603,704 @@ def _pretty_json(payload: Mapping[str, Any]) -> str:
     return json.dumps(payload, sort_keys=True, indent=2, ensure_ascii=True) + "\n"
 
 
+def utc_now() -> str:
+    return datetime.now(UTC).isoformat(timespec="seconds").replace("+00:00", "Z")
+
+
+def validate_persisted_external_preflight(
+    *, root: str | Path
+) -> tuple[ProductionRetrievalWave, dict[str, Any]]:
+    """Rebuild all frozen bindings and reject any persisted preflight drift."""
+
+    root_path = Path(root).resolve()
+    wave_path = root_path / WAVE_PATH
+    preflight_path = root_path / PREFLIGHT_PATH
+    expected_wave = build_external_retrieval_wave(root=root_path)
+    expected_wave_bytes = (expected_wave.to_json() + "\n").encode("utf-8")
+    if wave_path.read_bytes() != expected_wave_bytes:
+        raise ExternalRetrievalWaveError("persisted planned wave differs from frozen inputs")
+    preflight = _load_json(preflight_path)
+    if preflight.get("status") != READY_STATUS:
+        raise ExternalRetrievalWaveError("persisted external preflight is not ready")
+    if preflight.get("wave_manifest_hash") != expected_wave.manifest_hash():
+        raise ExternalRetrievalWaveError("persisted preflight wave hash mismatch")
+    wave_ref = preflight.get("wave_file", {})
+    if (
+        wave_ref.get("path") != WAVE_PATH
+        or wave_ref.get("byte_size") != len(expected_wave_bytes)
+        or wave_ref.get("raw_sha256") != _sha256(expected_wave_bytes)
+    ):
+        raise ExternalRetrievalWaveError("persisted preflight wave-file binding mismatch")
+    regenerated = preflight_external_retrieval_wave(expected_wave, root=root_path)
+    for key in (
+        "status",
+        "wave_id",
+        "wave_manifest_hash",
+        "production_query_plan",
+        "retrieval_prerequisites",
+        "external_gate",
+        "identification_closure",
+        "query_inventory",
+        "source_query_counts",
+        "request_burden",
+        "credentials",
+        "acm_artifact_import",
+        "semantic_scholar",
+        "safeguards",
+    ):
+        if preflight.get(key) != regenerated.get(key):
+            raise ExternalRetrievalWaveError(
+                f"persisted preflight field changed: {key}"
+            )
+    return expected_wave, preflight
+
+
+def execute_external_source_session(
+    *,
+    root: str | Path,
+    source: str,
+    http: HttpClient | None,
+    resume: bool,
+    ieee_credential: str = "",
+    quota_day_utc: str | None = None,
+    timestamp: Callable[[], str] = utc_now,
+    retry_policy: RetryPolicy | None = None,
+    rate_limiter: RateLimiter | None = None,
+    retry_sleep: Callable[[float], None] = time.sleep,
+) -> dict[str, Any]:
+    """Execute or resume exactly one authorized external source component."""
+
+    root_path = Path(root).resolve()
+    wave, preflight = validate_persisted_external_preflight(root=root_path)
+    if source not in wave.required_sources:
+        raise ExternalRetrievalWaveError(f"source is not in the external wave: {source}")
+    state_path = _safe_output_path(root_path, EXECUTION_STATE_PATH)
+    state = (
+        _load_execution_state(state_path, root_path, wave, preflight)
+        if state_path.exists()
+        else _initial_execution_state(root_path, wave, preflight, timestamp())
+    )
+    source_state = state["sources"][source]
+    if source_state["status"] == "COMPLETE":
+        return state
+
+    started_at = timestamp()
+    source_state.update(
+        {
+            "status": "RUNNING",
+            "last_session_started_at_utc": started_at,
+            "last_session_completed_at_utc": None,
+            "pause_reason": None,
+            "failure_reason": None,
+        }
+    )
+    _save_execution_state(state_path, state)
+    if source == "ACMDigitalLibrary":
+        _execute_acm_import(root_path, wave, state, source_state, timestamp)
+        _finalize_execution_state(state, timestamp())
+        _save_execution_state(state_path, state)
+        return state
+    if http is None:
+        raise ExternalRetrievalWaveError(f"HTTP client is required for {source}")
+    if source == "IEEEXplore" and not ieee_credential:
+        source_state["status"] = "BLOCKED_CREDENTIAL"
+        source_state["failure_reason"] = f"{IEEE_CREDENTIAL_NAME} is absent"
+        _save_execution_state(state_path, state)
+        raise ExternalRetrievalWaveError(f"{IEEE_CREDENTIAL_NAME} is required")
+
+    if source == "SemanticScholar":
+        gate = _execute_semantic_control_gate(
+            root=root_path,
+            http=http,
+            resume=resume,
+            timestamp=timestamp,
+            retry_policy=retry_policy or RetryPolicy(),
+            rate_limiter=rate_limiter,
+            retry_sleep=retry_sleep,
+        )
+        source_state["semantic_control_gate"] = {
+            "status": gate["status"],
+            "manifest_path": SEMANTIC_CONTROL_GATE_PATH,
+            "manifest_hash": gate["manifest_hash"],
+        }
+        if gate["status"] != "PASSED":
+            source_state["status"] = "BLOCKED_SEMANTIC_CONTROL_GATE"
+            source_state["failure_reason"] = (
+                f"Semantic Scholar control gate is {gate['status']}"
+            )
+            source_state["candidate_request_count"] = 0
+            source_state["last_session_completed_at_utc"] = timestamp()
+            _save_execution_state(state_path, state)
+            return state
+
+    checkpoint_dir = _safe_output_path(
+        root_path, f"{EXECUTION_ROOT}/{source}/checkpoint"
+    )
+    checkpoint_exists = (checkpoint_dir / "review_dataset.json").exists()
+    if checkpoint_exists and not resume:
+        raise ExternalRetrievalWaveError(
+            f"{source} checkpoint exists; pass --resume to continue"
+        )
+    if resume and not checkpoint_exists:
+        raise ExternalRetrievalWaveError(
+            f"{source} has no checkpoint to resume"
+        )
+    specs = _source_query_specs(wave, source, ieee_credential=ieee_credential)
+    request_budget = None
+    quota = None
+    if source == "IEEEXplore":
+        quota_day = quota_day_utc or datetime.now(UTC).date().isoformat()
+        used = _ieee_calls_on_day(root_path, checkpoint_dir, quota_day)
+        request_budget = max(0, IEEE_DAILY_REQUEST_LIMIT - used)
+        quota = {
+            "quota_day_utc": quota_day,
+            "daily_limit": IEEE_DAILY_REQUEST_LIMIT,
+            "known_calls_before_session": used,
+            "session_request_budget": request_budget,
+        }
+
+    before_attempts = _checkpoint_attempt_count(checkpoint_dir)
+    dataset = execute_paginated_retrieval_run(
+        run_id=f"{WAVE_ID}:{source}",
+        queries=specs,
+        http_clients={source: http},
+        checkpoint_dir=checkpoint_dir,
+        resume=resume,
+        timestamp=timestamp,
+        software_version=WAVE_VERSION,
+        query_plan_version=wave.query_plan_hash,
+        retry_policy=retry_policy or RetryPolicy(),
+        rate_limiter=rate_limiter,
+        retry_sleep=retry_sleep,
+        request_budget=request_budget,
+        pause_status_codes=frozenset({429}) if source == "IEEEXplore" else frozenset(),
+    )
+    after_attempts = len(dataset.retrieval_attempts)
+    requests_this_session = after_attempts - before_attempts
+    run = dataset.retrieval_runs[0]
+    pause_state = run.metadata.get("pause_state")
+    if run.completion_status is RetrievalCompletionStatus.COMPLETE:
+        status = "COMPLETE"
+        failure_reason = None
+        pause_reason = None
+    elif pause_state == "REQUEST_BUDGET_EXHAUSTED":
+        status = "PAUSED_DAILY_QUOTA" if source == "IEEEXplore" else "PAUSED"
+        failure_reason = None
+        pause_reason = run.metadata.get("pause_reason")
+    elif pause_state == "PROVIDER_QUOTA_EXHAUSTED":
+        status = "PAUSED_PROVIDER_QUOTA"
+        failure_reason = None
+        pause_reason = run.metadata.get("pause_reason")
+    else:
+        status = "FAILED"
+        failure_reason = "; ".join(run.errors)
+        pause_reason = None
+    source_state.update(
+        {
+            "status": status,
+            "checkpoint_path": checkpoint_dir.relative_to(root_path).as_posix(),
+            "checkpoint_dataset": _file_reference(
+                checkpoint_dir / "review_dataset.json", root_path
+            ),
+            "completed_query_count": sum(
+                item.completion_status is RetrievalCompletionStatus.COMPLETE
+                for item in dataset.source_queries
+            ),
+            "total_query_count": len(dataset.source_queries),
+            "occurrence_count": len(dataset.occurrences),
+            "attempt_count": len(dataset.retrieval_attempts),
+            "requests_this_session": requests_this_session,
+            "pause_reason": pause_reason,
+            "failure_reason": failure_reason,
+            "last_session_completed_at_utc": timestamp(),
+        }
+    )
+    if quota is not None:
+        source_state["ieee_quota"] = {
+            **quota,
+            "requests_this_session": requests_this_session,
+            "known_calls_after_session": quota["known_calls_before_session"]
+            + requests_this_session,
+        }
+    _finalize_execution_state(state, timestamp())
+    _save_execution_state(state_path, state)
+    return state
+
+
+def _source_query_specs(
+    wave: ProductionRetrievalWave, source: str, *, ieee_credential: str
+) -> list[RetrievalQuerySpec]:
+    specs = []
+    for family in wave.query_families:
+        if family.source_database != source:
+            continue
+        parameters = family.native_parameters
+        limit = int(
+            parameters.get("page_size")
+            or parameters.get("pageSize")
+            or parameters.get("limit")
+            or parameters.get("max_results")
+            or parameters.get("max_records")
+        )
+        metadata = {
+            "production_query_id": family.query_family_id,
+            "frozen_request_specification_hash": parameters[
+                "frozen_request_specification_hash"
+            ],
+            "content_policy": family.content_policy,
+        }
+        fields = []
+        endpoint = None
+        if source == "EuropePMC":
+            metadata["result_type"] = parameters["resultType"]
+            endpoint = "https://www.ebi.ac.uk/europepmc/webservices/rest/search"
+        elif source == "SemanticScholar":
+            fields = str(parameters["fields"]).split(",")
+            metadata["sort"] = parameters["sort"]
+            endpoint = "https://api.semanticscholar.org/graph/v1/paper/search/bulk"
+        elif source == "arXiv":
+            endpoint = "http://export.arxiv.org/api/query"
+        elif source == "IEEEXplore":
+            metadata.update(
+                {
+                    "query_parameter": parameters["query_parameter"],
+                    "sort_field": parameters["sort_field"],
+                    "sort_order": parameters["sort_order"],
+                }
+            )
+            endpoint = "https://ieeexploreapi.ieee.org/api/v1/search/articles"
+        specs.append(
+            RetrievalQuerySpec(
+                source_database=source,
+                query_text=family.query_text,
+                query_version=family.query_version,
+                limit=limit,
+                endpoint=endpoint,
+                fields=fields,
+                metadata=metadata,
+                pagination_mode="bulk" if source == "SemanticScholar" else None,
+                credentials={"api_key": ieee_credential}
+                if source == "IEEEXplore"
+                else {},
+            )
+        )
+    if len(specs) != 5:
+        raise ExternalRetrievalWaveError(f"{source} must have exactly five queries")
+    return specs
+
+
+def _execute_acm_import(
+    root: Path,
+    wave: ProductionRetrievalWave,
+    state: dict[str, Any],
+    source_state: dict[str, Any],
+    timestamp: Callable[[], str],
+) -> None:
+    query_texts = {
+        item.query_family_id: item.query_text
+        for item in wave.query_families
+        if item.source_database == "ACMDigitalLibrary"
+    }
+    datasets = import_acm_selected_reconciliation(
+        root / ACM_RECONCILIATION_PATH,
+        root=root,
+        query_text_by_parent=query_texts,
+        query_version=wave.query_plan_version,
+        run_id_prefix=f"{WAVE_ID}:ACMDigitalLibrary",
+        software_version=WAVE_VERSION,
+    )
+    family_files = []
+    occurrence_count = 0
+    malformed_count = 0
+    for family_id, dataset in datasets.items():
+        suffix = family_id.removeprefix("STAR-").split("-", 1)[0]
+        path = _safe_output_path(
+            root, f"{EXECUTION_ROOT}/ACMDigitalLibrary/{suffix}_review_dataset.json"
+        )
+        save_review_dataset(path, dataset)
+        occurrence_count += len(dataset.occurrences)
+        malformed_count += sum(
+            bool(item.metadata.get("malformed_but_identified"))
+            for item in dataset.occurrences
+        )
+        family_files.append(
+            {
+                "family_id": family_id,
+                "dataset": _file_reference(path, root),
+                "occurrence_count": len(dataset.occurrences),
+                "canonical_identity_count": len(dataset.canonical_records),
+            }
+        )
+    if occurrence_count != 11664 or malformed_count != 3:
+        raise ExternalRetrievalWaveError("ACM production import accounting changed")
+    source_state.update(
+        {
+            "status": "COMPLETE",
+            "completed_query_count": 5,
+            "total_query_count": 5,
+            "occurrence_count": occurrence_count,
+            "malformed_but_identified_count": malformed_count,
+            "family_datasets": family_files,
+            "network_request_count": 0,
+            "last_session_completed_at_utc": timestamp(),
+        }
+    )
+    state["acm_live_search_performed"] = False
+
+
+def _execute_semantic_control_gate(
+    *,
+    root: Path,
+    http: HttpClient,
+    resume: bool,
+    timestamp: Callable[[], str],
+    retry_policy: RetryPolicy,
+    rate_limiter: RateLimiter | None,
+    retry_sleep: Callable[[float], None],
+) -> dict[str, Any]:
+    path = _safe_output_path(root, SEMANTIC_CONTROL_GATE_PATH)
+    control_path = root / SEMANTIC_CONTROL_PATH
+    controls = load_semantic_control_set(control_path)
+    if path.exists():
+        manifest = _load_json(path)
+        _validate_embedded_hash(manifest, "manifest_hash")
+        if manifest["control_set"]["raw_sha256"] != _sha256(
+            control_path.read_bytes()
+        ):
+            raise ExternalRetrievalWaveError("Semantic control binding changed")
+        if manifest["status"] in {"PASSED", "FAILED"}:
+            return manifest
+        if not resume:
+            raise ExternalRetrievalWaveError(
+                "Semantic Scholar control checkpoint exists; pass --resume"
+            )
+    else:
+        if resume:
+            raise ExternalRetrievalWaveError(
+                "Semantic Scholar control gate has no checkpoint to resume"
+            )
+        manifest = {
+            "schema_version": "1.0.0",
+            "gate": "bulk_boolean_semantics",
+            "status": "RUNNING",
+            "control_set": {
+                **_file_reference(control_path, root),
+                "canonical_hash": controls.control_set_hash(),
+            },
+            "controls": [],
+            "assertions": [assertion.to_dict() for assertion in controls.assertions],
+            "candidate_queries_executed": False,
+            "manifest_hash": None,
+        }
+    store = CheckpointStore(path.parent)
+    limiter = rate_limiter or RateLimiter()
+    observations = {item["probe_id"]: item for item in manifest["controls"]}
+    for probe in controls.probes:
+        observation = observations.get(probe.probe_id)
+        if observation and observation["status"] == "SUCCEEDED":
+            continue
+        if observation is None:
+            request = PageRequest(
+                "GET",
+                "https://api.semanticscholar.org/graph/v1/paper/search/bulk",
+                params={
+                    "query": probe.expression,
+                    "limit": 1,
+                    "fields": "paperId",
+                    "sort": "paperId:asc",
+                },
+                state={"probe_id": probe.probe_id},
+            )
+            observation = {
+                "probe_id": probe.probe_id,
+                "expression": probe.expression,
+                "expression_sha256": _sha256(probe.expression.encode("utf-8")),
+                "request": {
+                    "method": request.method,
+                    "url": request.url,
+                    "params": request.sanitized_params(),
+                },
+                "request_hash": request.request_hash(),
+                "status": "RUNNING",
+                "reported_count": None,
+                "attempts": [],
+            }
+            manifest["controls"].append(observation)
+            observations[probe.probe_id] = observation
+            _save_hashed_json(path, manifest, "manifest_hash")
+        request = PageRequest(
+            observation["request"]["method"],
+            observation["request"]["url"],
+            params=dict(observation["request"]["params"]),
+            state={"probe_id": probe.probe_id},
+        )
+        while len(observation["attempts"]) < retry_policy.max_attempts:
+            attempt_number = len(observation["attempts"]) + 1
+            attempt = {
+                "attempt_number": attempt_number,
+                "started_at_utc": timestamp(),
+                "status": "STARTED",
+                "request_hash": request.request_hash(),
+                "response": None,
+                "error": None,
+            }
+            observation["attempts"].append(attempt)
+            _save_hashed_json(path, manifest, "manifest_hash")
+            try:
+                delay = limiter.wait("SemanticScholar")
+                response = http.get(
+                    request.url,
+                    params=request.params,
+                    timeout=request.timeout,
+                )
+                attempt_id = (
+                    f"semantic-control-{probe.probe_id}-attempt-{attempt_number:03d}"
+                )
+                response_path, response_hash = store.save_response(attempt_id, response)
+                attempt["response"] = {
+                    "status": response.status_code,
+                    "path": response_path,
+                    "sha256": response_hash,
+                    "byte_size": (path.parent / response_path).stat().st_size,
+                }
+                attempt["rate_limit_delay_seconds"] = delay
+                if not 200 <= response.status_code < 300:
+                    raise ValueError(f"HTTP {response.status_code}")
+                payload = response.json()
+                if not isinstance(payload, dict) or "total" not in payload:
+                    raise ValueError("Semantic control response omitted total")
+                count = int(payload["total"])
+                if count < 0 or payload.get("error") or payload.get("errors"):
+                    raise ValueError("Semantic control response is invalid")
+                observation["reported_count"] = count
+                observation["status"] = "SUCCEEDED"
+                attempt["status"] = "SUCCEEDED"
+                attempt["completed_at_utc"] = timestamp()
+                _save_hashed_json(path, manifest, "manifest_hash")
+                break
+            except Exception as exc:  # noqa: BLE001 - persist every control failure
+                attempt["status"] = "FAILED"
+                attempt["completed_at_utc"] = timestamp()
+                attempt["error"] = f"{type(exc).__name__}: {exc}"
+                if attempt_number < retry_policy.max_attempts:
+                    delay = retry_policy.delay(attempt_number)
+                    attempt["retry_delay_seconds"] = delay
+                    _save_hashed_json(path, manifest, "manifest_hash")
+                    retry_sleep(delay)
+                else:
+                    observation["status"] = "UNRESOLVED"
+                    _save_hashed_json(path, manifest, "manifest_hash")
+
+    unresolved = [
+        item["probe_id"]
+        for item in manifest["controls"]
+        if item["status"] != "SUCCEEDED"
+    ]
+    assertion_results = []
+    failed = []
+    counts = {item["probe_id"]: item["reported_count"] for item in manifest["controls"]}
+    if not unresolved:
+        for assertion in manifest["assertions"]:
+            left = int(counts[assertion["left_probe_id"]])
+            right = int(counts[assertion["right_probe_id"]])
+            relation = assertion["relation"]
+            passed = {
+                "less_than_or_equal": left <= right,
+                "greater_than_or_equal": left >= right,
+                "equal": left == right,
+            }[relation]
+            result = {
+                **assertion,
+                "left_count": left,
+                "right_count": right,
+                "passed": passed,
+            }
+            assertion_results.append(result)
+            if not passed:
+                failed.append(assertion["assertion_id"])
+    manifest["assertion_results"] = assertion_results
+    manifest["unresolved_control_ids"] = unresolved
+    manifest["failed_assertion_ids"] = failed
+    manifest["status"] = "UNRESOLVED" if unresolved else "FAILED" if failed else "PASSED"
+    manifest["candidate_queries_executed"] = False
+    _save_hashed_json(path, manifest, "manifest_hash")
+    return manifest
+
+
+def _initial_execution_state(
+    root: Path,
+    wave: ProductionRetrievalWave,
+    preflight: dict[str, Any],
+    created_at: str,
+) -> dict[str, Any]:
+    return {
+        "schema_version": "1.0.0",
+        "execution_id": WAVE_ID,
+        "status": "RUNNING",
+        "created_at_utc": created_at,
+        "updated_at_utc": created_at,
+        "wave_manifest_hash": wave.manifest_hash(),
+        "planned_wave_raw_sha256": _sha256(
+            _safe_output_path(root, WAVE_PATH).read_bytes()
+        ),
+        "preflight_raw_sha256": _sha256(
+            _safe_output_path(root, PREFLIGHT_PATH).read_bytes()
+        ),
+        "sources": {
+            source: {
+                "status": "NOT_STARTED",
+                "completed_query_count": 0,
+                "total_query_count": 5,
+            }
+            for source in wave.required_sources
+        },
+        "external_retrieval_completed_at_utc": None,
+        "external_retrieval_cutoff_date": None,
+        "acm_live_search_performed": False,
+        "prior_survey_seed_imported": False,
+        "identification_set_closed": False,
+        "final_global_deduplication_executed": False,
+        "prisma_generated": False,
+        "screening_executed": False,
+        "corpus_modified": False,
+        "state_hash": None,
+    }
+
+
+def _load_execution_state(
+    path: Path,
+    root: Path,
+    wave: ProductionRetrievalWave,
+    preflight: dict[str, Any],
+) -> dict[str, Any]:
+    state = _load_json(path)
+    _validate_embedded_hash(state, "state_hash")
+    if (
+        state.get("wave_manifest_hash") != wave.manifest_hash()
+        or state.get("planned_wave_raw_sha256")
+        != _sha256(_safe_output_path(root, WAVE_PATH).read_bytes())
+        or state.get("preflight_raw_sha256")
+        != _sha256(_safe_output_path(root, PREFLIGHT_PATH).read_bytes())
+    ):
+        raise ExternalRetrievalWaveError("execution checkpoint frozen-wave hash mismatch")
+    return state
+
+
+def _finalize_execution_state(state: dict[str, Any], completed_at: str) -> None:
+    if all(item["status"] == "COMPLETE" for item in state["sources"].values()):
+        state["status"] = "COMPLETE"
+        state["external_retrieval_completed_at_utc"] = completed_at
+        state["external_retrieval_cutoff_date"] = completed_at[:10]
+    else:
+        state["status"] = "RUNNING"
+        state["external_retrieval_completed_at_utc"] = None
+        state["external_retrieval_cutoff_date"] = None
+
+
+def _save_execution_state(path: Path, state: dict[str, Any]) -> None:
+    state["updated_at_utc"] = max(
+        str(state.get("updated_at_utc") or ""),
+        str(
+            max(
+                (
+                    item.get("last_session_completed_at_utc")
+                    or item.get("last_session_started_at_utc")
+                    or state["created_at_utc"]
+                    for item in state["sources"].values()
+                ),
+                default=state["created_at_utc"],
+            )
+        ),
+    )
+    _save_hashed_json(path, state, "state_hash")
+
+
+def _save_hashed_json(path: Path, payload: dict[str, Any], hash_key: str) -> None:
+    material = dict(payload)
+    material.pop(hash_key, None)
+    payload[hash_key] = _hash_payload(material)
+    atomic_write(path, _pretty_json(payload).encode("utf-8"))
+
+
+def _validate_embedded_hash(payload: dict[str, Any], hash_key: str) -> None:
+    material = dict(payload)
+    claimed = material.pop(hash_key, None)
+    if claimed != _hash_payload(material):
+        raise ExternalRetrievalWaveError(f"{hash_key} mismatch")
+
+
+def _checkpoint_attempt_count(checkpoint_dir: Path) -> int:
+    path = checkpoint_dir / "review_dataset.json"
+    return len(load_review_dataset(path).retrieval_attempts) if path.is_file() else 0
+
+
+def _ieee_calls_on_day(root: Path, checkpoint_dir: Path, quota_day: str) -> int:
+    verification = _load_json(root / IEEE_VERIFICATION_PATH)
+    verification_calls = sum(
+        attempt["requested_at_utc"][:10] == quota_day
+        for request in verification["requests"]
+        for attempt in request["attempts"]
+    )
+    checkpoint_path = checkpoint_dir / "review_dataset.json"
+    retrieval_calls = 0
+    if checkpoint_path.is_file():
+        retrieval_calls = sum(
+            attempt.started_at[:10] == quota_day
+            for attempt in load_review_dataset(checkpoint_path).retrieval_attempts
+        )
+    return verification_calls + retrieval_calls
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", type=Path, default=Path("."))
+    parser.add_argument("--source", choices=list(EXTERNAL_IDENTIFICATION_SOURCES_V2))
+    parser.add_argument("--resume", action="store_true")
+    parser.add_argument("--authorize-live-external-retrieval", action="store_true")
     args = parser.parse_args(argv)
+    if args.authorize_live_external_retrieval:
+        if not args.source:
+            parser.error("--source is required for authorized execution")
+        credential = (
+            os.environ.get(IEEE_CREDENTIAL_NAME, "")
+            if args.source == "IEEEXplore"
+            else ""
+        )
+        state = execute_external_source_session(
+            root=args.root,
+            source=args.source,
+            http=None
+            if args.source == "ACMDigitalLibrary"
+            else RequestsHttpClient(),
+            resume=args.resume,
+            ieee_credential=credential,
+        )
+        source_state = state["sources"][args.source]
+        print(
+            json.dumps(
+                {
+                    "execution_status": state["status"],
+                    "source": args.source,
+                    "source_status": source_state["status"],
+                    "completed_query_count": source_state[
+                        "completed_query_count"
+                    ],
+                    "total_query_count": source_state["total_query_count"],
+                    "external_retrieval_cutoff_date": state[
+                        "external_retrieval_cutoff_date"
+                    ],
+                    "credential_value_persisted": False,
+                },
+                sort_keys=True,
+                indent=2,
+            )
+        )
+        return (
+            0
+            if source_state["status"]
+            in {"COMPLETE", "PAUSED_DAILY_QUOTA", "PAUSED_PROVIDER_QUOTA"}
+            else 2
+        )
     result = save_external_retrieval_preflight(root=args.root)
     print(
         json.dumps(

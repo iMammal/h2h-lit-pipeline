@@ -18,11 +18,15 @@ from h2h_lit.review import (
     RetrievalTransportKind,
     ReviewDataset,
 )
-from h2h_lit.sources.acm_dl import import_acm_bibtex_manifest
+from h2h_lit.sources.acm_dl import (
+    import_acm_bibtex_manifest,
+    import_acm_selected_reconciliation,
+)
 from h2h_lit.sources.prior_survey_seed import import_seed_manifest
 from tests.fake_http import FakeHttp, FakeResponse
 
 FIXTURES = Path(__file__).parent / "fixtures"
+ROOT = Path(__file__).resolve().parents[1]
 
 
 def _sha(path: Path) -> str:
@@ -333,3 +337,38 @@ def test_acm_manifest_rejects_absolute_paths_and_insufficient_provenance(tmp_pat
     manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
     with pytest.raises(ValueError, match="missing required fields"):
         import_acm_bibtex_manifest(manifest_path)
+
+
+def test_final_acm_reconciliation_imports_only_selected_evidence_and_malformed_ids():
+    plan = json.loads((ROOT / "config/star_production_query_plan_v1.json").read_text())
+    query_texts = {
+        item["query_id"]: item["query_text"]
+        for item in plan["source_queries"]
+        if item["source"] == "ACMDigitalLibrary"
+    }
+    datasets = import_acm_selected_reconciliation(
+        ROOT
+        / "provenance/star_acm_field_execution_2026-09-03_final_reconciliation_manifest.json",
+        root=ROOT,
+        query_text_by_parent=query_texts,
+        query_version="1.0.0",
+        run_id_prefix="test:acm-selected",
+    )
+
+    assert len(datasets) == 5
+    assert sum(len(item.occurrences) for item in datasets.values()) == 11664
+    assert sum(
+        occurrence.metadata.get("malformed_but_identified") is True
+        for dataset in datasets.values()
+        for occurrence in dataset.occurrences
+    ) == 3
+    assert all(
+        query.completion_status is RetrievalCompletionStatus.COMPLETE
+        for dataset in datasets.values()
+        for query in dataset.source_queries
+    )
+    assert all(
+        attempt.request_method == "IMPORT"
+        for dataset in datasets.values()
+        for attempt in dataset.retrieval_attempts
+    )
