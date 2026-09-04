@@ -4,10 +4,10 @@
     "mode": "official_metadata_api",
     "transport": "http"
   },
-  "artifact_hash": "8ff04364d84ae4d6cd20a4befc8bd05be29b57484d11c8364fcff98036ccdbb0",
+  "artifact_hash": "26c429a10d62574702c14378411ca72c752b2bdd3d622d9055cc2c3961881f88",
   "artifact_id": "star-ieee-readiness-v1",
   "artifact_version": "1.0.0",
-  "assessed_at": "2026-09-02T00:54:40Z",
+  "assessed_at": "2026-09-04T11:59:02Z",
   "content_policy": {
     "abstract_not_required_as_model_input": true,
     "abstract_text": "external_llm_use_unresolved",
@@ -16,9 +16,11 @@
     "text_provenance_separate_from_identification_provenance": true
   },
   "credential": {
-    "present": false,
+    "present": true,
+    "present_at_verification": true,
     "required_name": "IEEE_XPLORE_API_KEY",
-    "value_persisted": false
+    "value_persisted": false,
+    "verified": true
   },
   "expected_native_fields": [
     "article_number",
@@ -166,16 +168,26 @@
   ],
   "quota_access": {
     "quota": null,
-    "status": "UNVERIFIED",
-    "verification_required": true
+    "status": "VERIFIED_ACCESSIBLE_QUOTA_NOT_INFERRED",
+    "verification_required": false
   },
   "schema_version": "1.0.0",
-  "status": "BLOCKED_CREDENTIAL",
-  "verification_executed": false,
+  "status": "VERIFIED_READY_FOR_RETRIEVAL",
+  "verification_evidence": {
+    "byte_size": 22709,
+    "canonical_hash": "e101402c9d8c3e3cd259f2d63d63396c2049a00b5dffe1164f76084d76f3c68f",
+    "path": "provenance/star_ieee_xplore_verification_2026-09-04_manifest.json",
+    "raw_sha256": "1c257c66aafb338bddd6a5b108e684f119ca201af9db340e21f6824a6d42387d",
+    "version": "1.0.0"
+  },
+  "verification_executed": true,
   "verification_requests": [
     {
-      "execution_status": "NOT_EXECUTED",
+      "attempt_count": 1,
+      "execution_status": "SUCCEEDED",
       "family_id": "STAR-QF01-RELATIONAL-VIS",
+      "final_http_status": 200,
+      "provider_count": 16842,
       "query_id": "production:STAR-QF01-RELATIONAL-VIS:IEEEXplore",
       "query_text_sha256": "34e0d8334d0cfde34108bd7e38def34665c3a0ada70d74697b7864ea15880cff",
       "request": {
@@ -192,11 +204,15 @@
           "start_record": 1
         }
       },
-      "request_hash": "3ee82d9733bb0d6fc70cc2b075e22c7e8fbb58cd9a65696b4ca758e0637d4051"
+      "request_hash": "3ee82d9733bb0d6fc70cc2b075e22c7e8fbb58cd9a65696b4ca758e0637d4051",
+      "source_window_state": "RESOLVED_CLEAR"
     },
     {
-      "execution_status": "NOT_EXECUTED",
+      "attempt_count": 1,
+      "execution_status": "SUCCEEDED",
       "family_id": "STAR-QF02-ASSISTED-VIS",
+      "final_http_status": 200,
+      "provider_count": 6061,
       "query_id": "production:STAR-QF02-ASSISTED-VIS:IEEEXplore",
       "query_text_sha256": "6024c805ff3cd10c4323c30e8f358614affc25c238de5257eab9466545954023",
       "request": {
@@ -213,11 +229,15 @@
           "start_record": 1
         }
       },
-      "request_hash": "a4cd1a3ea2ddc2421ad131a96b70e6bbf69fabac02dc088ab6395c386cf41c7a"
+      "request_hash": "a4cd1a3ea2ddc2421ad131a96b70e6bbf69fabac02dc088ab6395c386cf41c7a",
+      "source_window_state": "RESOLVED_CLEAR"
     },
     {
-      "execution_status": "NOT_EXECUTED",
+      "attempt_count": 1,
+      "execution_status": "SUCCEEDED",
       "family_id": "STAR-QF03-INTERACTIVE-SYSTEMS",
+      "final_http_status": 200,
+      "provider_count": 9787,
       "query_id": "production:STAR-QF03-INTERACTIVE-SYSTEMS:IEEEXplore",
       "query_text_sha256": "f4a0f2156bf638908544c8015c4e77f2c4dabd09bf109d99f3fdcdb0d7986203",
       "request": {
@@ -234,11 +254,15 @@
           "start_record": 1
         }
       },
-      "request_hash": "b9adbbd796ffa173a7ef285727fdbdfacbf4c9a217cb3ef0921ccc74af9d11e7"
+      "request_hash": "b9adbbd796ffa173a7ef285727fdbdfacbf4c9a217cb3ef0921ccc74af9d11e7",
+      "source_window_state": "RESOLVED_CLEAR"
     },
     {
-      "execution_status": "NOT_EXECUTED",
+      "attempt_count": 1,
+      "execution_status": "SUCCEEDED",
       "family_id": "STAR-QF04-NONDESKTOP-ENV",
+      "final_http_status": 200,
+      "provider_count": 8410,
       "query_id": "production:STAR-QF04-NONDESKTOP-ENV:IEEEXplore",
       "query_text_sha256": "20648b4a5ffa36eb0c46c0b44d38705663ec65d38b263b1153bcc49c9ce1e5ef",
       "request": {
@@ -255,11 +279,15 @@
           "start_record": 1
         }
       },
-      "request_hash": "f0e3c50d19e8aafd014196d37bbdc80b7711b4eaaa2b3228bf61203e22f4897b"
+      "request_hash": "f0e3c50d19e8aafd014196d37bbdc80b7711b4eaaa2b3228bf61203e22f4897b",
+      "source_window_state": "RESOLVED_CLEAR"
     },
     {
-      "execution_status": "NOT_EXECUTED",
+      "attempt_count": 1,
+      "execution_status": "SUCCEEDED",
       "family_id": "STAR-QF05-CONVERSATIONAL",
+      "final_http_status": 200,
+      "provider_count": 4695,
       "query_id": "production:STAR-QF05-CONVERSATIONAL:IEEEXplore",
       "query_text_sha256": "ec46a190e59e13fedbfbac57493a26a4958b5fa4f7cab6d36aac3bf5f920b6cd",
       "request": {
@@ -276,7 +304,8 @@
           "start_record": 1
         }
       },
-      "request_hash": "9f34facee3dd66e06a82cd04de82d348d35929fb02744f318db7ff4f0accb4bf"
+      "request_hash": "9f34facee3dd66e06a82cd04de82d348d35929fb02744f318db7ff4f0accb4bf",
+      "source_window_state": "RESOLVED_CLEAR"
     }
   ]
 }

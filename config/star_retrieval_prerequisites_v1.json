@@ -2,11 +2,11 @@
   "artifacts": [
     {
       "artifact_id": "star-ieee-readiness-v1",
-      "byte_size": 44620,
-      "canonical_hash": "8ff04364d84ae4d6cd20a4befc8bd05be29b57484d11c8364fcff98036ccdbb0",
+      "byte_size": 45715,
+      "canonical_hash": "26c429a10d62574702c14378411ca72c752b2bdd3d622d9055cc2c3961881f88",
       "path": "config/star_retrieval_prerequisites_v1/ieee_readiness.json",
-      "raw_sha256": "4627a6e0bf96e3441f24af54e4e1d78fb006fd1e58d95934658b22cc834b04f6",
-      "status": "BLOCKED_CREDENTIAL"
+      "raw_sha256": "a8dfc16dd88f59eb8308b62dde9303b5fc738a409f232e4f9ab89225018c3d0a",
+      "status": "VERIFIED_READY_FOR_RETRIEVAL"
     },
     {
       "artifact_id": "star-acm-operator-spec-v1",
@@ -42,35 +42,26 @@
     },
     {
       "artifact_id": "star-source-window-review-v1",
-      "byte_size": 15415,
-      "canonical_hash": "91ee2ec7d772aff135d049e83ade3042b1155dd4c834ad7fd3370b0c50b71e85",
+      "byte_size": 15956,
+      "canonical_hash": "59c8bc87e573baff512c12742a0799f86503bf7279a09b35023c83701e2032d6",
       "path": "config/star_retrieval_prerequisites_v1/source_window_review.json",
-      "raw_sha256": "e85be96cb39bd996252c293f377371ac4806f4433266c8c2364aa26bdffe1718",
-      "status": "UNRESOLVED_SUPPLEMENTAL_SOURCES"
+      "raw_sha256": "fe24f219a735b7be687881053e43de0d0ebddcd3c9e1888ec2f6aa6c42b29a53",
+      "status": "RESOLVED"
     }
   ],
-  "blocking_reasons": [
-    "IEEE_XPLORE_API_KEY is absent and IEEE verification has not run",
-    "IEEEXplore final-query source-window states remain unsized"
-  ],
+  "blocking_reasons": [],
   "generated_at": "2026-09-02T00:54:40Z",
-  "overall_status": "BLOCKED_EXTERNAL_INPUT",
-  "package_hash": "e08f2bca614fa5cd75cbd418b8dc2015352d2b6a025abf70490d2008056db58a",
+  "overall_status": "EXTERNAL_RETRIEVAL_READY_IDENTIFICATION_CLOSURE_BLOCKED",
+  "package_hash": "b4c3cb617355ce6a0ffa8ecc318c01b1a15d0ead8f64f6b71f42f44bac5c1c82",
   "package_id": "h2h-star-retrieval-prerequisites",
   "package_version": "1.1.0",
   "phase4a_compatibility": {
     "crossref_identification_allowed": false,
     "external_retrieval_execution": {
-      "blocking_issues": [
-        "IEEE_BLOCKED_CREDENTIAL",
-        "SUPPLEMENTAL_SOURCE_WINDOWS_UNKNOWN"
-      ],
-      "blocking_reasons": [
-        "IEEE_XPLORE_API_KEY is absent and IEEE verification has not run",
-        "IEEEXplore final-query source-window states remain unsized"
-      ],
+      "blocking_issues": [],
+      "blocking_reasons": [],
       "nonblocking_offline_identification_source": "PriorSurveySeed",
-      "ready": false,
+      "ready": true,
       "required_identification_sources": [
         "PubMed",
         "EuropePMC",
@@ -82,7 +73,7 @@
       "required_support_sources": [
         "CrossRef"
       ],
-      "status": "BLOCKED_EXTERNAL_INPUT"
+      "status": "READY"
     },
     "identification_set_closure": {
       "all_required_seed_imports_complete": false,
@@ -137,8 +128,6 @@
     },
     "production_plan_accepted": true,
     "readiness_issues": [
-      "IEEE_BLOCKED_CREDENTIAL",
-      "SUPPLEMENTAL_SOURCE_WINDOWS_UNKNOWN",
       "PRIOR_SURVEY_SEED_MANIFESTS_UNPOPULATED",
       "PRIOR_SURVEY_SEED_IMPORTS_INCOMPLETE"
     ],
@@ -173,8 +162,8 @@
     "FP19": "UNPOPULATED_REQUIRES_CURATOR_INPUT",
     "JFR25": "POPULATED_VALIDATED_NOT_IMPORTED",
     "acm": "RETRIEVAL_EVIDENCE_COMPLETE_NOT_IMPORTED",
-    "ieee": "BLOCKED_CREDENTIAL",
-    "source_windows": "UNRESOLVED_SUPPLEMENTAL_SOURCES"
+    "ieee": "VERIFIED_READY_FOR_RETRIEVAL",
+    "source_windows": "RESOLVED"
   },
-  "updated_at": "2026-09-03T18:29:49Z"
+  "updated_at": "2026-09-04T11:59:02Z"
 }

@@ -1,9 +1,9 @@
 {
-  "artifact_hash": "91ee2ec7d772aff135d049e83ade3042b1155dd4c834ad7fd3370b0c50b71e85",
+  "artifact_hash": "59c8bc87e573baff512c12742a0799f86503bf7279a09b35023c83701e2032d6",
   "artifact_id": "star-source-window-review-v1",
   "artifact_version": "1.0.0",
   "automatic_partitioning": false,
-  "derivation": "frozen_v0_3_and_final_v0_4_sizing_plus_final_acm_retrieval_evidence",
+  "derivation": "frozen_v0_3_and_final_v0_4_sizing_plus_final_acm_retrieval_evidence_plus_ieee_verification",
   "items": [
     {
       "candidate_query_id": "candidate:STAR-QF01-RELATIONAL-VIS:unanchored:PubMed",
@@ -55,15 +55,15 @@
     },
     {
       "candidate_query_id": null,
-      "evidence_path": null,
-      "evidence_run_hash": null,
+      "evidence_path": "provenance/star_ieee_xplore_verification_2026-09-04_manifest.json",
+      "evidence_run_hash": "e101402c9d8c3e3cd259f2d63d63396c2049a00b5dffe1164f76084d76f3c68f",
       "family_id": "STAR-QF01-RELATIONAL-VIS",
       "hard_window": null,
-      "reported_count": null,
+      "reported_count": 16842,
       "source": "IEEEXplore",
-      "state": "UNKNOWN_UNSIZED",
+      "state": "RESOLVED_CLEAR",
       "variant_id": "unanchored",
-      "window_status": "unknown"
+      "window_status": "exact_total_no_declared_hard_window"
     },
     {
       "candidate_query_id": null,
@@ -127,15 +127,15 @@
     },
     {
       "candidate_query_id": null,
-      "evidence_path": null,
-      "evidence_run_hash": null,
+      "evidence_path": "provenance/star_ieee_xplore_verification_2026-09-04_manifest.json",
+      "evidence_run_hash": "e101402c9d8c3e3cd259f2d63d63396c2049a00b5dffe1164f76084d76f3c68f",
       "family_id": "STAR-QF02-ASSISTED-VIS",
       "hard_window": null,
-      "reported_count": null,
+      "reported_count": 6061,
       "source": "IEEEXplore",
-      "state": "UNKNOWN_UNSIZED",
+      "state": "RESOLVED_CLEAR",
       "variant_id": "E",
-      "window_status": "unknown"
+      "window_status": "exact_total_no_declared_hard_window"
     },
     {
       "candidate_query_id": null,
@@ -199,15 +199,15 @@
     },
     {
       "candidate_query_id": null,
-      "evidence_path": null,
-      "evidence_run_hash": null,
+      "evidence_path": "provenance/star_ieee_xplore_verification_2026-09-04_manifest.json",
+      "evidence_run_hash": "e101402c9d8c3e3cd259f2d63d63396c2049a00b5dffe1164f76084d76f3c68f",
       "family_id": "STAR-QF03-INTERACTIVE-SYSTEMS",
       "hard_window": null,
-      "reported_count": null,
+      "reported_count": 9787,
       "source": "IEEEXplore",
-      "state": "UNKNOWN_UNSIZED",
+      "state": "RESOLVED_CLEAR",
       "variant_id": "revised",
-      "window_status": "unknown"
+      "window_status": "exact_total_no_declared_hard_window"
     },
     {
       "candidate_query_id": null,
@@ -271,15 +271,15 @@
     },
     {
       "candidate_query_id": null,
-      "evidence_path": null,
-      "evidence_run_hash": null,
+      "evidence_path": "provenance/star_ieee_xplore_verification_2026-09-04_manifest.json",
+      "evidence_run_hash": "e101402c9d8c3e3cd259f2d63d63396c2049a00b5dffe1164f76084d76f3c68f",
       "family_id": "STAR-QF04-NONDESKTOP-ENV",
       "hard_window": null,
-      "reported_count": null,
+      "reported_count": 8410,
       "source": "IEEEXplore",
-      "state": "UNKNOWN_UNSIZED",
+      "state": "RESOLVED_CLEAR",
       "variant_id": "default",
-      "window_status": "unknown"
+      "window_status": "exact_total_no_declared_hard_window"
     },
     {
       "candidate_query_id": null,
@@ -343,15 +343,15 @@
     },
     {
       "candidate_query_id": null,
-      "evidence_path": null,
-      "evidence_run_hash": null,
+      "evidence_path": "provenance/star_ieee_xplore_verification_2026-09-04_manifest.json",
+      "evidence_run_hash": "e101402c9d8c3e3cd259f2d63d63396c2049a00b5dffe1164f76084d76f3c68f",
       "family_id": "STAR-QF05-CONVERSATIONAL",
       "hard_window": null,
-      "reported_count": null,
+      "reported_count": 4695,
       "source": "IEEEXplore",
-      "state": "UNKNOWN_UNSIZED",
+      "state": "RESOLVED_CLEAR",
       "variant_id": "default",
-      "window_status": "unknown"
+      "window_status": "exact_total_no_declared_hard_window"
     },
     {
       "candidate_query_id": null,
@@ -368,12 +368,6 @@
   ],
   "known_overflows": [],
   "schema_version": "1.0.0",
-  "status": "UNRESOLVED_SUPPLEMENTAL_SOURCES",
-  "unresolved_items": [
-    "STAR-QF01-RELATIONAL-VIS:IEEEXplore",
-    "STAR-QF02-ASSISTED-VIS:IEEEXplore",
-    "STAR-QF03-INTERACTIVE-SYSTEMS:IEEEXplore",
-    "STAR-QF04-NONDESKTOP-ENV:IEEEXplore",
-    "STAR-QF05-CONVERSATIONAL:IEEEXplore"
-  ]
+  "status": "RESOLVED",
+  "unresolved_items": []
 }

@@ -1,0 +1,290 @@
+{
+  "api": {
+    "endpoint": "https://ieeexploreapi.ieee.org/api/v1/search/articles",
+    "transport": "official_metadata_api_https"
+  },
+  "completed_at_utc": "2026-09-04T11:59:02Z",
+  "credential": {
+    "present_at_execution": true,
+    "required_name": "IEEE_XPLORE_API_KEY",
+    "value_persisted": false,
+    "verified": true
+  },
+  "downstream_side_effects": [],
+  "input_ieee_readiness": {
+    "byte_size": 44620,
+    "canonical_hash": "8ff04364d84ae4d6cd20a4befc8bd05be29b57484d11c8364fcff98036ccdbb0",
+    "path": "config/star_retrieval_prerequisites_v1/ieee_readiness.json",
+    "raw_sha256": "4627a6e0bf96e3441f24af54e4e1d78fb006fd1e58d95934658b22cc834b04f6",
+    "version": "1.0.0"
+  },
+  "manifest_hash": "e101402c9d8c3e3cd259f2d63d63396c2049a00b5dffe1164f76084d76f3c68f",
+  "manifest_id": "star-ieee-xplore-verification-2026-09-04",
+  "manifest_version": "1.0.0",
+  "production_query_plan": {
+    "byte_size": 205457,
+    "canonical_hash": "856ef04518bc26941275cf6b60a793814fe18ff6b0b80dd24571252a7161e091",
+    "path": "config/star_production_query_plan_v1.json",
+    "raw_sha256": "b887d638e42f4909c1c8461dde733d758e5176d528ddccee4370211e14ed7451",
+    "version": "1.0.0"
+  },
+  "production_retrieval_started": false,
+  "production_retrieval_wave_instantiated": false,
+  "request_policy": {
+    "frozen_request_count": 5,
+    "max_records_per_request": 1,
+    "maximum_attempts_per_request": 2,
+    "maximum_http_attempts": 10,
+    "pagination_performed": false,
+    "production_retrieval_performed": false
+  },
+  "requests": [
+    {
+      "attempts": [
+        {
+          "attempt_number": 1,
+          "failure_reason": null,
+          "http_status": 200,
+          "outcome": "SUCCEEDED",
+          "requested_at_utc": "2026-09-04T11:58:40Z",
+          "responded_at_utc": "2026-09-04T11:58:50Z",
+          "response_artifact": {
+            "byte_size": 4416,
+            "path": "artifacts/ieee_verification/star-ieee-verification-001/responses/QF01_attempt_001.json",
+            "raw_sha256": "258ca587bee64bdfe87f656efb0d4b6e04e65c275975bb8fdefea3e354b8f46c"
+          }
+        }
+      ],
+      "credential_reference": "IEEE_XPLORE_API_KEY",
+      "credential_value_persisted": false,
+      "endpoint": "https://ieeexploreapi.ieee.org/api/v1/search/articles",
+      "execution_status": "SUCCEEDED",
+      "family_id": "STAR-QF01-RELATIONAL-VIS",
+      "final_http_status": 200,
+      "frozen_params": {
+        "format": "json",
+        "max_records": 1,
+        "query_parameter": "querytext",
+        "querytext": "((\"life science\" OR \"life sciences\" OR biology OR biological OR biomedical OR bioinformatics OR \"systems biology\" OR genomics OR transcriptomics OR proteomics OR metabolomics OR epigenomics OR omics OR \"single cell\" OR \"single-cell\" OR \"spatial transcriptomics\" OR connectomics OR neuroscience OR pathology OR microscopy OR ecology OR ecological OR \"marine science\") OR (clinical OR medical OR health OR tissue OR cellular OR molecular OR imaging)) AND ((\"visual analytics\" OR \"interactive visualization\" OR \"interactive visualisation\" OR \"visual exploration\" OR \"visual analysis\" OR \"exploratory visualization\" OR \"exploratory visualisation\") OR ((\"data visualization\" OR \"data visualisation\" OR \"information visualization\" OR \"information visualisation\" OR \"scientific visualization\" OR \"scientific visualisation\" OR visualization OR visualisation OR \"graphical display\") AND (interactive OR exploratory OR \"user-guided\" OR \"user-steered\" OR \"human-in-the-loop\" OR brushing OR filtering OR \"linked views\" OR \"coordinated views\"))) AND ((\"biological network\" OR \"molecular network\" OR \"protein-protein interaction\" OR interactome OR connectome OR \"gene regulatory network\" OR pathway OR \"cell-cell communication\" OR lineage OR multiscale OR \"multi-scale\" OR hierarchy OR hierarchical OR \"node-link\" OR \"adjacency matrix\") OR (network OR graph OR relational OR relationship OR relationships OR connectivity OR topology OR neighborhood OR neighbourhood OR trajectory OR similarity OR spatial OR temporal OR multivariate OR \"image-derived\"))",
+        "sort_field": "article_number",
+        "sort_order": "asc",
+        "start_record": 1
+      },
+      "method": "GET",
+      "provider_count": 16842,
+      "provider_errors": [],
+      "provider_total_field": "total_records",
+      "provider_totalsearched": 7400792,
+      "provider_warnings": [],
+      "query_id": "production:STAR-QF01-RELATIONAL-VIS:IEEEXplore",
+      "query_text_sha256": "34e0d8334d0cfde34108bd7e38def34665c3a0ada70d74697b7864ea15880cff",
+      "request_hash": "3ee82d9733bb0d6fc70cc2b075e22c7e8fbb58cd9a65696b4ca758e0637d4051",
+      "request_id": "verify:production:STAR-QF01-RELATIONAL-VIS:IEEEXplore",
+      "source_window": {
+        "hard_window": null,
+        "partitioning_invented": false,
+        "state": "RESOLVED_CLEAR",
+        "status": "exact_total_no_declared_hard_window"
+      }
+    },
+    {
+      "attempts": [
+        {
+          "attempt_number": 1,
+          "failure_reason": null,
+          "http_status": 200,
+          "outcome": "SUCCEEDED",
+          "requested_at_utc": "2026-09-04T11:58:50Z",
+          "responded_at_utc": "2026-09-04T11:58:59Z",
+          "response_artifact": {
+            "byte_size": 6508,
+            "path": "artifacts/ieee_verification/star-ieee-verification-001/responses/QF02_attempt_001.json",
+            "raw_sha256": "85ba835bc11bbb87a8ceffcbb38dc03b41f816327e36328d7c5c9fe33bc096fa"
+          }
+        }
+      ],
+      "credential_reference": "IEEE_XPLORE_API_KEY",
+      "credential_value_persisted": false,
+      "endpoint": "https://ieeexploreapi.ieee.org/api/v1/search/articles",
+      "execution_status": "SUCCEEDED",
+      "family_id": "STAR-QF02-ASSISTED-VIS",
+      "final_http_status": 200,
+      "frozen_params": {
+        "format": "json",
+        "max_records": 1,
+        "query_parameter": "querytext",
+        "querytext": "((\"life science\" OR \"life sciences\" OR biology OR biological OR biomedical OR bioinformatics OR \"systems biology\" OR genomics OR transcriptomics OR proteomics OR metabolomics OR epigenomics OR omics OR \"single cell\" OR \"single-cell\" OR \"spatial transcriptomics\" OR connectomics OR neuroscience OR pathology OR microscopy OR ecology OR ecological OR \"marine science\") OR (clinical OR medical OR health OR tissue OR cellular OR molecular OR imaging)) AND (((\"visual analytics\" OR \"interactive visualization\" OR \"interactive visualisation\" OR \"visual exploration\" OR \"visual analysis\" OR \"exploratory visualization\" OR \"exploratory visualisation\") OR ((\"data visualization\" OR \"data visualisation\" OR \"information visualization\" OR \"information visualisation\" OR \"scientific visualization\" OR \"scientific visualisation\" OR visualization OR visualisation OR \"graphical display\") AND (interactive OR exploratory OR \"user-guided\" OR \"user-steered\" OR \"human-in-the-loop\" OR brushing OR filtering OR \"linked views\" OR \"coordinated views\"))) OR ((\"interactive system\" OR \"interactive tool\" OR \"interactive platform\" OR \"visual interface\" OR \"analytic interface\" OR \"analysis workbench\" OR \"exploration tool\" OR \"exploratory tool\" OR \"visualization system\" OR \"visualisation system\" OR \"visualization tool\" OR \"visualisation tool\" OR \"interactive dashboard\") OR ((tool OR system OR platform OR interface OR explorer OR workbench OR dashboard) AND (interactive OR exploratory OR \"user-guided\" OR \"user-steered\" OR \"human-in-the-loop\" OR brushing OR filtering OR \"linked views\" OR \"coordinated views\")))) AND ((\"mixed initiative\" OR \"mixed-initiative\" OR \"visual analytics guidance\" OR \"guided visual analytics\" OR \"visualization recommendation\" OR \"visualisation recommendation\" OR \"view recommendation\" OR \"interaction recommendation\" OR \"adaptive visualization\" OR \"adaptive visualisation\" OR \"adaptive interface\" OR \"user model\" OR \"user modeling\" OR \"user modelling\" OR \"personalized visualization\" OR \"personalised visualisation\" OR \"proactive visual analytics\" OR \"human-in-the-loop analytics\" OR \"natural language interface\" OR \"conversational interface\" OR \"large language model\" OR LLM OR \"visualization agent\" OR \"visual analytics agent\") OR ((\"machine learning\" OR \"artificial intelligence\" OR clustering OR \"dimensionality reduction\" OR aggregation OR layout OR ranking OR recommendation OR prediction OR classification OR annotation OR segmentation OR \"feature extraction\" OR automatic OR automated) AND (\"visual analytics\" OR \"interactive visualization\" OR \"interactive visualisation\" OR \"interactive system\" OR \"interactive tool\" OR \"visualization system\" OR \"visualisation system\" OR \"visual interface\" OR \"analytic interface\" OR \"user-guided\" OR \"user-steered\" OR \"human-in-the-loop\" OR \"mixed initiative\" OR \"mixed-initiative\")))",
+        "sort_field": "article_number",
+        "sort_order": "asc",
+        "start_record": 1
+      },
+      "method": "GET",
+      "provider_count": 6061,
+      "provider_errors": [],
+      "provider_total_field": "total_records",
+      "provider_totalsearched": 7400792,
+      "provider_warnings": [],
+      "query_id": "production:STAR-QF02-ASSISTED-VIS:IEEEXplore",
+      "query_text_sha256": "6024c805ff3cd10c4323c30e8f358614affc25c238de5257eab9466545954023",
+      "request_hash": "a4cd1a3ea2ddc2421ad131a96b70e6bbf69fabac02dc088ab6395c386cf41c7a",
+      "request_id": "verify:production:STAR-QF02-ASSISTED-VIS:IEEEXplore",
+      "source_window": {
+        "hard_window": null,
+        "partitioning_invented": false,
+        "state": "RESOLVED_CLEAR",
+        "status": "exact_total_no_declared_hard_window"
+      }
+    },
+    {
+      "attempts": [
+        {
+          "attempt_number": 1,
+          "failure_reason": null,
+          "http_status": 200,
+          "outcome": "SUCCEEDED",
+          "requested_at_utc": "2026-09-04T11:58:59Z",
+          "responded_at_utc": "2026-09-04T11:58:59Z",
+          "response_artifact": {
+            "byte_size": 4565,
+            "path": "artifacts/ieee_verification/star-ieee-verification-001/responses/QF03_attempt_001.json",
+            "raw_sha256": "be4140803bdbfb0fff857ff8abc9033364ef3ae492e9ac21c7419bd1b5185017"
+          }
+        }
+      ],
+      "credential_reference": "IEEE_XPLORE_API_KEY",
+      "credential_value_persisted": false,
+      "endpoint": "https://ieeexploreapi.ieee.org/api/v1/search/articles",
+      "execution_status": "SUCCEEDED",
+      "family_id": "STAR-QF03-INTERACTIVE-SYSTEMS",
+      "final_http_status": 200,
+      "frozen_params": {
+        "format": "json",
+        "max_records": 1,
+        "query_parameter": "querytext",
+        "querytext": "((\"life science\" OR \"life sciences\" OR biology OR biological OR biomedical OR bioinformatics OR \"systems biology\" OR genomics OR transcriptomics OR proteomics OR metabolomics OR epigenomics OR omics OR \"single cell\" OR \"single-cell\" OR \"spatial transcriptomics\" OR connectomics OR neuroscience OR pathology OR microscopy OR ecology OR ecological OR \"marine science\") OR (clinical OR medical OR health OR tissue OR cellular OR molecular OR imaging)) AND (((\"interactive system\" OR \"interactive tool\" OR \"interactive platform\" OR \"visual interface\" OR \"analytic interface\" OR \"analysis workbench\" OR \"exploration tool\" OR \"exploratory tool\" OR \"visualization system\" OR \"visualisation system\" OR \"visualization tool\" OR \"visualisation tool\" OR \"interactive dashboard\") OR ((tool OR system OR platform OR interface OR explorer OR workbench OR dashboard) AND (interactive OR exploratory OR \"user-guided\" OR \"user-steered\" OR \"human-in-the-loop\" OR brushing OR filtering OR \"linked views\" OR \"coordinated views\"))) OR (\"visual analytics\" OR \"interactive visualization\" OR \"interactive visualisation\" OR \"visual exploration\" OR \"visual analysis\" OR \"exploratory visualization\" OR \"exploratory visualisation\")) AND ((\"biological network\" OR \"molecular network\" OR \"protein-protein interaction\" OR interactome OR connectome OR \"gene regulatory network\" OR pathway OR \"cell-cell communication\" OR lineage OR multiscale OR \"multi-scale\" OR hierarchy OR hierarchical OR \"node-link\" OR \"adjacency matrix\") OR ((network OR graph OR relational OR relationship OR relationships OR connectivity OR topology OR neighborhood OR neighbourhood OR trajectory OR similarity OR spatial OR temporal OR multivariate OR \"image-derived\") AND (\"relational data\" OR \"data relationships\" OR \"derived relationship\" OR \"spatial organization\" OR \"spatial relationship\" OR \"temporal relationship\" OR \"multivariate relationship\" OR \"multiscale structure\" OR \"neighborhood analysis\" OR \"neighbourhood analysis\" OR \"trajectory analysis\" OR \"similarity analysis\" OR \"connectivity analysis\" OR \"topological analysis\")))",
+        "sort_field": "article_number",
+        "sort_order": "asc",
+        "start_record": 1
+      },
+      "method": "GET",
+      "provider_count": 9787,
+      "provider_errors": [],
+      "provider_total_field": "total_records",
+      "provider_totalsearched": 7400792,
+      "provider_warnings": [],
+      "query_id": "production:STAR-QF03-INTERACTIVE-SYSTEMS:IEEEXplore",
+      "query_text_sha256": "f4a0f2156bf638908544c8015c4e77f2c4dabd09bf109d99f3fdcdb0d7986203",
+      "request_hash": "b9adbbd796ffa173a7ef285727fdbdfacbf4c9a217cb3ef0921ccc74af9d11e7",
+      "request_id": "verify:production:STAR-QF03-INTERACTIVE-SYSTEMS:IEEEXplore",
+      "source_window": {
+        "hard_window": null,
+        "partitioning_invented": false,
+        "state": "RESOLVED_CLEAR",
+        "status": "exact_total_no_declared_hard_window"
+      }
+    },
+    {
+      "attempts": [
+        {
+          "attempt_number": 1,
+          "failure_reason": null,
+          "http_status": 200,
+          "outcome": "SUCCEEDED",
+          "requested_at_utc": "2026-09-04T11:58:59Z",
+          "responded_at_utc": "2026-09-04T11:59:01Z",
+          "response_artifact": {
+            "byte_size": 6610,
+            "path": "artifacts/ieee_verification/star-ieee-verification-001/responses/QF04_attempt_001.json",
+            "raw_sha256": "cadf3e37db9c464b5e96f192a6e4efe434a5d0126a404c63ee6374d426517222"
+          }
+        }
+      ],
+      "credential_reference": "IEEE_XPLORE_API_KEY",
+      "credential_value_persisted": false,
+      "endpoint": "https://ieeexploreapi.ieee.org/api/v1/search/articles",
+      "execution_status": "SUCCEEDED",
+      "family_id": "STAR-QF04-NONDESKTOP-ENV",
+      "final_http_status": 200,
+      "frozen_params": {
+        "format": "json",
+        "max_records": 1,
+        "query_parameter": "querytext",
+        "querytext": "((\"life science\" OR \"life sciences\" OR biology OR biological OR biomedical OR bioinformatics OR \"systems biology\" OR genomics OR transcriptomics OR proteomics OR metabolomics OR epigenomics OR omics OR \"single cell\" OR \"single-cell\" OR \"spatial transcriptomics\" OR connectomics OR neuroscience OR pathology OR microscopy OR ecology OR ecological OR \"marine science\") OR (clinical OR medical OR health OR tissue OR cellular OR molecular OR imaging)) AND ((\"virtual reality\" OR \"augmented reality\" OR \"mixed reality\" OR \"extended reality\" OR \"immersive analytics\" OR \"immersive visualization\" OR \"immersive visualisation\" OR \"head-mounted display\" OR HMD OR HoloLens OR \"large display\" OR \"display wall\" OR \"tiled display\" OR powerwall OR \"CAVE automatic virtual environment\") OR ((CAVE OR VR OR stereoscopic OR \"virtual environment\" OR \"immersive environment\" OR \"spatial computing\" OR \"room scale\" OR \"projection-based\") AND (environment OR display OR visualization OR visualisation OR analytics))) AND (((\"visual analytics\" OR \"interactive visualization\" OR \"interactive visualisation\" OR \"visual exploration\" OR \"visual analysis\" OR \"exploratory visualization\" OR \"exploratory visualisation\") OR ((\"data visualization\" OR \"data visualisation\" OR \"information visualization\" OR \"information visualisation\" OR \"scientific visualization\" OR \"scientific visualisation\" OR visualization OR visualisation OR \"graphical display\") AND (interactive OR exploratory OR \"user-guided\" OR \"user-steered\" OR \"human-in-the-loop\" OR brushing OR filtering OR \"linked views\" OR \"coordinated views\"))) OR ((\"interactive system\" OR \"interactive tool\" OR \"interactive platform\" OR \"visual interface\" OR \"analytic interface\" OR \"analysis workbench\" OR \"exploration tool\" OR \"exploratory tool\" OR \"visualization system\" OR \"visualisation system\" OR \"visualization tool\" OR \"visualisation tool\" OR \"interactive dashboard\") OR ((tool OR system OR platform OR interface OR explorer OR workbench OR dashboard) AND (interactive OR exploratory OR \"user-guided\" OR \"user-steered\" OR \"human-in-the-loop\" OR brushing OR filtering OR \"linked views\" OR \"coordinated views\"))) OR \"interactive analysis\" OR \"data exploration\")",
+        "sort_field": "article_number",
+        "sort_order": "asc",
+        "start_record": 1
+      },
+      "method": "GET",
+      "provider_count": 8410,
+      "provider_errors": [],
+      "provider_total_field": "total_records",
+      "provider_totalsearched": 7400792,
+      "provider_warnings": [],
+      "query_id": "production:STAR-QF04-NONDESKTOP-ENV:IEEEXplore",
+      "query_text_sha256": "20648b4a5ffa36eb0c46c0b44d38705663ec65d38b263b1153bcc49c9ce1e5ef",
+      "request_hash": "f0e3c50d19e8aafd014196d37bbdc80b7711b4eaaa2b3228bf61203e22f4897b",
+      "request_id": "verify:production:STAR-QF04-NONDESKTOP-ENV:IEEEXplore",
+      "source_window": {
+        "hard_window": null,
+        "partitioning_invented": false,
+        "state": "RESOLVED_CLEAR",
+        "status": "exact_total_no_declared_hard_window"
+      }
+    },
+    {
+      "attempts": [
+        {
+          "attempt_number": 1,
+          "failure_reason": null,
+          "http_status": 200,
+          "outcome": "SUCCEEDED",
+          "requested_at_utc": "2026-09-04T11:59:01Z",
+          "responded_at_utc": "2026-09-04T11:59:02Z",
+          "response_artifact": {
+            "byte_size": 5909,
+            "path": "artifacts/ieee_verification/star-ieee-verification-001/responses/QF05_attempt_001.json",
+            "raw_sha256": "84fd518058b294b2be85ee518b0ce7900a04f84602f383e82e3c2676e32aec17"
+          }
+        }
+      ],
+      "credential_reference": "IEEE_XPLORE_API_KEY",
+      "credential_value_persisted": false,
+      "endpoint": "https://ieeexploreapi.ieee.org/api/v1/search/articles",
+      "execution_status": "SUCCEEDED",
+      "family_id": "STAR-QF05-CONVERSATIONAL",
+      "final_http_status": 200,
+      "frozen_params": {
+        "format": "json",
+        "max_records": 1,
+        "query_parameter": "querytext",
+        "querytext": "((\"life science\" OR \"life sciences\" OR biology OR biological OR biomedical OR bioinformatics OR \"systems biology\" OR genomics OR transcriptomics OR proteomics OR metabolomics OR epigenomics OR omics OR \"single cell\" OR \"single-cell\" OR \"spatial transcriptomics\" OR connectomics OR neuroscience OR pathology OR microscopy OR ecology OR ecological OR \"marine science\") OR (clinical OR medical OR health OR tissue OR cellular OR molecular OR imaging)) AND ((\"natural language interface\" OR \"natural-language interface\" OR \"conversational interface\" OR \"conversational visual analytics\" OR \"dialogue-based interface\" OR \"dialog-based interface\" OR chatbot OR \"large language model\" OR LLM OR \"visualization agent\" OR \"visual analytics agent\" OR \"analytics agent\" OR \"analytic copilot\") OR ((conversational OR dialogue OR dialog OR \"natural language\" OR \"question answering\" OR \"voice interface\" OR \"speech interface\" OR agentic OR copilot OR \"AI agent\") AND (interface OR query OR dialogue OR dialog OR explanation OR recommendation OR visualization OR visualisation OR analysis OR analytics))) AND (((\"visual analytics\" OR \"interactive visualization\" OR \"interactive visualisation\" OR \"visual exploration\" OR \"visual analysis\" OR \"exploratory visualization\" OR \"exploratory visualisation\") OR ((\"data visualization\" OR \"data visualisation\" OR \"information visualization\" OR \"information visualisation\" OR \"scientific visualization\" OR \"scientific visualisation\" OR visualization OR visualisation OR \"graphical display\") AND (interactive OR exploratory OR \"user-guided\" OR \"user-steered\" OR \"human-in-the-loop\" OR brushing OR filtering OR \"linked views\" OR \"coordinated views\"))) OR ((\"interactive system\" OR \"interactive tool\" OR \"interactive platform\" OR \"visual interface\" OR \"analytic interface\" OR \"analysis workbench\" OR \"exploration tool\" OR \"exploratory tool\" OR \"visualization system\" OR \"visualisation system\" OR \"visualization tool\" OR \"visualisation tool\" OR \"interactive dashboard\") OR ((tool OR system OR platform OR interface OR explorer OR workbench OR dashboard) AND (interactive OR exploratory OR \"user-guided\" OR \"user-steered\" OR \"human-in-the-loop\" OR brushing OR filtering OR \"linked views\" OR \"coordinated views\"))) OR \"data analysis\" OR \"data exploration\" OR \"analytic query\" OR \"visualization query\")",
+        "sort_field": "article_number",
+        "sort_order": "asc",
+        "start_record": 1
+      },
+      "method": "GET",
+      "provider_count": 4695,
+      "provider_errors": [],
+      "provider_total_field": "total_records",
+      "provider_totalsearched": 7400792,
+      "provider_warnings": [],
+      "query_id": "production:STAR-QF05-CONVERSATIONAL:IEEEXplore",
+      "query_text_sha256": "ec46a190e59e13fedbfbac57493a26a4958b5fa4f7cab6d36aac3bf5f920b6cd",
+      "request_hash": "9f34facee3dd66e06a82cd04de82d348d35929fb02744f318db7ff4f0accb4bf",
+      "request_id": "verify:production:STAR-QF05-CONVERSATIONAL:IEEEXplore",
+      "source_window": {
+        "hard_window": null,
+        "partitioning_invented": false,
+        "state": "RESOLVED_CLEAR",
+        "status": "exact_total_no_declared_hard_window"
+      }
+    }
+  ],
+  "retrieval_cutoff_established": false,
+  "run_id": "star-ieee-verification-001",
+  "schema_version": "1.0.0",
+  "source_window_rule": "compare_exact_provider_count_to_frozen_declared_hard_window; no_declared_hard_window_is_resolved_without_inventing_a_limit",
+  "source_window_state": "RESOLVED_CLEAR",
+  "started_at_utc": "2026-09-04T11:58:40Z",
+  "status": "VERIFIED_READY_FOR_RETRIEVAL"
+}
