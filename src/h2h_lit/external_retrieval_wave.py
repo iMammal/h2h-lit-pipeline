@@ -40,6 +40,7 @@ from h2h_lit.query_development import load_semantic_control_set
 from h2h_lit.retrieval import (
     PAGINATED_SOURCE_ADAPTERS,
     RetrievalQuerySpec,
+    _query_plan_hash,
     execute_paginated_retrieval_run,
     load_review_dataset,
     save_review_dataset,
@@ -75,6 +76,16 @@ EXECUTION_ROOT = f"{OUTPUT_ROOT}/execution"
 EXECUTION_STATE_PATH = f"{EXECUTION_ROOT}/execution_state.json"
 IEEE_CREDENTIAL_NAME = "IEEE_XPLORE_API_KEY"
 IEEE_DAILY_REQUEST_LIMIT = 200
+IEEE_TOTAL_DRIFT_RECOVERY_STATUS = "PROVIDER_TOTAL_DRIFT_RECOVERY_READY_TO_RESUME"
+IEEE_TOTAL_DRIFT_ERROR_PREFIX = "source exact total changed during pagination: "
+IEEE_TOTAL_DRIFT_EXPECTED = (
+    (16842, 16841, 6, 1199, 1200),
+    (6061, 6060, 2, 399, 400),
+    (9787, 9786, 2, 399, 400),
+    (8410, 8409, 11, 2199, 2200),
+    (4695, 4694, 2, 399, 400),
+)
+IEEE_TOTAL_DRIFT_EXPECTED_ATTEMPTS = 23
 IEEE_VERIFICATION_PATH = (
     "provenance/star_ieee_xplore_verification_2026-09-04_manifest.json"
 )
@@ -1212,6 +1223,182 @@ def authorize_europe_pmc_terminal_recovery(
     return state
 
 
+def authorize_ieee_total_drift_recovery(
+    *,
+    root: str | Path,
+    timestamp: Callable[[], str] = utc_now,
+) -> dict[str, Any]:
+    """Rebuild failed IEEE pagination as a mutable-total resumable lineage."""
+
+    root_path = Path(root).resolve()
+    wave, preflight = validate_persisted_external_preflight(root=root_path)
+    state_path = _safe_output_path(root_path, EXECUTION_STATE_PATH)
+    if not state_path.is_file():
+        raise ExternalRetrievalWaveError("external execution state does not exist")
+    state = _load_execution_state(state_path, root_path, wave, preflight)
+    source_state = state["sources"]["IEEEXplore"]
+    if source_state["status"] == IEEE_TOTAL_DRIFT_RECOVERY_STATUS:
+        _validate_authorized_ieee_total_drift_recovery(source_state, root_path)
+        return state
+    if source_state["status"] != "FAILED":
+        raise ExternalRetrievalWaveError(
+            "IEEE total-drift recovery requires a terminal FAILED component"
+        )
+    if state["external_retrieval_cutoff_date"] is not None:
+        raise ExternalRetrievalWaveError(
+            "IEEE total-drift recovery cannot alter a closed external retrieval wave"
+        )
+    if source_state.get("execution_episodes"):
+        raise ExternalRetrievalWaveError(
+            "IEEE total-drift recovery requires the original failed lineage"
+        )
+
+    checkpoint_reference = source_state.get("checkpoint_dataset")
+    if not checkpoint_reference:
+        raise ExternalRetrievalWaveError("IEEE failed checkpoint is absent")
+    failed_checkpoint = _safe_output_path(
+        root_path, str(checkpoint_reference["path"])
+    )
+    _verify_file_reference(failed_checkpoint, checkpoint_reference, root_path)
+    failed_checkpoint_bytes = failed_checkpoint.read_bytes()
+    failed_payload = json.loads(failed_checkpoint_bytes)
+    source_attempt_manifest_hash = _hash_payload(
+        {"retrieval_attempts": failed_payload.get("retrieval_attempts", [])}
+    )
+    dataset = load_review_dataset(failed_checkpoint)
+    other_sources_before = {
+        key: json.loads(json.dumps(value, sort_keys=True))
+        for key, value in state["sources"].items()
+        if key != "IEEEXplore"
+    }
+    quota_before = json.loads(
+        json.dumps(source_state.get("ieee_quota"), sort_keys=True)
+    )
+    recovered_at = timestamp()
+    recovery = _reparse_failed_ieee_total_drift_checkpoint(
+        dataset=dataset,
+        checkpoint_dir=failed_checkpoint.parent,
+        wave=wave,
+        recovered_at=recovered_at,
+    )
+
+    recovery_checkpoint_relative = (
+        f"{EXECUTION_ROOT}/IEEEXplore/episodes/episode-002/checkpoint"
+    )
+    recovery_checkpoint_dir = _safe_output_path(
+        root_path, recovery_checkpoint_relative
+    )
+    if recovery_checkpoint_dir.exists():
+        raise ExternalRetrievalWaveError(
+            "IEEE recovery checkpoint exists without valid state lineage"
+        )
+    recovery_store = CheckpointStore(recovery_checkpoint_dir)
+    raw_bindings = _copy_recovery_raw_responses(
+        root=root_path,
+        source_checkpoint_dir=failed_checkpoint.parent,
+        recovery_checkpoint_dir=recovery_checkpoint_dir,
+        raw_response_references=recovery["raw_response_references"],
+        source_path_key="failed_episode_path",
+        error_prefix="IEEE",
+    )
+
+    run = dataset.retrieval_runs[0]
+    run.metadata["offline_provider_total_drift_recovery"] = {
+        "recovery_episode_number": 2,
+        "source_episode_number": 1,
+        "source_checkpoint": dict(checkpoint_reference),
+        "source_attempt_manifest_hash": source_attempt_manifest_hash,
+        "source_raw_response_count": len(raw_bindings),
+        "source_raw_response_manifest_hash": _hash_payload(
+            {"responses": raw_bindings}
+        ),
+        "continuation_plan": recovery["continuation_plan"],
+        "provider_total_histories": recovery["provider_total_histories"],
+        "network_used": False,
+    }
+    checkpoint_hash = recovery_store.save_dataset(dataset)
+    recovery_checkpoint_reference = _file_reference(
+        recovery_store.dataset_path, root_path
+    )
+    if checkpoint_hash != recovery_checkpoint_reference["raw_sha256"]:
+        raise ExternalRetrievalWaveError("IEEE recovery checkpoint hash disagreement")
+    if failed_checkpoint.read_bytes() != failed_checkpoint_bytes:
+        raise ExternalRetrievalWaveError(
+            "IEEE failed checkpoint changed during recovery"
+        )
+    _verify_recovery_raw_bindings(root_path, raw_bindings, "failed_episode_path")
+
+    failed_episode = {
+        "episode_number": 1,
+        "episode_id": "IEEEXplore-episode-001",
+        "run_id": run.run_id,
+        "status": "FAILED",
+        "failure_classification": "MUTABLE_PROVIDER_TOTAL_REJECTED_AS_INCONSISTENT",
+        "started_at_utc": source_state.get("last_session_started_at_utc"),
+        "completed_at_utc": source_state.get("last_session_completed_at_utc"),
+        "checkpoint_path": source_state["checkpoint_path"],
+        "checkpoint_dataset": dict(checkpoint_reference),
+        "attempt_count": source_state["attempt_count"],
+        "occurrence_count": source_state["occurrence_count"],
+        "completed_query_count": source_state["completed_query_count"],
+        "failure_reason": source_state["failure_reason"],
+        "source_attempt_manifest_hash": source_attempt_manifest_hash,
+        "immutable": True,
+    }
+    recovery_episode = {
+        "episode_number": 2,
+        "episode_id": "IEEEXplore-episode-002",
+        "run_id": run.run_id,
+        "status": IEEE_TOTAL_DRIFT_RECOVERY_STATUS,
+        "recovery_of_episode_number": 1,
+        "authorization_reason": "OFFLINE_MUTABLE_PROVIDER_TOTAL_RECONCILIATION",
+        "authorized_at_utc": recovered_at,
+        "checkpoint_path": recovery_checkpoint_relative,
+        "checkpoint_dataset": recovery_checkpoint_reference,
+        "frozen_wave_manifest_hash": wave.manifest_hash(),
+        "frozen_query_plan_hash": wave.query_plan_hash,
+        "source_episode_checkpoint": dict(checkpoint_reference),
+        "source_attempt_manifest_hash": source_attempt_manifest_hash,
+        "source_raw_responses": raw_bindings,
+        "continuation_plan": recovery["continuation_plan"],
+        "provider_total_histories": recovery["provider_total_histories"],
+        "known_daily_calls_preserved": quota_before["known_calls_after_session"],
+        "network_used": False,
+        "immutable": False,
+    }
+    source_state.update(
+        {
+            "status": IEEE_TOTAL_DRIFT_RECOVERY_STATUS,
+            "execution_episodes": [failed_episode, recovery_episode],
+            "active_episode_number": 2,
+            "active_run_id": run.run_id,
+            "active_checkpoint_path": recovery_checkpoint_relative,
+            "checkpoint_path": recovery_checkpoint_relative,
+            "checkpoint_dataset": recovery_checkpoint_reference,
+            "completed_query_count": 0,
+            "total_query_count": 5,
+            "occurrence_count": len(dataset.occurrences),
+            "attempt_count": len(dataset.retrieval_attempts),
+            "requests_this_session": 0,
+            "pause_reason": "OFFLINE_TOTAL_DRIFT_RECOVERY_COMPLETE; LIVE_RESUME_REQUIRED",
+            "failure_reason": None,
+            "last_session_started_at_utc": recovered_at,
+            "last_session_completed_at_utc": recovered_at,
+        }
+    )
+    if source_state.get("ieee_quota") != quota_before:
+        raise ExternalRetrievalWaveError("IEEE recovery changed the daily quota ledger")
+    if {
+        key: value for key, value in state["sources"].items() if key != "IEEEXplore"
+    } != other_sources_before:
+        raise ExternalRetrievalWaveError("IEEE recovery changed another source component")
+    state["status"] = "RUNNING"
+    state["external_retrieval_completed_at_utc"] = None
+    state["external_retrieval_cutoff_date"] = None
+    _save_execution_state(state_path, state)
+    return state
+
+
 def execute_external_source_session(
     *,
     root: str | Path,
@@ -1306,7 +1493,16 @@ def execute_external_source_session(
         raise ExternalRetrievalWaveError(
             f"{source} has no checkpoint to resume"
         )
-    specs = _source_query_specs(wave, source, ieee_credential=ieee_credential)
+    ieee_mutable_total_mode = (
+        source == "IEEEXplore"
+        and _ieee_total_drift_recovery_active(source_state)
+    )
+    specs = _source_query_specs(
+        wave,
+        source,
+        ieee_credential=ieee_credential,
+        ieee_mutable_total_mode=ieee_mutable_total_mode,
+    )
     request_budget = None
     quota = None
     if source == "IEEEXplore":
@@ -1339,6 +1535,15 @@ def execute_external_source_session(
     after_attempts = len(dataset.retrieval_attempts)
     requests_this_session = after_attempts - before_attempts
     run = dataset.retrieval_runs[0]
+    ieee_terminal_reconciliation = None
+    if (
+        source == "IEEEXplore"
+        and ieee_mutable_total_mode
+        and run.completion_status is RetrievalCompletionStatus.COMPLETE
+    ):
+        ieee_terminal_reconciliation = _ieee_terminal_reconciliation(dataset)
+        run.metadata["ieee_terminal_reconciliation"] = ieee_terminal_reconciliation
+        CheckpointStore(checkpoint_dir).save_dataset(dataset)
     pause_state = run.metadata.get("pause_state")
     if run.completion_status is RetrievalCompletionStatus.COMPLETE:
         status = "COMPLETE"
@@ -1383,6 +1588,8 @@ def execute_external_source_session(
             "known_calls_after_session": quota["known_calls_before_session"]
             + requests_this_session,
         }
+    if ieee_terminal_reconciliation is not None:
+        source_state["terminal_reconciliation"] = ieee_terminal_reconciliation
     _sync_active_retry_episode(source_state)
     _finalize_execution_state(state, timestamp())
     _save_execution_state(state_path, state)
@@ -1390,7 +1597,11 @@ def execute_external_source_session(
 
 
 def _source_query_specs(
-    wave: ProductionRetrievalWave, source: str, *, ieee_credential: str
+    wave: ProductionRetrievalWave,
+    source: str,
+    *,
+    ieee_credential: str,
+    ieee_mutable_total_mode: bool = False,
 ) -> list[RetrievalQuerySpec]:
     specs = []
     for family in wave.query_families:
@@ -1428,6 +1639,7 @@ def _source_query_specs(
                     "query_parameter": parameters["query_parameter"],
                     "sort_field": parameters["sort_field"],
                     "sort_order": parameters["sort_order"],
+                    "mutable_provider_totals": ieee_mutable_total_mode,
                 }
             )
             endpoint = "https://ieeexploreapi.ieee.org/api/v1/search/articles"
@@ -1746,6 +1958,447 @@ def _load_execution_state(
     ):
         raise ExternalRetrievalWaveError("execution checkpoint frozen-wave hash mismatch")
     return state
+
+
+def _reparse_failed_ieee_total_drift_checkpoint(
+    *,
+    dataset: Any,
+    checkpoint_dir: Path,
+    wave: ProductionRetrievalWave,
+    recovered_at: str,
+) -> dict[str, Any]:
+    dataset.validate()
+    if len(dataset.retrieval_runs) != 1:
+        raise ExternalRetrievalWaveError(
+            "IEEE total-drift recovery requires exactly one run"
+        )
+    run = dataset.retrieval_runs[0]
+    if (
+        run.completion_status is not RetrievalCompletionStatus.FAILED
+        or run.retrieval_cutoff_date is not None
+        or run.query_plan_version != wave.query_plan_hash
+    ):
+        raise ExternalRetrievalWaveError(
+            "IEEE checkpoint is not an eligible total-drift failure"
+        )
+    if len(dataset.retrieval_attempts) != IEEE_TOTAL_DRIFT_EXPECTED_ATTEMPTS:
+        raise ExternalRetrievalWaveError("IEEE failed attempt count changed")
+    expected_occurrences = sum(item[3] for item in IEEE_TOTAL_DRIFT_EXPECTED)
+    if len(dataset.occurrences) != expected_occurrences:
+        raise ExternalRetrievalWaveError("IEEE failed occurrence count changed")
+
+    specs = _source_query_specs(
+        wave,
+        "IEEEXplore",
+        ieee_credential="offline-recovery-redacted",
+        ieee_mutable_total_mode=True,
+    )
+    failed_query_plan_hash = run.query_plan_hash
+    recovery_query_plan_hash = _query_plan_hash(specs)
+    if len(dataset.source_queries) != len(specs):
+        raise ExternalRetrievalWaveError("IEEE query count changed")
+    adapter = PAGINATED_SOURCE_ADAPTERS["IEEEXplore"]
+    response_store = CheckpointStore(checkpoint_dir)
+    raw_response_references: list[tuple[str, str]] = []
+    seen_response_paths: set[str] = set()
+    continuation_plan = []
+    total_histories: dict[str, list[int]] = {}
+
+    for query, spec, expected in zip(
+        dataset.source_queries, specs, IEEE_TOTAL_DRIFT_EXPECTED, strict=True
+    ):
+        initial_total, final_total, page_count, occurrence_count, next_start = expected
+        expected_error = (
+            f"{IEEE_TOTAL_DRIFT_ERROR_PREFIX}[{final_total}, {initial_total}]"
+        )
+        if (
+            query.source_database != "IEEEXplore"
+            or query.query_text != spec.query_text
+            or query.query_version != spec.query_version
+            or query.metadata.get("production_query_id")
+            != spec.metadata["production_query_id"]
+            or query.metadata.get("frozen_request_specification_hash")
+            != spec.metadata["frozen_request_specification_hash"]
+            or query.completion_status is not RetrievalCompletionStatus.FAILED
+            or query.status is not ProcessingStatus.FAILED
+            or query.errors != [expected_error]
+        ):
+            raise ExternalRetrievalWaveError(
+                "IEEE recovery refused changed query/failure provenance"
+            )
+        pages = sorted(
+            (
+                page
+                for page in dataset.retrieval_pages
+                if page.source_query_id == query.query_id
+            ),
+            key=lambda item: item.ordinal,
+        )
+        if (
+            len(pages) != page_count
+            or [page.ordinal for page in pages] != list(range(page_count))
+        ):
+            raise ExternalRetrievalWaveError(
+                "IEEE persisted page lineage is incomplete or unordered"
+            )
+
+        expected_start = 1
+        query_identifiers: set[str] = set()
+        observed_totals = []
+        for page in pages:
+            if (
+                page.strategy != adapter.strategy
+                or page.adapter_version != adapter.version
+                or page.request_state != {"start_record": expected_start}
+                or page.status is not RetrievalCompletionStatus.COMPLETE
+            ):
+                raise ExternalRetrievalWaveError(
+                    "IEEE persisted start_record/page lineage changed"
+                )
+            request = adapter.build_request(spec, page.request_state)
+            attempts = sorted(
+                (
+                    attempt
+                    for attempt in dataset.retrieval_attempts
+                    if attempt.page_id == page.page_id
+                ),
+                key=lambda item: item.attempt_number,
+            )
+            if (
+                len(attempts) != 1
+                or page.attempt_ids != [attempts[0].attempt_id]
+                or attempts[0].attempt_number != 1
+            ):
+                raise ExternalRetrievalWaveError(
+                    "IEEE recovery requires one zero-retry attempt per page"
+                )
+            attempt = attempts[0]
+            if (
+                attempt.status is not RetrievalAttemptStatus.SUCCEEDED
+                or attempt.response_status != 200
+                or attempt.error is not None
+                or not attempt.raw_response_path
+                or not attempt.raw_response_hash
+                or attempt.request_method != request.method
+                or attempt.request_url != request.url
+                or attempt.request_params != request.sanitized_params()
+                or attempt.request_headers != request.sanitized_headers()
+                or attempt.request_hash != request.request_hash()
+            ):
+                raise ExternalRetrievalWaveError(
+                    "IEEE recovery requires exact successful request lineage"
+                )
+            if attempt.raw_response_path in seen_response_paths:
+                raise ExternalRetrievalWaveError("IEEE raw response path is reused")
+            try:
+                response = response_store.load_response(
+                    attempt.raw_response_path, attempt.raw_response_hash
+                )
+            except (OSError, ValueError) as exc:
+                raise ExternalRetrievalWaveError(
+                    f"IEEE raw response hash/read failure: {exc}"
+                ) from exc
+            seen_response_paths.add(attempt.raw_response_path)
+            raw_response_references.append(
+                (attempt.raw_response_path, attempt.raw_response_hash)
+            )
+            try:
+                parsed = adapter.parse_response(spec, page.request_state, response)
+            except Exception as exc:
+                raise ExternalRetrievalWaveError(
+                    f"IEEE offline total-drift parse failed: {type(exc).__name__}: {exc}"
+                ) from exc
+            if (
+                parsed.incomplete_reason
+                or parsed.raw_item_count != len(parsed.records)
+                or parsed.raw_item_count < 1
+                or parsed.raw_item_count > 200
+                or parsed.total_is_exact
+                or parsed.terminal
+            ):
+                raise ExternalRetrievalWaveError(
+                    "IEEE persisted page is not a valid nonterminal recovery page"
+                )
+            page_occurrences = sorted(
+                (
+                    occurrence
+                    for occurrence in dataset.occurrences
+                    if occurrence.retrieval_page_id == page.page_id
+                ),
+                key=lambda item: item.source_rank or 0,
+            )
+            if (
+                len(page_occurrences) != parsed.raw_item_count
+                or [item.source_identifier for item in page_occurrences]
+                != parsed.native_identifiers
+                or page.returned_item_count != parsed.raw_item_count
+                or page.native_identifiers != parsed.native_identifiers
+                or len(set(parsed.native_identifiers)) != len(parsed.native_identifiers)
+            ):
+                raise ExternalRetrievalWaveError(
+                    "IEEE persisted record/page accounting changed"
+                )
+            overlap = query_identifiers.intersection(parsed.native_identifiers)
+            if overlap:
+                raise ExternalRetrievalWaveError(
+                    "IEEE stable identity overlaps across persisted pages"
+                )
+            query_identifiers.update(parsed.native_identifiers)
+            observed_totals.append(int(parsed.source_reported_total))
+            parsed_next_start = int(parsed.next_state["start_record"])
+            if parsed_next_start != expected_start + parsed.raw_item_count:
+                raise ExternalRetrievalWaveError(
+                    "IEEE response created a pagination gap or overlap"
+                )
+            expected_start = parsed_next_start
+
+            prior_error = page.metadata.pop("completion_error", None)
+            if prior_error:
+                page.metadata["prior_completion_error"] = prior_error
+            page.total_is_exact = False
+            page.metadata.update(parsed.metadata)
+            page.metadata["offline_provider_total_drift_recovery"] = True
+            page.metadata["raw_response_reused_without_network"] = True
+
+        if (
+            expected_start != next_start
+            or len(query_identifiers) != occurrence_count
+            or query.result_count != occurrence_count
+            or observed_totals[0] != initial_total
+            or observed_totals[-1] != final_total
+            or any(value != initial_total for value in observed_totals[:-1])
+        ):
+            raise ExternalRetrievalWaveError(
+                "IEEE observed total/count/continuation evidence changed"
+            )
+        query.status = ProcessingStatus.PARTIAL
+        query.completion_status = RetrievalCompletionStatus.RUNNING
+        query.completion_proof = None
+        query.source_reported_total = final_total
+        query.total_is_exact = False
+        query.errors = []
+        query.retrieval_ended_at = recovered_at
+        query.metadata["provider_total_observations"] = observed_totals
+        query.metadata["provider_total_observation_range"] = [
+            min(observed_totals),
+            max(observed_totals),
+        ]
+        query.metadata["next_start_record"] = next_start
+        query.metadata["offline_provider_total_drift_recovery"] = True
+        query.metadata["mutable_provider_totals"] = True
+        total_histories[spec.metadata["production_query_id"]] = observed_totals
+        continuation_plan.append(
+            {
+                "production_query_id": spec.metadata["production_query_id"],
+                "next_start_record": next_start,
+                "persisted_page_count": page_count,
+                "persisted_occurrence_count": occurrence_count,
+                "observed_provider_totals": observed_totals,
+            }
+        )
+
+    if len(raw_response_references) != IEEE_TOTAL_DRIFT_EXPECTED_ATTEMPTS:
+        raise ExternalRetrievalWaveError("IEEE raw-response accounting changed")
+    run.status = ProcessingStatus.PARTIAL
+    run.completion_status = RetrievalCompletionStatus.RUNNING
+    run.query_plan_hash = recovery_query_plan_hash
+    run.retrieval_completed_at = recovered_at
+    run.retrieval_cutoff_date = None
+    run.errors = [
+        "offline IEEE provider-total-drift recovery complete; live pagination resume pending"
+    ]
+    run.metadata["provider_total_semantics"] = "MUTABLE_PAGINATION_OBSERVATION"
+    run.metadata["network_requests_during_recovery"] = 0
+    run.metadata["source_raw_response_count"] = len(raw_response_references)
+    run.metadata["failed_episode_query_plan_hash"] = failed_query_plan_hash
+    run.metadata["recovery_query_plan_hash"] = recovery_query_plan_hash
+    dataset.validate()
+    return {
+        "raw_response_references": raw_response_references,
+        "continuation_plan": continuation_plan,
+        "provider_total_histories": total_histories,
+    }
+
+
+def _copy_recovery_raw_responses(
+    *,
+    root: Path,
+    source_checkpoint_dir: Path,
+    recovery_checkpoint_dir: Path,
+    raw_response_references: list[tuple[str, str]],
+    source_path_key: str,
+    error_prefix: str,
+) -> list[dict[str, Any]]:
+    bindings = []
+    for relative_path, expected_hash in raw_response_references:
+        response_path = Path(relative_path)
+        if (
+            response_path.is_absolute()
+            or ".." in response_path.parts
+            or not response_path.parts
+            or response_path.parts[0] != "responses"
+        ):
+            raise ExternalRetrievalWaveError(
+                f"{error_prefix} raw response path is unsafe"
+            )
+        source = source_checkpoint_dir / response_path
+        raw = source.read_bytes()
+        if _sha256(raw) != expected_hash:
+            raise ExternalRetrievalWaveError(
+                f"{error_prefix} raw response hash mismatch: {relative_path}"
+            )
+        destination = recovery_checkpoint_dir / response_path
+        atomic_write(destination, raw)
+        if destination.read_bytes() != raw:
+            raise ExternalRetrievalWaveError(
+                f"{error_prefix} recovery response copy mismatch: {relative_path}"
+            )
+        bindings.append(
+            {
+                source_path_key: source.relative_to(root).as_posix(),
+                "recovery_copy_path": destination.relative_to(root).as_posix(),
+                "byte_size": len(raw),
+                "raw_sha256": expected_hash,
+            }
+        )
+    return bindings
+
+
+def _verify_recovery_raw_bindings(
+    root: Path, bindings: list[dict[str, Any]], source_path_key: str
+) -> None:
+    for binding in bindings:
+        for key in (source_path_key, "recovery_copy_path"):
+            path = _safe_output_path(root, binding[key])
+            raw = path.read_bytes()
+            if len(raw) != binding["byte_size"] or _sha256(raw) != binding["raw_sha256"]:
+                raise ExternalRetrievalWaveError(
+                    "recovery raw-response binding changed"
+                )
+
+
+def _validate_authorized_ieee_total_drift_recovery(
+    source_state: dict[str, Any], root: Path
+) -> None:
+    episodes = source_state.get("execution_episodes", [])
+    if len(episodes) != 2:
+        raise ExternalRetrievalWaveError("IEEE recovery episode lineage changed")
+    failed, recovered = episodes
+    if (
+        failed.get("episode_number") != 1
+        or failed.get("status") != "FAILED"
+        or not failed.get("immutable")
+        or recovered.get("episode_number") != 2
+        or recovered.get("status") != IEEE_TOTAL_DRIFT_RECOVERY_STATUS
+        or recovered.get("recovery_of_episode_number") != 1
+        or recovered.get("network_used") is not False
+        or recovered.get("immutable") is not False
+        or source_state.get("active_episode_number") != 2
+        or source_state.get("active_checkpoint_path")
+        != recovered.get("checkpoint_path")
+    ):
+        raise ExternalRetrievalWaveError(
+            "authorized IEEE total-drift recovery lineage changed"
+        )
+    source_checkpoint = _safe_output_path(
+        root, recovered["source_episode_checkpoint"]["path"]
+    )
+    _verify_file_reference(
+        source_checkpoint, recovered["source_episode_checkpoint"], root
+    )
+    recovery_checkpoint = _safe_output_path(
+        root, recovered["checkpoint_dataset"]["path"]
+    )
+    _verify_file_reference(recovery_checkpoint, recovered["checkpoint_dataset"], root)
+    bindings = recovered.get("source_raw_responses", [])
+    if len(bindings) != IEEE_TOTAL_DRIFT_EXPECTED_ATTEMPTS:
+        raise ExternalRetrievalWaveError("IEEE recovery raw-response manifest changed")
+    _verify_recovery_raw_bindings(root, bindings, "failed_episode_path")
+
+
+def _ieee_total_drift_recovery_active(source_state: Mapping[str, Any]) -> bool:
+    active_number = source_state.get("active_episode_number")
+    active = next(
+        (
+            item
+            for item in source_state.get("execution_episodes", [])
+            if item.get("episode_number") == active_number
+        ),
+        None,
+    )
+    return bool(
+        active
+        and active.get("episode_number") == 2
+        and active.get("recovery_of_episode_number") == 1
+        and active.get("authorization_reason")
+        == "OFFLINE_MUTABLE_PROVIDER_TOTAL_RECONCILIATION"
+    )
+
+
+def _ieee_terminal_reconciliation(dataset: Any) -> dict[str, Any]:
+    families = []
+    for query in dataset.source_queries:
+        pages = sorted(
+            (
+                page
+                for page in dataset.retrieval_pages
+                if page.source_query_id == query.query_id
+            ),
+            key=lambda item: item.ordinal,
+        )
+        identifiers = [
+            identifier for page in pages for identifier in page.native_identifiers
+        ]
+        duplicate_count = len(identifiers) - len(set(identifiers))
+        if (
+            query.completion_status is not RetrievalCompletionStatus.COMPLETE
+            or not pages
+            or not pages[-1].terminal
+            or duplicate_count
+        ):
+            raise ExternalRetrievalWaveError(
+                "IEEE terminal reconciliation requires complete overlap-free pagination"
+            )
+        observations = [
+            int(page.metadata["provider_total_observation"]) for page in pages
+        ]
+        query.metadata["provider_total_observations"] = observations
+        query.metadata["provider_total_observation_range"] = [
+            min(observations),
+            max(observations),
+        ]
+        query.metadata.pop("next_start_record", None)
+        final_total = observations[-1]
+        unique_count = len(set(identifiers))
+        difference = unique_count - final_total
+        drift_span = max(observations) - min(observations)
+        families.append(
+            {
+                "production_query_id": query.metadata["production_query_id"],
+                "unique_retrieved_identities": unique_count,
+                "page_count": len(pages),
+                "observed_provider_totals": observations,
+                "provider_total_range": [min(observations), max(observations)],
+                "duplicate_identities_across_pages": duplicate_count,
+                "final_provider_total": final_total,
+                "retrieved_minus_final_provider_total": difference,
+                "discrepancy_explainable_by_observed_index_drift": (
+                    abs(difference) <= drift_span
+                ),
+                "snapshot_equivalent_completeness_claimed": False,
+                "completion_basis": (
+                    "OFFSET_PAGINATION_EXHAUSTED_AGAINST_CURRENT_PAGE_TOTAL"
+                ),
+                "limitation": (
+                    "mutable provider totals prevent a snapshot-equivalent completeness claim"
+                ),
+            }
+        )
+    return {
+        "status": "TERMINAL_OFFSET_EXHAUSTION_RECONCILED_WITH_INDEX_DRIFT_LIMITATION",
+        "families": families,
+        "snapshot_equivalent_completeness_claimed": False,
+    }
 
 
 def _reparse_failed_europe_pmc_checkpoint(
@@ -2723,7 +3376,51 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--authorize-europe-pmc-terminal-recovery", action="store_true"
     )
+    parser.add_argument(
+        "--authorize-ieee-total-drift-recovery", action="store_true"
+    )
     args = parser.parse_args(argv)
+    if args.authorize_ieee_total_drift_recovery:
+        if args.source != "IEEEXplore":
+            parser.error(
+                "provider-total recovery is supported only for --source IEEEXplore"
+            )
+        if (
+            args.authorize_live_external_retrieval
+            or args.authorize_transport_retry_reset
+            or args.authorize_pubmed_parser_recovery
+            or args.authorize_europe_pmc_terminal_recovery
+            or args.resume
+        ):
+            parser.error(
+                "IEEE provider-total recovery is a separate offline authorization boundary"
+            )
+        state = authorize_ieee_total_drift_recovery(root=args.root)
+        source_state = state["sources"]["IEEEXplore"]
+        active = source_state["execution_episodes"][1]
+        print(
+            json.dumps(
+                {
+                    "execution_status": state["status"],
+                    "source": "IEEEXplore",
+                    "source_status": source_state["status"],
+                    "active_episode_number": source_state[
+                        "active_episode_number"
+                    ],
+                    "continuation_plan": active["continuation_plan"],
+                    "known_daily_calls_preserved": active[
+                        "known_daily_calls_preserved"
+                    ],
+                    "external_retrieval_cutoff_date": state[
+                        "external_retrieval_cutoff_date"
+                    ],
+                    "network_used": False,
+                },
+                sort_keys=True,
+                indent=2,
+            )
+        )
+        return 0
     if args.authorize_europe_pmc_terminal_recovery:
         if args.source != "EuropePMC":
             parser.error(
@@ -2733,6 +3430,7 @@ def main(argv: list[str] | None = None) -> int:
             args.authorize_live_external_retrieval
             or args.authorize_transport_retry_reset
             or args.authorize_pubmed_parser_recovery
+            or args.authorize_ieee_total_drift_recovery
             or args.resume
         ):
             parser.error(
@@ -2771,6 +3469,7 @@ def main(argv: list[str] | None = None) -> int:
             args.authorize_live_external_retrieval
             or args.authorize_transport_retry_reset
             or args.authorize_europe_pmc_terminal_recovery
+            or args.authorize_ieee_total_drift_recovery
             or args.resume
         ):
             parser.error("parser recovery is a separate offline authorization boundary")
@@ -2812,6 +3511,7 @@ def main(argv: list[str] | None = None) -> int:
             args.authorize_live_external_retrieval
             or args.authorize_pubmed_parser_recovery
             or args.authorize_europe_pmc_terminal_recovery
+            or args.authorize_ieee_total_drift_recovery
             or args.resume
         ):
             parser.error(

@@ -146,6 +146,9 @@ class IeeeXplorePaginator:
             _record(item, query=spec.query_text, rank=rank)
             for rank, item in enumerate(items, start=1)
         ]
+        mutable_provider_totals = bool(
+            getattr(spec, "metadata", {}).get("mutable_provider_totals")
+        )
         next_start = start_record + len(items)
         terminal = next_start > total
         incomplete_reason = None
@@ -158,9 +161,15 @@ class IeeeXplorePaginator:
             raw_item_count=len(items),
             next_state={"start_record": next_start} if not terminal else None,
             terminal=terminal,
-            completion_proof="ieee_totalfound_reconciled" if terminal else None,
+            completion_proof=(
+                "ieee_current_total_exhaustion_observed"
+                if terminal and mutable_provider_totals
+                else "ieee_totalfound_reconciled"
+                if terminal
+                else None
+            ),
             source_reported_total=total,
-            total_is_exact=True,
+            total_is_exact=not mutable_provider_totals,
             incomplete_reason=incomplete_reason,
             native_identifiers=[
                 native_identifier(record, rank) for rank, record in enumerate(records, 1)
@@ -174,6 +183,12 @@ class IeeeXplorePaginator:
                 "max_records": spec.limit,
                 "rank_start": start_record,
                 "rank_end": start_record + len(items) - 1 if items else None,
+                "provider_total_observation": total,
+                "provider_total_semantics": (
+                    "MUTABLE_PAGINATION_OBSERVATION"
+                    if mutable_provider_totals
+                    else "EXACT_WITHIN_RETRIEVAL_RUN"
+                ),
             },
         )
 

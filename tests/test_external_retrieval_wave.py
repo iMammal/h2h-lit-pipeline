@@ -12,6 +12,7 @@ import h2h_lit.sources.pubmed as pubmed_module
 from h2h_lit.external_retrieval_wave import (
     ACM_RECONCILIATION_PATH,
     EUROPE_PMC_TERMINAL_RECOVERY_STATUS,
+    IEEE_TOTAL_DRIFT_RECOVERY_STATUS,
     PREFLIGHT_PATH,
     PUBMED_EPISODE_2_OMITTED_BOOK_PMIDS,
     PUBMED_PARSER_RECOVERY_STATUS,
@@ -20,6 +21,7 @@ from h2h_lit.external_retrieval_wave import (
     ExternalRetrievalWaveError,
     _safe_output_path,
     authorize_europe_pmc_terminal_recovery,
+    authorize_ieee_total_drift_recovery,
     authorize_pubmed_parser_recovery,
     authorize_pubmed_transport_retry,
     build_external_retrieval_wave,
@@ -219,6 +221,96 @@ def _ieee_page(identifier: str, *, total: int) -> dict:
         "total_records": total,
         "articles": [{"article_number": identifier, "title": identifier}],
     }
+
+
+def _ieee_drift_page(
+    family: int, *, start_record: int, count: int, total: int, overlap: bool = False
+) -> dict:
+    identifiers = [
+        f"F{family}-{index}"
+        for index in range(start_record, start_record + count)
+    ]
+    if overlap:
+        identifiers[0] = f"F{family}-1"
+    return {
+        "total_records": total,
+        "articles": [
+            {"article_number": identifier, "title": identifier}
+            for identifier in identifiers
+        ],
+    }
+
+
+def _failed_ieee_total_drift_episode(
+    tmp_path,
+    monkeypatch,
+    external_wave,
+    external_preflight,
+    *,
+    cross_page_overlap: bool = False,
+):
+    _install_isolated_runtime(
+        tmp_path, monkeypatch, external_wave, external_preflight
+    )
+    source_query_specs = external_module._source_query_specs
+
+    def small_ieee_specs(*args, **kwargs):
+        specs = source_query_specs(*args, **kwargs)
+        if args[1] == "IEEEXplore":
+            for spec in specs:
+                spec.limit = 2
+        return specs
+
+    monkeypatch.setattr(external_module, "_source_query_specs", small_ieee_specs)
+    monkeypatch.setattr(
+        external_module,
+        "IEEE_TOTAL_DRIFT_EXPECTED",
+        tuple((5, 4, 2, 3, 4) for _ in range(5)),
+    )
+    monkeypatch.setattr(
+        external_module, "IEEE_TOTAL_DRIFT_EXPECTED_ATTEMPTS", 10
+    )
+    monkeypatch.setattr(
+        external_module,
+        "_ieee_calls_on_day",
+        lambda _root, checkpoint_dir, _day: (
+            5 + external_module._checkpoint_attempt_count(checkpoint_dir)
+        ),
+    )
+    responses = []
+    for family in range(1, 6):
+        responses.extend(
+            [
+                FakeResponse(
+                    payload=_ieee_drift_page(
+                        family, start_record=1, count=2, total=5
+                    )
+                ),
+                FakeResponse(
+                    payload=_ieee_drift_page(
+                        family,
+                        start_record=3,
+                        count=1,
+                        total=4,
+                        overlap=cross_page_overlap and family == 1,
+                    )
+                ),
+            ]
+        )
+    clock = Clock()
+    failed = execute_external_source_session(
+        root=tmp_path,
+        source="IEEEXplore",
+        http=FakeHttp(responses),
+        resume=False,
+        ieee_credential="offline-test-key",
+        quota_day_utc="2026-09-04",
+        timestamp=clock,
+        retry_policy=RetryPolicy(max_attempts=1),
+        rate_limiter=RateLimiter({}),
+    )
+    assert failed["sources"]["IEEEXplore"]["status"] == "FAILED"
+    return failed, clock
 
 
 class LegacyEuropePmcPaginator:
@@ -738,6 +830,190 @@ def test_pubmed_parser_recovery_refuses_raw_response_hash_mismatch(
 
     with pytest.raises(ExternalRetrievalWaveError, match="hash mismatch"):
         authorize_pubmed_parser_recovery(root=tmp_path, timestamp=clock)
+
+
+def test_ieee_total_drift_recovery_preserves_failure_and_builds_continuations(
+    tmp_path, monkeypatch, external_wave, external_preflight
+) -> None:
+    failed, clock = _failed_ieee_total_drift_episode(
+        tmp_path, monkeypatch, external_wave, external_preflight
+    )
+    ieee_before = failed["sources"]["IEEEXplore"]
+    checkpoint_ref = ieee_before["checkpoint_dataset"]
+    checkpoint_path = tmp_path / checkpoint_ref["path"]
+    checkpoint_bytes = checkpoint_path.read_bytes()
+    response_dir = checkpoint_path.parent / "responses"
+    raw_responses_before = {
+        path.name: path.read_bytes() for path in sorted(response_dir.iterdir())
+    }
+    quota_before = json.loads(json.dumps(ieee_before["ieee_quota"], sort_keys=True))
+    other_sources_before = {
+        key: json.loads(json.dumps(value, sort_keys=True))
+        for key, value in failed["sources"].items()
+        if key != "IEEEXplore"
+    }
+
+    recovered = authorize_ieee_total_drift_recovery(
+        root=tmp_path, timestamp=clock
+    )
+
+    ieee = recovered["sources"]["IEEEXplore"]
+    assert ieee["status"] == IEEE_TOTAL_DRIFT_RECOVERY_STATUS
+    assert ieee["completed_query_count"] == 0
+    assert ieee["occurrence_count"] == 15
+    assert ieee["attempt_count"] == 10
+    assert ieee["requests_this_session"] == 0
+    assert ieee["ieee_quota"] == quota_before
+    assert ieee["active_episode_number"] == 2
+    assert ieee["execution_episodes"][0]["status"] == "FAILED"
+    assert ieee["execution_episodes"][0]["immutable"] is True
+    episode_2 = ieee["execution_episodes"][1]
+    assert episode_2["status"] == IEEE_TOTAL_DRIFT_RECOVERY_STATUS
+    assert episode_2["recovery_of_episode_number"] == 1
+    assert episode_2["network_used"] is False
+    assert episode_2["known_daily_calls_preserved"] == 15
+    assert [
+        item["next_start_record"] for item in episode_2["continuation_plan"]
+    ] == [4, 4, 4, 4, 4]
+    assert checkpoint_path.read_bytes() == checkpoint_bytes
+    assert {
+        path.name: path.read_bytes() for path in sorted(response_dir.iterdir())
+    } == raw_responses_before
+    assert {
+        key: value for key, value in recovered["sources"].items()
+        if key != "IEEEXplore"
+    } == other_sources_before
+    assert recovered["external_retrieval_cutoff_date"] is None
+
+    dataset = external_module.load_review_dataset(
+        tmp_path / ieee["checkpoint_dataset"]["path"]
+    )
+    run = dataset.retrieval_runs[0]
+    assert run.completion_status.name == "RUNNING"
+    assert run.query_plan_hash == run.metadata["recovery_query_plan_hash"]
+    assert (
+        run.metadata["failed_episode_query_plan_hash"]
+        != run.metadata["recovery_query_plan_hash"]
+    )
+    assert all(not page.total_is_exact for page in dataset.retrieval_pages)
+    assert all(
+        query.completion_status.name == "RUNNING"
+        and query.metadata["mutable_provider_totals"] is True
+        for query in dataset.source_queries
+    )
+    for binding in episode_2["source_raw_responses"]:
+        original = (tmp_path / binding["failed_episode_path"]).read_bytes()
+        copied = (tmp_path / binding["recovery_copy_path"]).read_bytes()
+        assert copied == original
+        assert hashlib.sha256(original).hexdigest() == binding["raw_sha256"]
+
+    repeated = authorize_ieee_total_drift_recovery(
+        root=tmp_path, timestamp=clock
+    )
+    assert repeated == recovered
+
+
+def test_ieee_total_drift_resume_starts_at_continuations_and_reconciles(
+    tmp_path, monkeypatch, external_wave, external_preflight
+) -> None:
+    failed, clock = _failed_ieee_total_drift_episode(
+        tmp_path, monkeypatch, external_wave, external_preflight
+    )
+    failed_checkpoint = (
+        tmp_path / failed["sources"]["IEEEXplore"]["checkpoint_dataset"]["path"]
+    )
+    failed_checkpoint_bytes = failed_checkpoint.read_bytes()
+    authorize_ieee_total_drift_recovery(root=tmp_path, timestamp=clock)
+    http = FakeHttp(
+        [
+            FakeResponse(
+                payload=_ieee_drift_page(
+                    family, start_record=4, count=2, total=5
+                )
+            )
+            for family in range(1, 6)
+        ]
+    )
+
+    completed = execute_external_source_session(
+        root=tmp_path,
+        source="IEEEXplore",
+        http=http,
+        resume=True,
+        ieee_credential="offline-test-key",
+        quota_day_utc="2026-09-04",
+        timestamp=clock,
+        retry_policy=RetryPolicy(max_attempts=1),
+        rate_limiter=RateLimiter({}),
+    )
+
+    assert [call["params"]["start_record"] for call in http.calls] == [4] * 5
+    ieee = completed["sources"]["IEEEXplore"]
+    assert ieee["status"] == "COMPLETE"
+    assert ieee["completed_query_count"] == 5
+    assert ieee["occurrence_count"] == 25
+    assert ieee["attempt_count"] == 15
+    assert ieee["requests_this_session"] == 5
+    assert ieee["ieee_quota"]["known_calls_before_session"] == 15
+    assert ieee["ieee_quota"]["known_calls_after_session"] == 20
+    assert ieee["execution_episodes"][0]["status"] == "FAILED"
+    assert ieee["execution_episodes"][0]["immutable"] is True
+    assert ieee["execution_episodes"][1]["status"] == "COMPLETE"
+    assert ieee["execution_episodes"][1]["immutable"] is True
+    reconciliation = ieee["terminal_reconciliation"]
+    assert reconciliation["snapshot_equivalent_completeness_claimed"] is False
+    assert all(
+        family["observed_provider_totals"] == [5, 4, 5]
+        and family["duplicate_identities_across_pages"] == 0
+        and family["retrieved_minus_final_provider_total"] == 0
+        and family["discrepancy_explainable_by_observed_index_drift"] is True
+        for family in reconciliation["families"]
+    )
+    assert failed_checkpoint.read_bytes() == failed_checkpoint_bytes
+    assert completed["external_retrieval_cutoff_date"] is None
+
+    dataset = external_module.load_review_dataset(
+        tmp_path / ieee["checkpoint_dataset"]["path"]
+    )
+    assert all(
+        query.metadata["provider_total_observations"] == [5, 4, 5]
+        and "next_start_record" not in query.metadata
+        for query in dataset.source_queries
+    )
+
+
+def test_ieee_total_drift_recovery_refuses_cross_page_identity_overlap(
+    tmp_path, monkeypatch, external_wave, external_preflight
+) -> None:
+    _failed_ieee_total_drift_episode(
+        tmp_path,
+        monkeypatch,
+        external_wave,
+        external_preflight,
+        cross_page_overlap=True,
+    )
+
+    with pytest.raises(
+        ExternalRetrievalWaveError,
+        match="refused changed query/failure provenance",
+    ):
+        authorize_ieee_total_drift_recovery(root=tmp_path, timestamp=Clock())
+
+
+def test_ieee_total_drift_recovery_refuses_raw_response_hash_mismatch(
+    tmp_path, monkeypatch, external_wave, external_preflight
+) -> None:
+    failed, clock = _failed_ieee_total_drift_episode(
+        tmp_path, monkeypatch, external_wave, external_preflight
+    )
+    checkpoint = (
+        tmp_path / failed["sources"]["IEEEXplore"]["checkpoint_dataset"]["path"]
+    )
+    response = next((checkpoint.parent / "responses").iterdir())
+    response.write_bytes(response.read_bytes() + b"corrupt")
+
+    with pytest.raises(ExternalRetrievalWaveError, match="hash/read failure"):
+        authorize_ieee_total_drift_recovery(root=tmp_path, timestamp=clock)
 
 
 def test_europe_pmc_terminal_recovery_preserves_failure_and_reconstructs_all_queries(
