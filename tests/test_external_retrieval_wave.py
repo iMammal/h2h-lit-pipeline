@@ -8,13 +8,17 @@ from pathlib import Path
 import pytest
 
 import h2h_lit.external_retrieval_wave as external_module
+import h2h_lit.sources.pubmed as pubmed_module
 from h2h_lit.external_retrieval_wave import (
     ACM_RECONCILIATION_PATH,
     PREFLIGHT_PATH,
+    PUBMED_EPISODE_2_OMITTED_BOOK_PMIDS,
+    PUBMED_PARSER_RECOVERY_STATUS,
     READY_STATUS,
     WAVE_PATH,
     ExternalRetrievalWaveError,
     _safe_output_path,
+    authorize_pubmed_parser_recovery,
     authorize_pubmed_transport_retry,
     build_external_retrieval_wave,
     execute_external_source_session,
@@ -245,6 +249,101 @@ def _pubmed_fetch(pmid: str) -> bytes:
       </ArticleIdList></PubmedData></PubmedArticle></PubmedArticleSet>""".encode()
 
 
+def _pubmed_search_many(pmids: list[str]) -> bytes:
+    identifiers = "".join(f"<Id>{pmid}</Id>" for pmid in pmids)
+    return (
+        f"<eSearchResult><Count>{len(pmids)}</Count><QueryKey>1</QueryKey>"
+        f"<WebEnv>env-{pmids[0]}</WebEnv><IdList>{identifiers}</IdList>"
+        "</eSearchResult>"
+    ).encode()
+
+
+def _pubmed_article_fragment(pmid: str) -> str:
+    return f"""<PubmedArticle><MedlineCitation><PMID>{pmid}</PMID><Article>
+      <ArticleTitle>Title {pmid}</ArticleTitle>
+      <Abstract><AbstractText>Abstract {pmid}</AbstractText></Abstract>
+      <Journal><Title>Journal</Title><JournalIssue><PubDate><Year>2026</Year>
+      </PubDate></JournalIssue></Journal></Article></MedlineCitation>
+      <PubmedData><ArticleIdList><ArticleId IdType="doi">10.1000/{pmid}</ArticleId>
+      </ArticleIdList></PubmedData></PubmedArticle>"""
+
+
+def _pubmed_book_fragment(pmid: str) -> str:
+    return f"""<PubmedBookArticle><BookDocument><PMID>{pmid}</PMID>
+      <Book><BookTitle>Book {pmid}</BookTitle><PubDate><Year>2026</Year></PubDate></Book>
+      <Abstract><AbstractText>Abstract {pmid}</AbstractText></Abstract>
+      </BookDocument></PubmedBookArticle>"""
+
+
+def _pubmed_mixed_fetch(pmids: list[str], book_pmids: set[str]) -> bytes:
+    entries = "".join(
+        _pubmed_book_fragment(pmid)
+        if pmid in book_pmids
+        else _pubmed_article_fragment(pmid)
+        for pmid in pmids
+    )
+    return f"<PubmedArticleSet>{entries}</PubmedArticleSet>".encode()
+
+
+def _failed_parser_pubmed_episode(
+    tmp_path, monkeypatch, external_wave, external_preflight
+):
+    _, clock = _failed_pubmed_episode(
+        tmp_path, monkeypatch, external_wave, external_preflight
+    )
+    authorize_pubmed_transport_retry(root=tmp_path, timestamp=clock)
+    qf01 = [str(50_000_000 + index) for index in range(199)]
+    qf01.insert(1, PUBMED_EPISODE_2_OMITTED_BOOK_PMIDS[0])
+    qf01.append("59999999")
+    family_pmids = [
+        qf01,
+        ["60000001", PUBMED_EPISODE_2_OMITTED_BOOK_PMIDS[1]],
+        [
+            "60000002",
+            PUBMED_EPISODE_2_OMITTED_BOOK_PMIDS[2],
+            PUBMED_EPISODE_2_OMITTED_BOOK_PMIDS[3],
+        ],
+        ["60000003", PUBMED_EPISODE_2_OMITTED_BOOK_PMIDS[4]],
+        ["60000004", PUBMED_EPISODE_2_OMITTED_BOOK_PMIDS[5]],
+    ]
+    book_pmids = set(PUBMED_EPISODE_2_OMITTED_BOOK_PMIDS)
+    responses = []
+    for pmids in family_pmids:
+        fetched = pmids[:200]
+        responses.extend(
+            [
+                FakeResponse(content=_pubmed_search_many(pmids)),
+                FakeResponse(content=_pubmed_mixed_fetch(fetched, book_pmids)),
+            ]
+        )
+
+    corrected_parser = pubmed_module.parse_pubmed_fetch
+
+    def legacy_article_only_parser(content: bytes, *, query: str):
+        return [
+            record
+            for record in corrected_parser(content, query=query)
+            if record.original_metadata["pubmed_record_type"] == "PubmedArticle"
+        ]
+
+    monkeypatch.setattr(
+        pubmed_module, "parse_pubmed_fetch", legacy_article_only_parser
+    )
+    failed = execute_external_source_session(
+        root=tmp_path,
+        source="PubMed",
+        http=FakeHttp(responses),
+        resume=False,
+        timestamp=clock,
+        retry_policy=RetryPolicy(max_attempts=1),
+        rate_limiter=RateLimiter({}),
+    )
+    monkeypatch.setattr(pubmed_module, "parse_pubmed_fetch", corrected_parser)
+    assert failed["sources"]["PubMed"]["status"] == "FAILED"
+    assert failed["sources"]["PubMed"]["active_episode_number"] == 2
+    return failed, clock, family_pmids
+
+
 def test_dns_only_pubmed_failure_authorizes_new_immutable_episode(
     tmp_path, monkeypatch, external_wave, external_preflight
 ) -> None:
@@ -398,6 +497,112 @@ def test_authorized_pubmed_second_episode_completes_after_environment_recovery(
     assert pubmed["execution_episodes"][1]["run_id"].endswith("episode-002")
     assert (tmp_path / original_ref["path"]).read_bytes() == original_bytes
     assert completed["external_retrieval_cutoff_date"] is None
+
+
+def test_pubmed_parser_recovery_preserves_episode_2_and_recovers_exact_six_books(
+    tmp_path, monkeypatch, external_wave, external_preflight
+) -> None:
+    failed, clock, family_pmids = _failed_parser_pubmed_episode(
+        tmp_path, monkeypatch, external_wave, external_preflight
+    )
+    pubmed_before = failed["sources"]["PubMed"]
+    episode_2_before = json.loads(
+        json.dumps(pubmed_before["execution_episodes"][1], sort_keys=True)
+    )
+    checkpoint_ref = pubmed_before["checkpoint_dataset"]
+    checkpoint_path = tmp_path / checkpoint_ref["path"]
+    checkpoint_bytes = checkpoint_path.read_bytes()
+    response_dir = checkpoint_path.parent / "responses"
+    raw_responses_before = {
+        path.name: path.read_bytes() for path in sorted(response_dir.iterdir())
+    }
+    other_sources_before = {
+        key: json.loads(json.dumps(value, sort_keys=True))
+        for key, value in failed["sources"].items()
+        if key != "PubMed"
+    }
+
+    recovered = authorize_pubmed_parser_recovery(root=tmp_path, timestamp=clock)
+    pubmed = recovered["sources"]["PubMed"]
+    assert pubmed["status"] == PUBMED_PARSER_RECOVERY_STATUS
+    assert pubmed["active_episode_number"] == 3
+    assert pubmed["execution_episodes"][1] == episode_2_before
+    episode_3 = pubmed["execution_episodes"][2]
+    assert episode_3["recovery_of_episode_number"] == 2
+    assert episode_3["recovered_pmids"] == list(
+        PUBMED_EPISODE_2_OMITTED_BOOK_PMIDS
+    )
+    assert episode_3["remaining_efetch_request_count"] == 1
+    assert episode_3["remaining_efetch_batches"][0]["pmids"] == ["59999999"]
+    assert episode_3["network_used"] is False
+    assert checkpoint_path.read_bytes() == checkpoint_bytes
+    assert {
+        path.name: path.read_bytes() for path in sorted(response_dir.iterdir())
+    } == raw_responses_before
+    assert {
+        key: value for key, value in recovered["sources"].items() if key != "PubMed"
+    } == other_sources_before
+    assert recovered["external_retrieval_cutoff_date"] is None
+
+    dataset = external_module.load_review_dataset(
+        tmp_path / pubmed["checkpoint_dataset"]["path"]
+    )
+    recovered_ids = {occurrence.source_identifier for occurrence in dataset.occurrences}
+    assert set(PUBMED_EPISODE_2_OMITTED_BOOK_PMIDS) <= recovered_ids
+    assert len(dataset.occurrences) == sum(min(len(pmids), 200) for pmids in family_pmids)
+    assert len(dataset.retrieval_attempts) == len(raw_responses_before)
+    assert sum(
+        query.completion_status.name == "COMPLETE" for query in dataset.source_queries
+    ) == 4
+    for binding in episode_3["source_raw_responses"]:
+        original = (tmp_path / binding["episode_2_path"]).read_bytes()
+        copied = (tmp_path / binding["recovery_copy_path"]).read_bytes()
+        assert copied == original
+        assert hashlib.sha256(original).hexdigest() == binding["raw_sha256"]
+
+    repeated = authorize_pubmed_parser_recovery(root=tmp_path, timestamp=clock)
+    assert repeated == recovered
+
+
+def test_pubmed_parser_recovery_resume_requests_only_unfetched_batch(
+    tmp_path, monkeypatch, external_wave, external_preflight
+) -> None:
+    _, clock, _ = _failed_parser_pubmed_episode(
+        tmp_path, monkeypatch, external_wave, external_preflight
+    )
+    authorize_pubmed_parser_recovery(root=tmp_path, timestamp=clock)
+    http = FakeHttp([FakeResponse(content=_pubmed_fetch("59999999"))])
+
+    completed = execute_external_source_session(
+        root=tmp_path,
+        source="PubMed",
+        http=http,
+        resume=True,
+        timestamp=clock,
+        retry_policy=RetryPolicy(max_attempts=1),
+        rate_limiter=RateLimiter({}),
+    )
+
+    assert len(http.calls) == 1
+    assert http.calls[0]["method"] == "GET"
+    assert http.calls[0]["params"]["id"] == "59999999"
+    assert completed["sources"]["PubMed"]["status"] == "COMPLETE"
+    assert completed["sources"]["ACMDigitalLibrary"]["status"] == "NOT_STARTED"
+    assert completed["external_retrieval_cutoff_date"] is None
+
+
+def test_pubmed_parser_recovery_refuses_raw_response_hash_mismatch(
+    tmp_path, monkeypatch, external_wave, external_preflight
+) -> None:
+    failed, clock, _ = _failed_parser_pubmed_episode(
+        tmp_path, monkeypatch, external_wave, external_preflight
+    )
+    checkpoint = tmp_path / failed["sources"]["PubMed"]["checkpoint_dataset"]["path"]
+    response = next((checkpoint.parent / "responses").iterdir())
+    response.write_bytes(response.read_bytes() + b"corrupt")
+
+    with pytest.raises(ExternalRetrievalWaveError, match="hash mismatch"):
+        authorize_pubmed_parser_recovery(root=tmp_path, timestamp=clock)
 
 
 def test_source_execution_is_idempotent_after_complete(

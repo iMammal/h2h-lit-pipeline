@@ -16,7 +16,8 @@ from typing import Any
 from h2h_lit.acm_field_execution import load_acm_final_reconciliation_manifest
 from h2h_lit.checkpoint import CheckpointStore, atomic_write
 from h2h_lit.http import HttpClient, RequestsHttpClient
-from h2h_lit.pagination import PageRequest, RateLimiter, RetryPolicy
+from h2h_lit.models import ProcessingStatus
+from h2h_lit.pagination import PageRequest, RateLimiter, RetryPolicy, native_identifier
 from h2h_lit.production_prerequisites import load_prerequisite_package
 from h2h_lit.production_query_plan import load_production_query_plan
 from h2h_lit.production_wave import (
@@ -43,7 +44,17 @@ from h2h_lit.retrieval import (
     load_review_dataset,
     save_review_dataset,
 )
-from h2h_lit.review import RetrievalAttemptStatus, RetrievalCompletionStatus
+from h2h_lit.review import (
+    ActorType,
+    DecisionActor,
+    DecisionAuthority,
+    DecisionProvenance,
+    DecisionScope,
+    RecordOccurrence,
+    RetrievalAttemptStatus,
+    RetrievalCompletionStatus,
+    canonicalize_occurrences,
+)
 from h2h_lit.sources.acm_dl import import_acm_selected_reconciliation
 
 PLAN_PATH = "config/star_production_query_plan_v1.json"
@@ -72,6 +83,15 @@ SEMANTIC_CONTROL_GATE_PATH = (
     f"{EXECUTION_ROOT}/SemanticScholar/control_gate/control_gate.json"
 )
 PUBMED_TRANSPORT_RETRY_STATUS = "TRANSPORT_RETRY_AUTHORIZED_NOT_STARTED"
+PUBMED_PARSER_RECOVERY_STATUS = "PARSER_RECOVERY_COMPLETE_READY_TO_RESUME"
+PUBMED_EPISODE_2_OMITTED_BOOK_PMIDS = (
+    "33085405",
+    "39836822",
+    "38781405",
+    "38484096",
+    "37816103",
+    "40198015",
+)
 TRANSPORT_ENVIRONMENT_FAILURE_TYPES = frozenset(
     {"ConnectionError", "ConnectTimeout", "ProxyError", "ReadTimeout", "SSLError", "Timeout"}
 )
@@ -788,6 +808,195 @@ def authorize_pubmed_transport_retry(
     return state
 
 
+def authorize_pubmed_parser_recovery(
+    *,
+    root: str | Path,
+    timestamp: Callable[[], str] = utc_now,
+) -> dict[str, Any]:
+    """Reparse immutable PubMed episode-2 responses into a resumable checkpoint."""
+
+    root_path = Path(root).resolve()
+    wave, preflight = validate_persisted_external_preflight(root=root_path)
+    state_path = _safe_output_path(root_path, EXECUTION_STATE_PATH)
+    if not state_path.is_file():
+        raise ExternalRetrievalWaveError("external execution state does not exist")
+    state = _load_execution_state(state_path, root_path, wave, preflight)
+    source_state = state["sources"]["PubMed"]
+    if source_state["status"] == PUBMED_PARSER_RECOVERY_STATUS:
+        _validate_authorized_pubmed_parser_recovery(source_state, root_path)
+        return state
+    if source_state["status"] != "FAILED":
+        raise ExternalRetrievalWaveError(
+            "PubMed parser recovery requires a terminal FAILED component"
+        )
+    if state["external_retrieval_cutoff_date"] is not None:
+        raise ExternalRetrievalWaveError(
+            "PubMed parser recovery cannot alter a closed external retrieval wave"
+        )
+
+    episodes = source_state.get("execution_episodes", [])
+    if source_state.get("active_episode_number") != 2 or len(episodes) != 2:
+        raise ExternalRetrievalWaveError(
+            "PubMed parser recovery is restricted to failed execution episode 2"
+        )
+    failed_episode = next(
+        (item for item in episodes if item.get("episode_number") == 2), None
+    )
+    if (
+        failed_episode is None
+        or failed_episode.get("status") != "FAILED"
+        or not failed_episode.get("immutable")
+    ):
+        raise ExternalRetrievalWaveError(
+            "PubMed episode 2 is not preserved as an immutable failed episode"
+        )
+    checkpoint_reference = source_state.get("checkpoint_dataset")
+    if not checkpoint_reference or failed_episode.get("checkpoint_dataset") != checkpoint_reference:
+        raise ExternalRetrievalWaveError("PubMed episode-2 checkpoint lineage changed")
+    failed_checkpoint = _safe_output_path(
+        root_path, str(checkpoint_reference["path"])
+    )
+    _verify_file_reference(failed_checkpoint, checkpoint_reference, root_path)
+    failed_checkpoint_bytes = failed_checkpoint.read_bytes()
+    failed_checkpoint_dir = failed_checkpoint.parent
+    dataset = load_review_dataset(failed_checkpoint)
+    recovered_at = timestamp()
+    recovery = _reparse_failed_pubmed_checkpoint(
+        dataset=dataset,
+        checkpoint_dir=failed_checkpoint_dir,
+        wave=wave,
+        recovered_at=recovered_at,
+    )
+
+    next_number = 3
+    recovery_checkpoint_relative = (
+        f"{EXECUTION_ROOT}/PubMed/episodes/episode-{next_number:03d}/checkpoint"
+    )
+    recovery_checkpoint_dir = _safe_output_path(
+        root_path, recovery_checkpoint_relative
+    )
+    if recovery_checkpoint_dir.exists():
+        raise ExternalRetrievalWaveError(
+            "PubMed parser-recovery checkpoint already exists without valid state lineage"
+        )
+    recovery_store = CheckpointStore(recovery_checkpoint_dir)
+    raw_bindings = []
+    for relative_path, expected_hash in recovery["raw_response_references"]:
+        response_path = Path(relative_path)
+        if (
+            response_path.is_absolute()
+            or ".." in response_path.parts
+            or not response_path.parts
+            or response_path.parts[0] != "responses"
+        ):
+            raise ExternalRetrievalWaveError(
+                "PubMed episode-2 raw response path is unsafe"
+            )
+        source = failed_checkpoint_dir / response_path
+        raw = source.read_bytes()
+        if _sha256(raw) != expected_hash:
+            raise ExternalRetrievalWaveError(
+                f"PubMed episode-2 raw response hash mismatch: {relative_path}"
+            )
+        destination = recovery_checkpoint_dir / response_path
+        atomic_write(destination, raw)
+        if destination.read_bytes() != raw:
+            raise ExternalRetrievalWaveError(
+                f"PubMed recovery raw-response copy mismatch: {relative_path}"
+            )
+        raw_bindings.append(
+            {
+                "episode_2_path": source.relative_to(root_path).as_posix(),
+                "recovery_copy_path": destination.relative_to(root_path).as_posix(),
+                "byte_size": len(raw),
+                "raw_sha256": expected_hash,
+            }
+        )
+
+    run = dataset.retrieval_runs[0]
+    run.metadata["offline_parser_recovery"] = {
+        "recovery_episode_number": next_number,
+        "source_episode_number": 2,
+        "source_checkpoint": dict(checkpoint_reference),
+        "source_raw_response_count": len(raw_bindings),
+        "source_raw_response_manifest_hash": _hash_payload(
+            {"responses": raw_bindings}
+        ),
+        "recovered_pmids": list(recovery["recovered_pmids"]),
+        "remaining_efetch_request_count": recovery[
+            "remaining_efetch_request_count"
+        ],
+        "network_used": False,
+    }
+    checkpoint_hash = recovery_store.save_dataset(dataset)
+    recovery_checkpoint_reference = _file_reference(
+        recovery_store.dataset_path, root_path
+    )
+    if checkpoint_hash != recovery_checkpoint_reference["raw_sha256"]:
+        raise ExternalRetrievalWaveError("PubMed recovery checkpoint hash disagreement")
+    if failed_checkpoint.read_bytes() != failed_checkpoint_bytes:
+        raise ExternalRetrievalWaveError("PubMed episode-2 checkpoint changed during recovery")
+    for binding in raw_bindings:
+        source = root_path / binding["episode_2_path"]
+        raw = source.read_bytes()
+        if len(raw) != binding["byte_size"] or _sha256(raw) != binding["raw_sha256"]:
+            raise ExternalRetrievalWaveError(
+                "PubMed episode-2 raw response changed during recovery"
+            )
+
+    recovery_episode = {
+        "episode_number": next_number,
+        "episode_id": f"PubMed-episode-{next_number:03d}",
+        "run_id": run.run_id,
+        "status": PUBMED_PARSER_RECOVERY_STATUS,
+        "recovery_of_episode_number": 2,
+        "authorization_reason": "OFFLINE_PUBMED_XML_PARSER_CORRECTION",
+        "authorized_at_utc": recovered_at,
+        "checkpoint_path": recovery_checkpoint_relative,
+        "checkpoint_dataset": recovery_checkpoint_reference,
+        "frozen_wave_manifest_hash": wave.manifest_hash(),
+        "frozen_query_plan_hash": wave.query_plan_hash,
+        "source_episode_checkpoint": dict(checkpoint_reference),
+        "source_raw_responses": raw_bindings,
+        "recovered_pmids": list(recovery["recovered_pmids"]),
+        "already_fetched_occurrence_count": len(dataset.occurrences),
+        "remaining_efetch_request_count": recovery[
+            "remaining_efetch_request_count"
+        ],
+        "remaining_efetch_batches": recovery["remaining_efetch_batches"],
+        "network_used": False,
+        "immutable": False,
+    }
+    episodes.append(recovery_episode)
+    source_state.update(
+        {
+            "status": PUBMED_PARSER_RECOVERY_STATUS,
+            "active_episode_number": next_number,
+            "active_run_id": run.run_id,
+            "active_checkpoint_path": recovery_checkpoint_relative,
+            "checkpoint_path": recovery_checkpoint_relative,
+            "checkpoint_dataset": recovery_checkpoint_reference,
+            "completed_query_count": sum(
+                query.completion_status is RetrievalCompletionStatus.COMPLETE
+                for query in dataset.source_queries
+            ),
+            "total_query_count": 5,
+            "occurrence_count": len(dataset.occurrences),
+            "attempt_count": len(dataset.retrieval_attempts),
+            "requests_this_session": 0,
+            "pause_reason": "OFFLINE_PARSER_RECOVERY_COMPLETE; LIVE_EFETCH_RESUME_REQUIRED",
+            "failure_reason": None,
+            "last_session_started_at_utc": recovered_at,
+            "last_session_completed_at_utc": recovered_at,
+        }
+    )
+    state["status"] = "RUNNING"
+    state["external_retrieval_completed_at_utc"] = None
+    state["external_retrieval_cutoff_date"] = None
+    _save_execution_state(state_path, state)
+    return state
+
+
 def execute_external_source_session(
     *,
     root: str | Path,
@@ -1324,6 +1533,373 @@ def _load_execution_state(
     return state
 
 
+def _reparse_failed_pubmed_checkpoint(
+    *,
+    dataset: Any,
+    checkpoint_dir: Path,
+    wave: ProductionRetrievalWave,
+    recovered_at: str,
+) -> dict[str, Any]:
+    dataset.validate()
+    if len(dataset.retrieval_runs) != 1:
+        raise ExternalRetrievalWaveError("PubMed parser recovery requires exactly one run")
+    run = dataset.retrieval_runs[0]
+    if (
+        run.completion_status is not RetrievalCompletionStatus.FAILED
+        or run.retrieval_cutoff_date is not None
+        or run.query_plan_version != wave.query_plan_hash
+    ):
+        raise ExternalRetrievalWaveError(
+            "PubMed episode-2 run is not an eligible parser-only failure"
+        )
+    if not dataset.occurrences or not dataset.retrieval_attempts:
+        raise ExternalRetrievalWaveError(
+            "PubMed parser recovery requires persisted fetched records and responses"
+        )
+    if any(
+        item.status is not ProcessingStatus.FAILED
+        or not item.errors
+        or any("PubMed EFetch PMID sequence" not in error for error in item.errors)
+        for item in dataset.source_queries
+    ):
+        raise ExternalRetrievalWaveError(
+            "PubMed parser recovery refused for a non-sequence parser failure"
+        )
+
+    specs = _source_query_specs(wave, "PubMed", ieee_credential="")
+    if len(dataset.source_queries) != len(specs):
+        raise ExternalRetrievalWaveError("PubMed episode-2 query count changed")
+    adapter = PAGINATED_SOURCE_ADAPTERS["PubMed"]
+    response_store = CheckpointStore(checkpoint_dir)
+    old_identifiers = {item.source_identifier for item in dataset.occurrences}
+    raw_response_references: list[tuple[str, str]] = []
+    seen_response_paths: set[str] = set()
+    reconstructed_occurrences: list[RecordOccurrence] = []
+    remaining_batches: list[dict[str, Any]] = []
+    historical_request_hashes = {
+        attempt.request_hash for attempt in dataset.retrieval_attempts
+    }
+
+    for query, spec in zip(dataset.source_queries, specs, strict=True):
+        if (
+            query.source_database != "PubMed"
+            or query.query_text != spec.query_text
+            or query.query_version != spec.query_version
+            or query.metadata.get("production_query_id")
+            != spec.metadata["production_query_id"]
+            or query.metadata.get("frozen_request_specification_hash")
+            != spec.metadata["frozen_request_specification_hash"]
+        ):
+            raise ExternalRetrievalWaveError(
+                "PubMed episode-2 frozen query/request binding changed"
+            )
+        pages = sorted(
+            (
+                page
+                for page in dataset.retrieval_pages
+                if page.source_query_id == query.query_id
+            ),
+            key=lambda item: item.ordinal,
+        )
+        if not pages or pages[0].request_state != adapter.initial_state(spec):
+            raise ExternalRetrievalWaveError(
+                "PubMed episode-2 pagination does not start with frozen ESearch"
+            )
+        expected_state = adapter.initial_state(spec)
+        source_rank = 0
+        for page in pages:
+            if page.request_state != expected_state:
+                raise ExternalRetrievalWaveError(
+                    "PubMed episode-2 persisted pagination state sequence changed"
+                )
+            if page.adapter_version not in {"2.0.0", adapter.version}:
+                raise ExternalRetrievalWaveError(
+                    "PubMed episode-2 adapter version is not eligible for parser recovery"
+                )
+            request = adapter.build_request(spec, page.request_state)
+            attempts = [
+                attempt
+                for attempt in dataset.retrieval_attempts
+                if attempt.page_id == page.page_id
+            ]
+            if not attempts:
+                raise ExternalRetrievalWaveError(
+                    "PubMed episode-2 page lacks persisted attempt provenance"
+                )
+            for attempt in attempts:
+                if (
+                    attempt.status is not RetrievalAttemptStatus.SUCCEEDED
+                    or attempt.response_status is None
+                    or not 200 <= attempt.response_status < 300
+                    or not attempt.raw_response_path
+                    or not attempt.raw_response_hash
+                    or attempt.request_method != request.method
+                    or attempt.request_hash != request.request_hash()
+                ):
+                    raise ExternalRetrievalWaveError(
+                        "PubMed parser recovery requires successful hash-bound responses"
+                    )
+                if attempt.raw_response_path in seen_response_paths:
+                    raise ExternalRetrievalWaveError(
+                        "PubMed episode-2 raw response path is reused"
+                    )
+                _load_pubmed_recovery_response(
+                    response_store,
+                    attempt.raw_response_path,
+                    attempt.raw_response_hash,
+                )
+                seen_response_paths.add(attempt.raw_response_path)
+                raw_response_references.append(
+                    (attempt.raw_response_path, attempt.raw_response_hash)
+                )
+            attempt = attempts[-1]
+            response = _load_pubmed_recovery_response(
+                response_store,
+                str(attempt.raw_response_path),
+                str(attempt.raw_response_hash),
+            )
+            try:
+                parsed = adapter.parse_response(spec, request.state, response)
+            except Exception as exc:
+                raise ExternalRetrievalWaveError(
+                    f"PubMed episode-2 offline parse failed: {type(exc).__name__}: {exc}"
+                ) from exc
+            if parsed.incomplete_reason or parsed.raw_item_count != len(parsed.records):
+                raise ExternalRetrievalWaveError(
+                    parsed.incomplete_reason
+                    or "PubMed recovery parser record accounting mismatch"
+                )
+            expected_pmids = list(request.state.get("batch_pmids") or [])
+            returned_pmids = [record.pmid for record in parsed.records]
+            if expected_pmids and returned_pmids != expected_pmids:
+                raise ExternalRetrievalWaveError(
+                    "PubMed recovery returned a missing, unexpected, or reordered PMID"
+                )
+
+            prior_adapter_version = page.adapter_version
+            page.adapter_version = adapter.version
+            page.returned_item_count = parsed.raw_item_count
+            page.native_identifiers = list(parsed.native_identifiers)
+            page.next_state = parsed.next_state
+            page.source_reported_total = parsed.source_reported_total
+            page.total_is_exact = parsed.total_is_exact
+            page.terminal = parsed.terminal
+            page.completion_proof = parsed.completion_proof
+            page.truncated = parsed.truncated
+            page.truncation_reason = parsed.truncation_reason
+            page.status = RetrievalCompletionStatus.COMPLETE
+            page.metadata = {
+                **parsed.metadata,
+                "offline_parser_recovery": True,
+                "recovered_from_adapter_version": prior_adapter_version,
+                "raw_response_reused_without_network": True,
+            }
+            page.occurrence_ids = []
+            for rank, record in enumerate(parsed.records, start=1):
+                source_rank += 1
+                source_identifier = native_identifier(record, source_rank)
+                occurrence = RecordOccurrence(
+                    occurrence_id=_retrieval_stable_id(
+                        "occurrence", page.page_id, str(rank), source_identifier
+                    ),
+                    source_query_id=query.query_id,
+                    source_identifier=source_identifier,
+                    retrieved_at=attempt.ended_at or recovered_at,
+                    record=record,
+                    source_rank=source_rank,
+                    page=page.ordinal,
+                    cursor=_pubmed_state_cursor(page.request_state),
+                    raw_payload_hash=_hash_payload(record.original_metadata),
+                    metadata={
+                        "source_identifier_missing": record.source_identifier is None,
+                        "parser_incomplete": bool(
+                            record.original_metadata.get("parser_incomplete")
+                        ),
+                        "offline_parser_recovery": True,
+                    },
+                    retrieval_page_id=page.page_id,
+                )
+                reconstructed_occurrences.append(occurrence)
+                page.occurrence_ids.append(occurrence.occurrence_id)
+            expected_state = parsed.next_state
+
+        search_page = pages[0]
+        pmids = list(search_page.next_state.get("pmids") or []) if search_page.next_state else []
+        if expected_state is None:
+            query.status = ProcessingStatus.OK
+            query.completion_status = RetrievalCompletionStatus.COMPLETE
+            query.completion_proof = pages[-1].completion_proof
+        else:
+            if expected_state.get("phase") != "fetch":
+                raise ExternalRetrievalWaveError(
+                    "PubMed episode-2 remaining state is not EFetch"
+                )
+            next_index = int(expected_state.get("index", -1))
+            if next_index < 0 or next_index >= len(pmids):
+                raise ExternalRetrievalWaveError(
+                    "PubMed episode-2 remaining EFetch index is invalid"
+                )
+            for start in range(next_index, len(pmids), spec.limit):
+                batch = pmids[start : start + spec.limit]
+                batch_state = {"phase": "fetch", "pmids": pmids, "index": start}
+                batch_request = adapter.build_request(spec, batch_state)
+                if batch_request.request_hash() in historical_request_hashes:
+                    raise ExternalRetrievalWaveError(
+                        "PubMed recovery planned a remaining batch that was already requested"
+                    )
+                remaining_batches.append(
+                    {
+                        "production_query_id": spec.metadata["production_query_id"],
+                        "start_index": start,
+                        "end_index_exclusive": start + len(batch),
+                        "pmids": batch,
+                        "pmid_manifest_sha256": _hash_payload({"pmids": batch}),
+                        "request_hash": batch_request.request_hash(),
+                    }
+                )
+            query.status = ProcessingStatus.PARTIAL
+            query.completion_status = RetrievalCompletionStatus.RUNNING
+            query.completion_proof = None
+        query.errors = []
+        query.result_count = source_rank
+        query.source_reported_total = len(pmids)
+        query.total_is_exact = True
+        query.retrieval_ended_at = recovered_at
+
+    reconstructed_identifiers = {
+        item.source_identifier for item in reconstructed_occurrences
+    }
+    recovered_pmids = tuple(
+        pmid
+        for pmid in PUBMED_EPISODE_2_OMITTED_BOOK_PMIDS
+        if pmid in reconstructed_identifiers and pmid not in old_identifiers
+    )
+    if recovered_pmids != PUBMED_EPISODE_2_OMITTED_BOOK_PMIDS or (
+        reconstructed_identifiers - old_identifiers
+    ) != set(PUBMED_EPISODE_2_OMITTED_BOOK_PMIDS):
+        raise ExternalRetrievalWaveError(
+            "PubMed parser recovery did not recover exactly the six known book PMIDs"
+        )
+    record_by_pmid = {
+        occurrence.record.pmid: occurrence.record for occurrence in reconstructed_occurrences
+    }
+    if any(
+        record_by_pmid[pmid].original_metadata.get("pubmed_record_type")
+        != "PubmedBookArticle"
+        for pmid in recovered_pmids
+    ):
+        raise ExternalRetrievalWaveError(
+            "PubMed parser recovery PMID is not a PubmedBookArticle"
+        )
+
+    dataset.occurrences = reconstructed_occurrences
+    if not remaining_batches:
+        raise ExternalRetrievalWaveError(
+            "PubMed parser recovery found no remaining live EFetch work"
+        )
+    provenance = DecisionProvenance(
+        actor=DecisionActor(
+            actor_id="h2h_lit.external_retrieval_wave.pubmed_parser_recovery",
+            actor_type=ActorType.SOFTWARE,
+            metadata={"software_version": WAVE_VERSION},
+        ),
+        authority=DecisionAuthority.DETERMINISTIC,
+        scope=DecisionScope.PROSPECTIVE,
+        protocol_version="1.0.0",
+        rubric_version="1.0.0",
+        created_at=run.retrieval_started_at,
+        metadata={
+            "run_id": run.run_id,
+            "rule": "doi_first_title_fallback",
+            "offline_parser_recovery": True,
+        },
+    )
+    dataset.canonical_records, dataset.duplicate_decisions = canonicalize_occurrences(
+        dataset.occurrences, provenance=provenance
+    )
+    run.status = ProcessingStatus.PARTIAL
+    run.completion_status = RetrievalCompletionStatus.RUNNING
+    run.retrieval_cutoff_date = None
+    run.retrieval_completed_at = recovered_at
+    run.errors = ["offline parser recovery complete; remaining PubMed EFetch batches pending"]
+    run.metadata.pop("pause_state", None)
+    run.metadata.pop("pause_reason", None)
+    run.metadata["parser_recovery_source_response_count"] = len(
+        raw_response_references
+    )
+    run.metadata["remaining_efetch_request_count"] = len(remaining_batches)
+    dataset.validate()
+    return {
+        "recovered_pmids": recovered_pmids,
+        "raw_response_references": raw_response_references,
+        "remaining_efetch_request_count": len(remaining_batches),
+        "remaining_efetch_batches": remaining_batches,
+    }
+
+
+def _validate_authorized_pubmed_parser_recovery(
+    source_state: dict[str, Any], root: Path
+) -> None:
+    episodes = source_state.get("execution_episodes", [])
+    active = next(
+        (
+            item
+            for item in episodes
+            if item.get("episode_number") == source_state.get("active_episode_number")
+        ),
+        None,
+    )
+    if (
+        active is None
+        or active.get("episode_number") != 3
+        or active.get("status") != PUBMED_PARSER_RECOVERY_STATUS
+        or active.get("recovery_of_episode_number") != 2
+        or source_state.get("active_checkpoint_path") != active.get("checkpoint_path")
+    ):
+        raise ExternalRetrievalWaveError("authorized PubMed parser recovery lineage changed")
+    prior = next(
+        (item for item in episodes if item.get("episode_number") == 2), None
+    )
+    if prior is None or not prior.get("immutable") or prior.get("status") != "FAILED":
+        raise ExternalRetrievalWaveError("PubMed episode 2 is not preserved")
+    prior_checkpoint = _safe_output_path(
+        root, active["source_episode_checkpoint"]["path"]
+    )
+    _verify_file_reference(prior_checkpoint, active["source_episode_checkpoint"], root)
+    recovery_checkpoint = _safe_output_path(
+        root, active["checkpoint_dataset"]["path"]
+    )
+    _verify_file_reference(recovery_checkpoint, active["checkpoint_dataset"], root)
+    for binding in active.get("source_raw_responses", []):
+        for key in ("episode_2_path", "recovery_copy_path"):
+            path = _safe_output_path(root, binding[key])
+            raw = path.read_bytes()
+            if len(raw) != binding["byte_size"] or _sha256(raw) != binding["raw_sha256"]:
+                raise ExternalRetrievalWaveError(
+                    "authorized PubMed parser recovery raw-response binding changed"
+                )
+
+
+def _load_pubmed_recovery_response(
+    store: CheckpointStore, relative_path: str, expected_hash: str
+) -> Any:
+    try:
+        return store.load_response(relative_path, expected_hash)
+    except (OSError, ValueError) as exc:
+        raise ExternalRetrievalWaveError(
+            f"PubMed episode-2 raw response hash/read failure: {exc}"
+        ) from exc
+
+
+def _retrieval_stable_id(prefix: str, *parts: str) -> str:
+    digest = hashlib.sha256("\x1f".join(parts).encode("utf-8")).hexdigest()[:24]
+    return f"{prefix}:{digest}"
+
+
+def _pubmed_state_cursor(state: Mapping[str, Any]) -> str | None:
+    return str(state["index"]) if state.get("index") is not None else None
+
+
 def _validate_response_free_pubmed_transport_failure(
     *,
     dataset: Any,
@@ -1560,11 +2136,56 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--resume", action="store_true")
     parser.add_argument("--authorize-live-external-retrieval", action="store_true")
     parser.add_argument("--authorize-transport-retry-reset", action="store_true")
+    parser.add_argument("--authorize-pubmed-parser-recovery", action="store_true")
     args = parser.parse_args(argv)
+    if args.authorize_pubmed_parser_recovery:
+        if args.source != "PubMed":
+            parser.error("parser recovery is supported only for --source PubMed")
+        if (
+            args.authorize_live_external_retrieval
+            or args.authorize_transport_retry_reset
+            or args.resume
+        ):
+            parser.error("parser recovery is a separate offline authorization boundary")
+        state = authorize_pubmed_parser_recovery(root=args.root)
+        source_state = state["sources"]["PubMed"]
+        active = next(
+            item
+            for item in source_state["execution_episodes"]
+            if item["episode_number"] == source_state["active_episode_number"]
+        )
+        print(
+            json.dumps(
+                {
+                    "execution_status": state["status"],
+                    "source": "PubMed",
+                    "source_status": source_state["status"],
+                    "active_episode_number": source_state["active_episode_number"],
+                    "recovered_pmids": active["recovered_pmids"],
+                    "already_fetched_occurrence_count": active[
+                        "already_fetched_occurrence_count"
+                    ],
+                    "remaining_efetch_request_count": active[
+                        "remaining_efetch_request_count"
+                    ],
+                    "external_retrieval_cutoff_date": state[
+                        "external_retrieval_cutoff_date"
+                    ],
+                    "network_used": False,
+                },
+                sort_keys=True,
+                indent=2,
+            )
+        )
+        return 0
     if args.authorize_transport_retry_reset:
         if args.source != "PubMed":
             parser.error("transport retry reset is supported only for --source PubMed")
-        if args.authorize_live_external_retrieval or args.resume:
+        if (
+            args.authorize_live_external_retrieval
+            or args.authorize_pubmed_parser_recovery
+            or args.resume
+        ):
             parser.error(
                 "transport retry reset is a separate offline authorization boundary"
             )

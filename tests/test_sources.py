@@ -5,7 +5,7 @@ import pytest
 from h2h_lit.sources.arxiv import search_arxiv
 from h2h_lit.sources.crossref import search_crossref
 from h2h_lit.sources.europe_pmc import search_europe_pmc
-from h2h_lit.sources.pubmed import search_pubmed
+from h2h_lit.sources.pubmed import parse_pubmed_fetch, search_pubmed
 from h2h_lit.sources.semantic_scholar import search_semantic_scholar
 from tests.fake_http import FakeHttp, FakeResponse
 
@@ -41,6 +41,88 @@ def test_pubmed_empty_search_does_not_fetch():
     http = FakeHttp([FakeResponse(content=b"<eSearchResult><IdList /></eSearchResult>")])
     assert search_pubmed("missing", http=http) == []
     assert len(http.calls) == 1
+
+
+def test_pubmed_fetch_parses_book_article_without_inventing_journal_metadata():
+    content = b"""
+    <PubmedArticleSet>
+      <PubmedBookArticle>
+        <BookDocument>
+          <PMID>33085405</PMID>
+          <ArticleIdList><ArticleId IdType="doi">10.1000/book</ArticleId></ArticleIdList>
+          <Book>
+            <Publisher><PublisherName>Evidence Press</PublisherName></Publisher>
+            <BookTitle>Clinical Evidence Handbook</BookTitle>
+            <CollectionTitle>Evidence Reports</CollectionTitle>
+            <PubDate><Year>2020</Year></PubDate>
+            <AuthorList><Author><LastName>Ng</LastName><Initials>A</Initials></Author></AuthorList>
+          </Book>
+          <Abstract><AbstractText>Book <i>abstract</i>.</AbstractText></Abstract>
+        </BookDocument>
+      </PubmedBookArticle>
+    </PubmedArticleSet>
+    """
+
+    record = parse_pubmed_fetch(content, query="frozen query")[0]
+
+    assert record.pmid == "33085405"
+    assert record.title == "Clinical Evidence Handbook"
+    assert record.abstract == "Book abstract."
+    assert record.authors == ["Ng, A"]
+    assert record.year == "2020"
+    assert record.doi == "10.1000/book"
+    assert record.journal == ""
+    assert record.original_metadata == {
+        "pmid": "33085405",
+        "pubmed_record_type": "PubmedBookArticle",
+        "book_title": "Clinical Evidence Handbook",
+        "collection_title": "Evidence Reports",
+        "publisher_name": "Evidence Press",
+    }
+
+
+def test_pubmed_fetch_preserves_mixed_article_book_provider_order():
+    content = b"""
+    <PubmedArticleSet>
+      <PubmedArticle><MedlineCitation><PMID>100</PMID><Article>
+        <ArticleTitle>Article first</ArticleTitle>
+      </Article></MedlineCitation></PubmedArticle>
+      <PubmedBookArticle><BookDocument><PMID>200</PMID><Book>
+        <BookTitle>Book second</BookTitle>
+      </Book></BookDocument></PubmedBookArticle>
+      <PubmedArticle><MedlineCitation><PMID>300</PMID><Article>
+        <ArticleTitle>Article third</ArticleTitle>
+      </Article></MedlineCitation></PubmedArticle>
+    </PubmedArticleSet>
+    """
+
+    records = parse_pubmed_fetch(content, query="frozen query")
+
+    assert [record.pmid for record in records] == ["100", "200", "300"]
+    assert [record.original_metadata["pubmed_record_type"] for record in records] == [
+        "PubmedArticle",
+        "PubmedBookArticle",
+        "PubmedArticle",
+    ]
+
+
+def test_pubmed_fetch_preserves_incomplete_book_record_without_fabricated_fields():
+    content = b"""
+    <PubmedArticleSet><PubmedBookArticle><BookDocument>
+      <PMID>39836822</PMID>
+    </BookDocument></PubmedBookArticle></PubmedArticleSet>
+    """
+
+    record = parse_pubmed_fetch(content, query="frozen query")[0]
+
+    assert record.pmid == "39836822"
+    assert record.title == ""
+    assert record.abstract == ""
+    assert record.authors == []
+    assert record.year is None
+    assert record.doi is None
+    assert record.journal == ""
+    assert record.original_metadata["pubmed_record_type"] == "PubmedBookArticle"
 
 
 def test_europe_pmc_search_preserves_pdf_metadata():

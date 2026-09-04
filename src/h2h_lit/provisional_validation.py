@@ -31,7 +31,6 @@ from h2h_lit.http import HttpClient, HttpResponse, RequestsHttpClient
 from h2h_lit.normalize import dedupe_key, normalize_doi, normalize_title
 from h2h_lit.pagination import RateLimiter, RetryPolicy, redact_url
 from h2h_lit.production_query_plan import load_production_query_plan
-from h2h_lit.sources.common import make_record
 from h2h_lit.sources.pubmed import EUTILS as PUBMED_EUTILS
 from h2h_lit.sources.pubmed import parse_pubmed_fetch
 
@@ -446,72 +445,10 @@ def _recovered_attempt(
     }
 
 
-def _element_text(element: ET.Element | None) -> str:
-    return "" if element is None else "".join(element.itertext()).strip()
-
-
 def _parse_pubmed_metadata(content: bytes, *, query: str) -> list[Any]:
-    """Use the repository parser and account for valid PubmedBookArticle records."""
+    """Parse PubMed metadata through the shared article/book-aware parser."""
 
-    records = parse_pubmed_fetch(content, query=query)
-    root = ET.fromstring(content)
-    for item in root.findall(".//PubmedBookArticle"):
-        document = item.find("BookDocument")
-        if document is None:
-            continue
-        pmid = document.findtext("PMID")
-        title = _element_text(document.find(".//BookTitle"))
-        abstract = " ".join(
-            text
-            for text in (
-                _element_text(part) for part in document.findall(".//AbstractText")
-            )
-            if text
-        )
-        authors: list[str] = []
-        for author in document.findall(".//AuthorList/Author"):
-            last = author.findtext("LastName") or ""
-            initials = author.findtext("Initials") or ""
-            if last and initials:
-                authors.append(f"{last}, {initials}")
-            elif last:
-                authors.append(last)
-        doi = next(
-            (
-                identifier.text
-                for identifier in document.findall(".//ArticleId")
-                if (identifier.attrib.get("IdType") or "").lower() == "doi"
-                and identifier.text
-            ),
-            None,
-        )
-        journal = (
-            _element_text(document.find(".//CollectionTitle"))
-            or _element_text(document.find(".//PublisherName"))
-            or "PubMed"
-        )
-        records.append(
-            make_record(
-                title=title,
-                abstract=abstract,
-                authors=authors,
-                year=document.findtext(".//Book/PubDate/Year"),
-                doi=doi,
-                pmid=pmid,
-                source_identifier=pmid,
-                source_database="PubMed",
-                source_url=f"https://pubmed.ncbi.nlm.nih.gov/{pmid}/" if pmid else None,
-                journal=journal,
-                is_open_access=False,
-                original_metadata={
-                    "pmid": pmid,
-                    "pubmed_record_type": "PubmedBookArticle",
-                },
-                source_query=query,
-                stage="pubmed_search",
-            )
-        )
-    return records
+    return parse_pubmed_fetch(content, query=query)
 
 
 def _perform_pubmed_request(

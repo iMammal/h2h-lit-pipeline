@@ -34,19 +34,42 @@ def search_pubmed(query: str, *, limit: int = 50, http: HttpClient) -> list:
 def parse_pubmed_fetch(content: bytes, *, query: str) -> list:
     root = ET.fromstring(content)
     records = []
-    for article in root.findall(".//PubmedArticle"):
-        pmid = article.findtext(".//PMID")
-        title = article.findtext(".//ArticleTitle") or ""
-        abstract = " ".join(t.text or "" for t in article.findall(".//AbstractText"))
-        year = article.findtext(".//PubDate/Year")
-        journal = article.findtext(".//Journal/Title") or "PubMed"
+    supported_types = {"PubmedArticle", "PubmedBookArticle"}
+    for item in root:
+        record_type = item.tag.rsplit("}", 1)[-1]
+        if record_type not in supported_types:
+            continue
+        document = (
+            item.find("./MedlineCitation")
+            if record_type == "PubmedArticle"
+            else item.find("./BookDocument")
+        )
+        if document is None:
+            continue
+        pmid = document.findtext("./PMID")
+        title = document.findtext(".//ArticleTitle")
+        if title is None and record_type == "PubmedBookArticle":
+            title = document.findtext("./Book/BookTitle")
+        abstract = " ".join(
+            "".join(value.itertext()) for value in document.findall(".//Abstract/AbstractText")
+        )
+        year = (
+            document.findtext(".//PubDate/Year")
+            if record_type == "PubmedArticle"
+            else document.findtext("./Book/PubDate/Year")
+        )
+        journal = (
+            document.findtext(".//Journal/Title")
+            if record_type == "PubmedArticle"
+            else None
+        )
         doi = None
-        for aid in article.findall(".//ArticleId"):
+        for aid in item.findall(".//ArticleId"):
             if (aid.attrib.get("IdType") or "").lower() == "doi":
                 doi = aid.text
                 break
         authors = []
-        for author in article.findall(".//Author"):
+        for author in document.findall(".//Author"):
             last = author.findtext("LastName") or ""
             initials = author.findtext("Initials") or ""
             if last and initials:
@@ -55,7 +78,7 @@ def parse_pubmed_fetch(content: bytes, *, query: str) -> list:
                 authors.append(last)
         records.append(
             make_record(
-                title=title,
+                title=title or "",
                 abstract=abstract,
                 authors=authors,
                 year=year,
@@ -66,7 +89,23 @@ def parse_pubmed_fetch(content: bytes, *, query: str) -> list:
                 source_url=f"https://pubmed.ncbi.nlm.nih.gov/{pmid}/" if pmid else None,
                 journal=journal,
                 is_open_access=False,
-                original_metadata={"pmid": pmid},
+                original_metadata={
+                    "pmid": pmid,
+                    "pubmed_record_type": record_type,
+                    **(
+                        {
+                            "book_title": document.findtext("./Book/BookTitle"),
+                            "collection_title": document.findtext(
+                                "./Book/CollectionTitle"
+                            ),
+                            "publisher_name": document.findtext(
+                                "./Book/Publisher/PublisherName"
+                            ),
+                        }
+                        if record_type == "PubmedBookArticle"
+                        else {}
+                    ),
+                },
                 source_query=query,
                 stage="pubmed_search",
             )
