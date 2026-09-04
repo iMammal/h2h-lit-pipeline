@@ -39,7 +39,7 @@ def test_frozen_plan_and_prerequisite_package_hashes_validate() -> None:
     assert _sha(PLAN_PATH) == EXPECTED_PLAN_RAW_SHA256
 
     package = _package()
-    assert package.payload["package_version"] == "1.0.0"
+    assert package.payload["package_version"] == "1.1.0"
     assert package.payload["package_hash"] == package.package_hash()
     assert package.payload["overall_status"] == "BLOCKED_EXTERNAL_INPUT"
 
@@ -209,6 +209,76 @@ def test_phase4a_contract_is_compatible_but_not_ready_and_crossref_is_support_on
     assert package["states"]["acm"] == "RETRIEVAL_EVIDENCE_COMPLETE_NOT_IMPORTED"
     assert "ACM_OPERATOR_EVIDENCE_MISSING" not in phase4a["readiness_issues"]
     assert package["overall_status"] == "BLOCKED_EXTERNAL_INPUT"
+
+    external = phase4a["external_retrieval_execution"]
+    assert external["status"] == "BLOCKED_EXTERNAL_INPUT"
+    assert external["ready"] is False
+    assert external["required_identification_sources"] == [
+        "PubMed",
+        "EuropePMC",
+        "SemanticScholar",
+        "arXiv",
+        "IEEEXplore",
+        "ACMDigitalLibrary",
+    ]
+    assert external["required_support_sources"] == ["CrossRef"]
+    assert external["nonblocking_offline_identification_source"] == "PriorSurveySeed"
+    assert external["blocking_issues"] == [
+        "IEEE_BLOCKED_CREDENTIAL",
+        "SUPPLEMENTAL_SOURCE_WINDOWS_UNKNOWN",
+    ]
+    assert all("SEED" not in issue for issue in external["blocking_issues"])
+    assert package["blocking_reasons"] == external["blocking_reasons"]
+
+
+def test_seed_manifests_block_identification_closure_not_external_retrieval() -> None:
+    phase4a = _package().payload["phase4a_compatibility"]
+    closure = phase4a["identification_set_closure"]
+    assert closure["status"] == "BLOCKED_REQUIRED_IDENTIFICATION_INPUT"
+    assert closure["ready"] is False
+    assert closure["required_seed_set_ids"] == ["EBK25", "JFR25", "FP19"]
+    assert closure["seed_states"] == {
+        "EBK25": "UNPOPULATED_REQUIRES_CURATOR_INPUT",
+        "JFR25": "POPULATED_VALIDATED_NOT_IMPORTED",
+        "FP19": "UNPOPULATED_REQUIRES_CURATOR_INPUT",
+    }
+    assert closure["validated_seed_set_ids"] == ["JFR25"]
+    assert closure["pending_manifest_seed_set_ids"] == ["EBK25", "FP19"]
+    assert closure["imported_seed_set_ids"] == []
+    assert closure["pending_import_seed_set_ids"] == ["EBK25", "JFR25", "FP19"]
+    assert closure["all_required_seed_manifests_validated"] is False
+    assert closure["all_required_seed_imports_complete"] is False
+    assert closure["full_wave_finalization_allowed"] is False
+    assert closure["blocking_issues"] == [
+        "PRIOR_SURVEY_SEED_MANIFESTS_UNPOPULATED",
+        "PRIOR_SURVEY_SEED_IMPORTS_INCOMPLETE",
+    ]
+
+    downstream = phase4a["post_closure_operations"]
+    assert downstream == {
+        "incremental_normalization_during_retrieval_allowed": True,
+        "allowed": False,
+        "blocked_operations": [
+            "final_global_deduplication",
+            "prisma_reconciliation",
+            "screening",
+            "corpus_freeze",
+        ],
+        "requires_identification_set_closure": True,
+        "requires_completed_external_retrieval": True,
+    }
+
+
+def test_external_gate_rejects_seed_blocker_even_with_valid_package_hash() -> None:
+    payload = json.loads(PACKAGE_PATH.read_text())
+    external = payload["phase4a_compatibility"]["external_retrieval_execution"]
+    external["blocking_issues"].append("PRIOR_SURVEY_SEED_MANIFESTS_UNPOPULATED")
+    payload["package_hash"] = ProductionPrerequisitePackage(payload).package_hash()
+    with pytest.raises(
+        ProductionPrerequisiteError,
+        match="prior-survey seeds cannot block external retrieval execution",
+    ):
+        ProductionPrerequisitePackage(payload).validate(root=ROOT)
 
 
 def test_no_production_review_or_occurrence_state_is_created() -> None:

@@ -51,22 +51,96 @@
   ],
   "blocking_reasons": [
     "IEEE_XPLORE_API_KEY is absent and IEEE verification has not run",
-    "EBK25 and FP19 require prospective curator-populated manifests",
-    "IEEE final-query source-window states remain unsized"
+    "IEEEXplore final-query source-window states remain unsized"
   ],
   "generated_at": "2026-09-02T00:54:40Z",
   "overall_status": "BLOCKED_EXTERNAL_INPUT",
-  "package_hash": "976140fcaa87818dd0b53dbf8fde39a4b4b0992448b13a29a8e4850002e3335d",
+  "package_hash": "e08f2bca614fa5cd75cbd418b8dc2015352d2b6a025abf70490d2008056db58a",
   "package_id": "h2h-star-retrieval-prerequisites",
-  "package_version": "1.0.0",
+  "package_version": "1.1.0",
   "phase4a_compatibility": {
     "crossref_identification_allowed": false,
+    "external_retrieval_execution": {
+      "blocking_issues": [
+        "IEEE_BLOCKED_CREDENTIAL",
+        "SUPPLEMENTAL_SOURCE_WINDOWS_UNKNOWN"
+      ],
+      "blocking_reasons": [
+        "IEEE_XPLORE_API_KEY is absent and IEEE verification has not run",
+        "IEEEXplore final-query source-window states remain unsized"
+      ],
+      "nonblocking_offline_identification_source": "PriorSurveySeed",
+      "ready": false,
+      "required_identification_sources": [
+        "PubMed",
+        "EuropePMC",
+        "SemanticScholar",
+        "arXiv",
+        "IEEEXplore",
+        "ACMDigitalLibrary"
+      ],
+      "required_support_sources": [
+        "CrossRef"
+      ],
+      "status": "BLOCKED_EXTERNAL_INPUT"
+    },
+    "identification_set_closure": {
+      "all_required_seed_imports_complete": false,
+      "all_required_seed_manifests_validated": false,
+      "blocking_issues": [
+        "PRIOR_SURVEY_SEED_MANIFESTS_UNPOPULATED",
+        "PRIOR_SURVEY_SEED_IMPORTS_INCOMPLETE"
+      ],
+      "blocking_reasons": [
+        "EBK25, FP19 require prospective curator-populated manifests",
+        "EBK25, JFR25, FP19 have not been imported into the identification set"
+      ],
+      "full_wave_finalization_allowed": false,
+      "imported_seed_set_ids": [],
+      "pending_import_seed_set_ids": [
+        "EBK25",
+        "JFR25",
+        "FP19"
+      ],
+      "pending_manifest_seed_set_ids": [
+        "EBK25",
+        "FP19"
+      ],
+      "ready": false,
+      "required_seed_set_ids": [
+        "EBK25",
+        "JFR25",
+        "FP19"
+      ],
+      "seed_states": {
+        "EBK25": "UNPOPULATED_REQUIRES_CURATOR_INPUT",
+        "FP19": "UNPOPULATED_REQUIRES_CURATOR_INPUT",
+        "JFR25": "POPULATED_VALIDATED_NOT_IMPORTED"
+      },
+      "status": "BLOCKED_REQUIRED_IDENTIFICATION_INPUT",
+      "validated_seed_set_ids": [
+        "JFR25"
+      ]
+    },
     "planning_contract_compatible": true,
+    "post_closure_operations": {
+      "allowed": false,
+      "blocked_operations": [
+        "final_global_deduplication",
+        "prisma_reconciliation",
+        "screening",
+        "corpus_freeze"
+      ],
+      "incremental_normalization_during_retrieval_allowed": true,
+      "requires_completed_external_retrieval": true,
+      "requires_identification_set_closure": true
+    },
     "production_plan_accepted": true,
     "readiness_issues": [
       "IEEE_BLOCKED_CREDENTIAL",
+      "SUPPLEMENTAL_SOURCE_WINDOWS_UNKNOWN",
       "PRIOR_SURVEY_SEED_MANIFESTS_UNPOPULATED",
-      "SUPPLEMENTAL_SOURCE_WINDOWS_UNKNOWN"
+      "PRIOR_SURVEY_SEED_IMPORTS_INCOMPLETE"
     ],
     "ready": false,
     "required_identification_sources": [

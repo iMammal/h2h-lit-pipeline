@@ -21,13 +21,25 @@ from h2h_lit.production_wave import (
 )
 
 PREREQUISITE_SCHEMA_VERSION = "1.0.0"
-PREREQUISITE_PACKAGE_VERSION = "1.0.0"
+PREREQUISITE_PACKAGE_VERSION = "1.1.0"
 EXPECTED_PLAN_VERSION = "1.0.0"
 EXPECTED_PLAN_HASH = "856ef04518bc26941275cf6b60a793814fe18ff6b0b80dd24571252a7161e091"
 EXPECTED_PLAN_RAW_SHA256 = (
     "b887d638e42f4909c1c8461dde733d758e5176d528ddccee4370211e14ed7451"
 )
 SEED_SET_IDS = ("EBK25", "JFR25", "FP19")
+PRIOR_SURVEY_SOURCE = "PriorSurveySeed"
+EXTERNAL_IDENTIFICATION_SOURCES = tuple(
+    source
+    for source in REQUIRED_IDENTIFICATION_SOURCES_V2
+    if source != PRIOR_SURVEY_SOURCE
+)
+POST_CLOSURE_OPERATIONS = (
+    "final_global_deduplication",
+    "prisma_reconciliation",
+    "screening",
+    "corpus_freeze",
+)
 PRODUCTION_SELECTION = {
     "STAR-QF01-RELATIONAL-VIS": "unanchored",
     "STAR-QF02-ASSISTED-VIS": "E",
@@ -120,7 +132,18 @@ class ProductionPrerequisitePackage:
         for seed_id in SEED_SET_IDS:
             _validate_seed(children[f"star-seed-{seed_id.lower()}-v1"], seed_id)
         _validate_windows(children["star-source-window-review-v1"], plan.payload)
-        _validate_phase4a_compatibility(data["phase4a_compatibility"])
+        _validate_phase4a_compatibility(
+            data["phase4a_compatibility"], children=children
+        )
+        external = data["phase4a_compatibility"]["external_retrieval_execution"]
+        if data["blocking_reasons"] != external["blocking_reasons"]:
+            raise ProductionPrerequisiteError(
+                "BLOCKED_EXTERNAL_INPUT reasons must be external-retrieval reasons"
+            )
+        if data["overall_status"] == "BLOCKED_EXTERNAL_INPUT" and external["ready"]:
+            raise ProductionPrerequisiteError(
+                "external-ready package cannot report BLOCKED_EXTERNAL_INPUT"
+            )
 
 
 def build_prerequisite_payloads(
@@ -166,25 +189,12 @@ def build_prerequisite_payloads(
             }
         )
 
-    blocking_reasons = [
-        "IEEE_XPLORE_API_KEY is absent and IEEE verification has not run",
-        "EBK25 and FP19 require prospective curator-populated manifests",
-        (
-            "IEEE final-query source-window states remain unsized"
-            if acm_final
-            else "IEEE and ACM final-query source-window states remain unsized"
-        ),
-    ]
+    external_gate = _build_external_retrieval_gate(ieee, acm, windows)
+    closure_gate = _build_identification_closure_gate(seeds)
     readiness_issues = [
-        "IEEE_BLOCKED_CREDENTIAL",
-        "PRIOR_SURVEY_SEED_MANIFESTS_UNPOPULATED",
-        "SUPPLEMENTAL_SOURCE_WINDOWS_UNKNOWN",
+        *external_gate["blocking_issues"],
+        *closure_gate["blocking_issues"],
     ]
-    if acm_final is None:
-        blocking_reasons.insert(
-            1, "ACM operator/access, sizing, and export evidence are not supplied"
-        )
-        readiness_issues.insert(1, "ACM_OPERATOR_EVIDENCE_MISSING")
 
     package_payload: dict[str, Any] = {
         "schema_version": PREREQUISITE_SCHEMA_VERSION,
@@ -211,7 +221,7 @@ def build_prerequisite_payloads(
             "source_windows": windows["status"],
         },
         "overall_status": "BLOCKED_EXTERNAL_INPUT",
-        "blocking_reasons": blocking_reasons,
+        "blocking_reasons": external_gate["blocking_reasons"],
         "phase4a_compatibility": {
             "wave_schema_version": "1.1.0",
             "production_plan_accepted": True,
@@ -219,10 +229,22 @@ def build_prerequisite_payloads(
             "required_support_sources": list(REQUIRED_SUPPORT_SOURCES_V2),
             "crossref_identification_allowed": False,
             "planning_contract_compatible": True,
-            "required_inputs_available": False,
+            "required_inputs_available": (
+                external_gate["ready"]
+                and closure_gate["all_required_seed_manifests_validated"]
+            ),
             "ready": False,
             "wave_instantiated": False,
             "readiness_issues": readiness_issues,
+            "external_retrieval_execution": external_gate,
+            "identification_set_closure": closure_gate,
+            "post_closure_operations": {
+                "incremental_normalization_during_retrieval_allowed": True,
+                "allowed": False,
+                "blocked_operations": list(POST_CLOSURE_OPERATIONS),
+                "requires_identification_set_closure": True,
+                "requires_completed_external_retrieval": True,
+            },
         },
         "production_operations_created": [],
     }
@@ -259,6 +281,92 @@ def load_prerequisite_package(
     )
     package.validate(root=root)
     return package
+
+
+def _build_external_retrieval_gate(
+    ieee: dict[str, Any],
+    acm: dict[str, Any],
+    windows: dict[str, Any],
+) -> dict[str, Any]:
+    issues: list[str] = []
+    reasons: list[str] = []
+    if ieee["status"] == "BLOCKED_CREDENTIAL":
+        issues.append("IEEE_BLOCKED_CREDENTIAL")
+        reasons.append("IEEE_XPLORE_API_KEY is absent and IEEE verification has not run")
+    elif not ieee["verification_executed"]:
+        issues.append("IEEE_VERIFICATION_NOT_EXECUTED")
+        reasons.append("IEEE verification has not run")
+    if acm["status"] != ACM_RETRIEVAL_EVIDENCE_COMPLETE:
+        issues.append("ACM_OPERATOR_EVIDENCE_MISSING")
+        reasons.append("ACM operator/access, sizing, and export evidence are not supplied")
+    if windows["unresolved_items"]:
+        issues.append("SUPPLEMENTAL_SOURCE_WINDOWS_UNKNOWN")
+        unresolved_sources = sorted(
+            {item.rsplit(":", 1)[-1] for item in windows["unresolved_items"]}
+        )
+        reasons.append(
+            f"{', '.join(unresolved_sources)} final-query source-window states remain unsized"
+        )
+    return {
+        "status": "READY" if not issues else "BLOCKED_EXTERNAL_INPUT",
+        "ready": not issues,
+        "required_identification_sources": list(EXTERNAL_IDENTIFICATION_SOURCES),
+        "required_support_sources": list(REQUIRED_SUPPORT_SOURCES_V2),
+        "blocking_issues": issues,
+        "blocking_reasons": reasons,
+        "nonblocking_offline_identification_source": PRIOR_SURVEY_SOURCE,
+    }
+
+
+def _build_identification_closure_gate(
+    seeds: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    states = {seed_id: seeds[seed_id]["status"] for seed_id in SEED_SET_IDS}
+    validated = [
+        seed_id
+        for seed_id in SEED_SET_IDS
+        if seeds[seed_id]["completeness_state"] == "POPULATED_VALIDATED"
+        and seeds[seed_id]["import_allowed"]
+    ]
+    pending_manifests = [
+        seed_id for seed_id in SEED_SET_IDS if seed_id not in validated
+    ]
+    imported = [
+        seed_id
+        for seed_id in SEED_SET_IDS
+        if seeds[seed_id]["expected_entry_count"] is not None
+        and seeds[seed_id]["occurrences_created"]
+        == seeds[seed_id]["expected_entry_count"]
+    ]
+    pending_imports = [seed_id for seed_id in SEED_SET_IDS if seed_id not in imported]
+    issues = []
+    reasons = []
+    if pending_manifests:
+        issues.append("PRIOR_SURVEY_SEED_MANIFESTS_UNPOPULATED")
+        reasons.append(
+            f"{', '.join(pending_manifests)} require prospective curator-populated manifests"
+        )
+    if pending_imports:
+        issues.append("PRIOR_SURVEY_SEED_IMPORTS_INCOMPLETE")
+        reasons.append(
+            f"{', '.join(pending_imports)} have not been imported into the identification set"
+        )
+    satisfied = not pending_manifests and not pending_imports
+    return {
+        "status": "READY" if satisfied else "BLOCKED_REQUIRED_IDENTIFICATION_INPUT",
+        "ready": satisfied,
+        "required_seed_set_ids": list(SEED_SET_IDS),
+        "seed_states": states,
+        "validated_seed_set_ids": validated,
+        "pending_manifest_seed_set_ids": pending_manifests,
+        "imported_seed_set_ids": imported,
+        "pending_import_seed_set_ids": pending_imports,
+        "all_required_seed_manifests_validated": not pending_manifests,
+        "all_required_seed_imports_complete": not pending_imports,
+        "blocking_issues": issues,
+        "blocking_reasons": reasons,
+        "full_wave_finalization_allowed": False,
+    }
 
 
 def _build_ieee(
@@ -788,7 +896,9 @@ def _load_final_acm_reconciliation(root: Path) -> dict[str, Any] | None:
     )
 
 
-def _validate_phase4a_compatibility(data: dict[str, Any]) -> None:
+def _validate_phase4a_compatibility(
+    data: dict[str, Any], *, children: dict[str, dict[str, Any]]
+) -> None:
     if data["required_identification_sources"] != list(
         REQUIRED_IDENTIFICATION_SOURCES_V2
     ):
@@ -802,6 +912,68 @@ def _validate_phase4a_compatibility(data: dict[str, Any]) -> None:
     for source in data["required_identification_sources"]:
         if source not in SOURCE_CONTRACTS:
             raise ProductionPrerequisiteError(f"Phase 4A source contract missing: {source}")
+
+    external = data["external_retrieval_execution"]
+    if external["required_identification_sources"] != list(
+        EXTERNAL_IDENTIFICATION_SOURCES
+    ):
+        raise ProductionPrerequisiteError("external retrieval source inventory changed")
+    if external["required_support_sources"] != list(REQUIRED_SUPPORT_SOURCES_V2):
+        raise ProductionPrerequisiteError("external retrieval support inventory changed")
+    if external["nonblocking_offline_identification_source"] != PRIOR_SURVEY_SOURCE:
+        raise ProductionPrerequisiteError("prior-survey phase classification changed")
+    if any("SEED" in issue for issue in external["blocking_issues"]):
+        raise ProductionPrerequisiteError(
+            "prior-survey seeds cannot block external retrieval execution"
+        )
+    expected_external = _build_external_retrieval_gate(
+        children["star-ieee-readiness-v1"],
+        children["star-acm-operator-spec-v1"],
+        children["star-source-window-review-v1"],
+    )
+    if external != expected_external:
+        raise ProductionPrerequisiteError("external retrieval gate is not evidence-derived")
+
+    seeds = {
+        seed_id: children[f"star-seed-{seed_id.lower()}-v1"]
+        for seed_id in SEED_SET_IDS
+    }
+    closure = data["identification_set_closure"]
+    expected_closure = _build_identification_closure_gate(seeds)
+    if closure != expected_closure:
+        raise ProductionPrerequisiteError(
+            "identification closure gate is not seed-evidence-derived"
+        )
+    if closure["ready"] and not (
+        closure["all_required_seed_manifests_validated"]
+        and closure["all_required_seed_imports_complete"]
+    ):
+        raise ProductionPrerequisiteError(
+            "identification closure cannot precede seed validation and import"
+        )
+
+    downstream = data["post_closure_operations"]
+    if downstream != {
+        "incremental_normalization_during_retrieval_allowed": True,
+        "allowed": False,
+        "blocked_operations": list(POST_CLOSURE_OPERATIONS),
+        "requires_identification_set_closure": True,
+        "requires_completed_external_retrieval": True,
+    }:
+        raise ProductionPrerequisiteError(
+            "post-closure operation gate is inconsistent with identification closure"
+        )
+    if closure["full_wave_finalization_allowed"]:
+        raise ProductionPrerequisiteError(
+            "prerequisite validation cannot authorize full-wave finalization"
+        )
+    if data["required_inputs_available"] != (
+        external["ready"] and closure["all_required_seed_manifests_validated"]
+    ):
+        raise ProductionPrerequisiteError("full-wave input readiness is inconsistent")
+    expected_issues = [*external["blocking_issues"], *closure["blocking_issues"]]
+    if data["readiness_issues"] != expected_issues:
+        raise ProductionPrerequisiteError("full-wave readiness issues are inconsistent")
 
 
 def _validate_expected_plan(
