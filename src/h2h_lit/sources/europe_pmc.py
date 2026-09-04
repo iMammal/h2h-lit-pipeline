@@ -86,7 +86,11 @@ class EuropePmcPaginator:
     version = "2.0.0"
 
     def initial_state(self, spec: Any) -> dict[str, Any]:
-        return {"cursor_mark": "*"}
+        return {
+            "cursor_mark": "*",
+            "retrieved_count": 0,
+            "expected_hit_count": None,
+        }
 
     def build_request(self, spec: Any, state: dict[str, Any]) -> PageRequest:
         params = dict(spec.filters)
@@ -111,21 +115,52 @@ class EuropePmcPaginator:
         total = payload.get("hitCount")
         total = int(total) if total is not None else None
         next_cursor = payload.get("nextCursorMark")
-        if next_cursor == state["cursor_mark"] and items:
+        retrieved_count = int(state.get("retrieved_count", 0))
+        expected_total = state.get("expected_hit_count")
+        if expected_total is not None and total != int(expected_total):
+            raise PaginationError(
+                "Europe PMC hitCount changed during cursor pagination: "
+                f"{expected_total} -> {total}"
+            )
+        cumulative_count = retrieved_count + len(items)
+        repeated_cursor = next_cursor == state["cursor_mark"]
+        if repeated_cursor and items:
             raise PaginationError("Europe PMC repeated a non-terminal cursor")
-        terminal = not next_cursor
+        repeated_cursor_terminal = repeated_cursor and not items
+        if repeated_cursor_terminal and (
+            total is None or cumulative_count != total
+        ):
+            raise PaginationError(
+                "Europe PMC repeated an empty cursor before exact hitCount reconciliation"
+            )
+        terminal = not next_cursor or repeated_cursor_terminal
         if not terminal and not items:
             raise PaginationError("Europe PMC returned an empty non-terminal cursor page")
+        if terminal and total is not None and cumulative_count != total:
+            raise PaginationError(
+                "Europe PMC terminal occurrence count "
+                f"{cumulative_count} does not match exact hitCount {total}"
+            )
         return ParsedPage(
             records=records,
             raw_item_count=len(items),
-            next_state={"cursor_mark": next_cursor} if not terminal else None,
+            next_state={
+                "cursor_mark": next_cursor,
+                "retrieved_count": cumulative_count,
+                "expected_hit_count": total,
+            }
+            if not terminal
+            else None,
             terminal=terminal,
             completion_proof="europe_pmc_cursor_exhausted" if terminal else None,
             source_reported_total=total,
             total_is_exact=total is not None,
             native_identifiers=[native_identifier(item, rank) for rank, item in enumerate(records, 1)],
-            metadata={"next_page_url": payload.get("nextPageUrl")},
+            metadata={
+                "next_page_url": payload.get("nextPageUrl"),
+                "cumulative_retrieved_count": cumulative_count,
+                "repeated_cursor_terminal_sentinel": repeated_cursor_terminal,
+            },
         )
 
 

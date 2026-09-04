@@ -1,10 +1,12 @@
 import json
+from types import SimpleNamespace
 
 import pytest
 
+from h2h_lit.pagination import PaginationError
 from h2h_lit.sources.arxiv import search_arxiv
 from h2h_lit.sources.crossref import search_crossref
-from h2h_lit.sources.europe_pmc import search_europe_pmc
+from h2h_lit.sources.europe_pmc import EuropePmcPaginator, search_europe_pmc
 from h2h_lit.sources.pubmed import parse_pubmed_fetch, search_pubmed
 from h2h_lit.sources.semantic_scholar import search_semantic_scholar
 from tests.fake_http import FakeHttp, FakeResponse
@@ -149,6 +151,96 @@ def test_europe_pmc_search_preserves_pdf_metadata():
     assert records[0].pdf_url == "https://example.test/paper.pdf"
     assert records[0].is_open_access is True
     assert records[0].original_metadata["id"] == "E1"
+
+
+def test_europe_pmc_accepts_empty_repeated_cursor_after_exact_count() -> None:
+    paginator = EuropePmcPaginator()
+    spec = SimpleNamespace(
+        query_text="frozen query", filters={}, limit=1000, metadata={}
+    )
+    state = {
+        "cursor_mark": "terminal-cursor",
+        "retrieved_count": 2,
+        "expected_hit_count": 2,
+    }
+
+    page = paginator.parse_response(
+        spec,
+        state,
+        FakeResponse(
+            payload={
+                "hitCount": 2,
+                "nextCursorMark": "terminal-cursor",
+                "resultList": {"result": []},
+            }
+        ),
+    )
+
+    assert page.terminal is True
+    assert page.raw_item_count == 0
+    assert page.next_state is None
+    assert page.completion_proof == "europe_pmc_cursor_exhausted"
+    assert page.metadata["repeated_cursor_terminal_sentinel"] is True
+
+
+def test_europe_pmc_refuses_nonempty_repeated_cursor() -> None:
+    paginator = EuropePmcPaginator()
+    spec = SimpleNamespace(
+        query_text="frozen query", filters={}, limit=1000, metadata={}
+    )
+    state = {
+        "cursor_mark": "same",
+        "retrieved_count": 1,
+        "expected_hit_count": 2,
+    }
+    payload = {
+        "hitCount": 2,
+        "nextCursorMark": "same",
+        "resultList": {"result": [{"id": "E2", "title": "Second"}]},
+    }
+
+    with pytest.raises(PaginationError, match="repeated a non-terminal cursor"):
+        paginator.parse_response(spec, state, FakeResponse(payload=payload))
+
+
+def test_europe_pmc_refuses_premature_empty_repeated_cursor() -> None:
+    paginator = EuropePmcPaginator()
+    spec = SimpleNamespace(
+        query_text="frozen query", filters={}, limit=1000, metadata={}
+    )
+    state = {
+        "cursor_mark": "same",
+        "retrieved_count": 1,
+        "expected_hit_count": 2,
+    }
+    payload = {
+        "hitCount": 2,
+        "nextCursorMark": "same",
+        "resultList": {"result": []},
+    }
+
+    with pytest.raises(PaginationError, match="before exact hitCount"):
+        paginator.parse_response(spec, state, FakeResponse(payload=payload))
+
+
+def test_europe_pmc_refuses_hit_count_change() -> None:
+    paginator = EuropePmcPaginator()
+    spec = SimpleNamespace(
+        query_text="frozen query", filters={}, limit=1000, metadata={}
+    )
+    state = {
+        "cursor_mark": "next",
+        "retrieved_count": 1,
+        "expected_hit_count": 2,
+    }
+    payload = {
+        "hitCount": 3,
+        "nextCursorMark": None,
+        "resultList": {"result": []},
+    }
+
+    with pytest.raises(PaginationError, match="hitCount changed"):
+        paginator.parse_response(spec, state, FakeResponse(payload=payload))
 
 
 def test_crossref_search_parses_authors_year_and_pdf_link():

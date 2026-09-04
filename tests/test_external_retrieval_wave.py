@@ -11,6 +11,7 @@ import h2h_lit.external_retrieval_wave as external_module
 import h2h_lit.sources.pubmed as pubmed_module
 from h2h_lit.external_retrieval_wave import (
     ACM_RECONCILIATION_PATH,
+    EUROPE_PMC_TERMINAL_RECOVERY_STATUS,
     PREFLIGHT_PATH,
     PUBMED_EPISODE_2_OMITTED_BOOK_PMIDS,
     PUBMED_PARSER_RECOVERY_STATUS,
@@ -18,6 +19,7 @@ from h2h_lit.external_retrieval_wave import (
     WAVE_PATH,
     ExternalRetrievalWaveError,
     _safe_output_path,
+    authorize_europe_pmc_terminal_recovery,
     authorize_pubmed_parser_recovery,
     authorize_pubmed_transport_retry,
     build_external_retrieval_wave,
@@ -25,7 +27,13 @@ from h2h_lit.external_retrieval_wave import (
     preflight_external_retrieval_wave,
     validate_persisted_external_preflight,
 )
-from h2h_lit.pagination import RateLimiter, RetryPolicy
+from h2h_lit.pagination import (
+    PaginationError,
+    ParsedPage,
+    RateLimiter,
+    RetryPolicy,
+    native_identifier,
+)
 from h2h_lit.production_prerequisites import (
     EXPECTED_PLAN_HASH,
     EXPECTED_PLAN_RAW_SHA256,
@@ -34,6 +42,10 @@ from h2h_lit.production_wave import (
     EXTERNAL_IDENTIFICATION_SOURCES_V2,
     ProductionWaveStatus,
     compute_query_plan_hash,
+)
+from h2h_lit.sources.europe_pmc import (
+    EuropePmcPaginator,
+    parse_europe_pmc_response,
 )
 from tests.fake_http import FakeHttp, FakeResponse
 
@@ -207,6 +219,129 @@ def _ieee_page(identifier: str, *, total: int) -> dict:
         "total_records": total,
         "articles": [{"article_number": identifier, "title": identifier}],
     }
+
+
+class LegacyEuropePmcPaginator:
+    source_database = "EuropePMC"
+    strategy = "cursor-mark"
+    version = "2.0.0"
+
+    def initial_state(self, spec):
+        return {"cursor_mark": "*"}
+
+    def build_request(self, spec, state):
+        return EuropePmcPaginator().build_request(spec, state)
+
+    def parse_response(self, spec, state, response):
+        payload = response.json()
+        items = ((payload.get("resultList") or {}).get("result") or [])
+        records = parse_europe_pmc_response(
+            {"resultList": {"result": items}}, query=spec.query_text
+        )
+        total = payload.get("hitCount")
+        total = int(total) if total is not None else None
+        next_cursor = payload.get("nextCursorMark")
+        if next_cursor == state["cursor_mark"] and items:
+            raise PaginationError("Europe PMC repeated a non-terminal cursor")
+        terminal = not next_cursor
+        if not terminal and not items:
+            raise PaginationError(
+                "Europe PMC returned an empty non-terminal cursor page"
+            )
+        return ParsedPage(
+            records=records,
+            raw_item_count=len(items),
+            next_state={"cursor_mark": next_cursor} if not terminal else None,
+            terminal=terminal,
+            completion_proof=(
+                "europe_pmc_cursor_exhausted" if terminal else None
+            ),
+            source_reported_total=total,
+            total_is_exact=total is not None,
+            native_identifiers=[
+                native_identifier(record, rank)
+                for rank, record in enumerate(records, 1)
+            ],
+            metadata={"next_page_url": payload.get("nextPageUrl")},
+        )
+
+
+def _europe_pmc_record_page(identifier: str, *, total: int = 1) -> dict:
+    return {
+        "hitCount": total,
+        "nextCursorMark": f"terminal-{identifier}",
+        "resultList": {
+            "result": [{"id": identifier, "title": f"Title {identifier}"}]
+        },
+    }
+
+
+def _europe_pmc_terminal_page(
+    identifier: str, *, repeated: bool, total: int = 1
+) -> dict:
+    payload = {"hitCount": total, "resultList": {"result": []}}
+    if repeated:
+        payload["nextCursorMark"] = f"terminal-{identifier}"
+    return payload
+
+
+def _failed_europe_pmc_terminal_episode(
+    tmp_path,
+    monkeypatch,
+    external_wave,
+    external_preflight,
+    *,
+    provider_counts=(1, 1, 1, 1, 1),
+):
+    _install_isolated_runtime(
+        tmp_path, monkeypatch, external_wave, external_preflight
+    )
+    monkeypatch.setattr(
+        external_module,
+        "EUROPE_PMC_RECOVERY_EXPECTED_COUNTS",
+        (1, 1, 1, 1, 1),
+    )
+    monkeypatch.setattr(
+        external_module, "EUROPE_PMC_RECOVERY_EXPECTED_ATTEMPTS", 10
+    )
+    legacy = LegacyEuropePmcPaginator()
+    monkeypatch.setitem(
+        external_module.PAGINATED_SOURCE_ADAPTERS, "EuropePMC", legacy
+    )
+    responses = []
+    for index in range(1, 6):
+        identifier = f"E{index}"
+        total = provider_counts[index - 1]
+        responses.extend(
+            [
+                FakeResponse(
+                    payload=_europe_pmc_record_page(identifier, total=total)
+                ),
+                FakeResponse(
+                    payload=_europe_pmc_terminal_page(
+                        identifier, repeated=index != 2, total=total
+                    )
+                ),
+            ]
+        )
+    clock = Clock()
+    failed = execute_external_source_session(
+        root=tmp_path,
+        source="EuropePMC",
+        http=FakeHttp(responses),
+        resume=False,
+        timestamp=clock,
+        retry_policy=RetryPolicy(max_attempts=1),
+        rate_limiter=RateLimiter({}),
+    )
+    monkeypatch.setitem(
+        external_module.PAGINATED_SOURCE_ADAPTERS,
+        "EuropePMC",
+        EuropePmcPaginator(),
+    )
+    assert failed["sources"]["EuropePMC"]["status"] == "FAILED"
+    assert failed["sources"]["EuropePMC"]["completed_query_count"] == 1
+    return failed, clock
 
 
 def _failed_pubmed_episode(
@@ -603,6 +738,110 @@ def test_pubmed_parser_recovery_refuses_raw_response_hash_mismatch(
 
     with pytest.raises(ExternalRetrievalWaveError, match="hash mismatch"):
         authorize_pubmed_parser_recovery(root=tmp_path, timestamp=clock)
+
+
+def test_europe_pmc_terminal_recovery_preserves_failure_and_reconstructs_all_queries(
+    tmp_path, monkeypatch, external_wave, external_preflight
+) -> None:
+    failed, clock = _failed_europe_pmc_terminal_episode(
+        tmp_path, monkeypatch, external_wave, external_preflight
+    )
+    europe_before = failed["sources"]["EuropePMC"]
+    checkpoint_ref = europe_before["checkpoint_dataset"]
+    checkpoint_path = tmp_path / checkpoint_ref["path"]
+    checkpoint_bytes = checkpoint_path.read_bytes()
+    response_dir = checkpoint_path.parent / "responses"
+    raw_responses_before = {
+        path.name: path.read_bytes() for path in sorted(response_dir.iterdir())
+    }
+    other_sources_before = {
+        key: json.loads(json.dumps(value, sort_keys=True))
+        for key, value in failed["sources"].items()
+        if key != "EuropePMC"
+    }
+
+    recovered = authorize_europe_pmc_terminal_recovery(
+        root=tmp_path, timestamp=clock
+    )
+
+    europe = recovered["sources"]["EuropePMC"]
+    assert europe["status"] == "COMPLETE"
+    assert europe["completed_query_count"] == 5
+    assert europe["occurrence_count"] == 5
+    assert europe["requests_this_session"] == 0
+    assert europe["active_episode_number"] == 2
+    assert europe["execution_episodes"][0]["status"] == "FAILED"
+    assert europe["execution_episodes"][0]["immutable"] is True
+    episode_2 = europe["execution_episodes"][1]
+    assert episode_2["status"] == EUROPE_PMC_TERMINAL_RECOVERY_STATUS
+    assert episode_2["recovery_of_episode_number"] == 1
+    assert episode_2["network_used"] is False
+    assert len(episode_2["source_raw_responses"]) == 10
+    assert checkpoint_path.read_bytes() == checkpoint_bytes
+    assert {
+        path.name: path.read_bytes() for path in sorted(response_dir.iterdir())
+    } == raw_responses_before
+    assert {
+        key: value for key, value in recovered["sources"].items() if key != "EuropePMC"
+    } == other_sources_before
+    assert recovered["external_retrieval_cutoff_date"] is None
+
+    dataset = external_module.load_review_dataset(
+        tmp_path / europe["checkpoint_dataset"]["path"]
+    )
+    assert len(dataset.occurrences) == 5
+    assert len(dataset.retrieval_attempts) == 10
+    assert all(
+        query.completion_status.name == "COMPLETE"
+        for query in dataset.source_queries
+    )
+    terminal_pages = [page for page in dataset.retrieval_pages if page.terminal]
+    assert len(terminal_pages) == 5
+    assert sum(
+        page.metadata.get("repeated_cursor_terminal_sentinel") is True
+        for page in terminal_pages
+    ) == 4
+    for binding in episode_2["source_raw_responses"]:
+        original = (tmp_path / binding["failed_episode_path"]).read_bytes()
+        copied = (tmp_path / binding["recovery_copy_path"]).read_bytes()
+        assert copied == original
+        assert hashlib.sha256(original).hexdigest() == binding["raw_sha256"]
+
+    repeated = authorize_europe_pmc_terminal_recovery(
+        root=tmp_path, timestamp=clock
+    )
+    assert repeated == recovered
+
+
+def test_europe_pmc_terminal_recovery_refuses_provider_count_mismatch(
+    tmp_path, monkeypatch, external_wave, external_preflight
+) -> None:
+    _, clock = _failed_europe_pmc_terminal_episode(
+        tmp_path,
+        monkeypatch,
+        external_wave,
+        external_preflight,
+        provider_counts=(2, 1, 1, 1, 1),
+    )
+
+    with pytest.raises(ExternalRetrievalWaveError, match="provider hitCount changed"):
+        authorize_europe_pmc_terminal_recovery(root=tmp_path, timestamp=clock)
+
+
+def test_europe_pmc_terminal_recovery_refuses_raw_response_hash_mismatch(
+    tmp_path, monkeypatch, external_wave, external_preflight
+) -> None:
+    failed, clock = _failed_europe_pmc_terminal_episode(
+        tmp_path, monkeypatch, external_wave, external_preflight
+    )
+    checkpoint = (
+        tmp_path / failed["sources"]["EuropePMC"]["checkpoint_dataset"]["path"]
+    )
+    response = next((checkpoint.parent / "responses").iterdir())
+    response.write_bytes(response.read_bytes() + b"corrupt")
+
+    with pytest.raises(ExternalRetrievalWaveError, match="hash/read failure"):
+        authorize_europe_pmc_terminal_recovery(root=tmp_path, timestamp=clock)
 
 
 def test_source_execution_is_idempotent_after_complete(

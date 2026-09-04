@@ -84,6 +84,12 @@ SEMANTIC_CONTROL_GATE_PATH = (
 )
 PUBMED_TRANSPORT_RETRY_STATUS = "TRANSPORT_RETRY_AUTHORIZED_NOT_STARTED"
 PUBMED_PARSER_RECOVERY_STATUS = "PARSER_RECOVERY_COMPLETE_READY_TO_RESUME"
+EUROPE_PMC_TERMINAL_RECOVERY_STATUS = "TERMINAL_SENTINEL_RECOVERY_COMPLETE"
+EUROPE_PMC_TERMINAL_ERROR = (
+    "PaginationError: Europe PMC returned an empty non-terminal cursor page"
+)
+EUROPE_PMC_RECOVERY_EXPECTED_COUNTS = (3972, 1500, 3629, 1209, 1717)
+EUROPE_PMC_RECOVERY_EXPECTED_ATTEMPTS = 27
 PUBMED_EPISODE_2_OMITTED_BOOK_PMIDS = (
     "33085405",
     "39836822",
@@ -997,6 +1003,215 @@ def authorize_pubmed_parser_recovery(
     return state
 
 
+def authorize_europe_pmc_terminal_recovery(
+    *,
+    root: str | Path,
+    timestamp: Callable[[], str] = utc_now,
+) -> dict[str, Any]:
+    """Reconcile Europe PMC terminal sentinels from immutable stored responses."""
+
+    root_path = Path(root).resolve()
+    wave, preflight = validate_persisted_external_preflight(root=root_path)
+    state_path = _safe_output_path(root_path, EXECUTION_STATE_PATH)
+    if not state_path.is_file():
+        raise ExternalRetrievalWaveError("external execution state does not exist")
+    state = _load_execution_state(state_path, root_path, wave, preflight)
+    source_state = state["sources"]["EuropePMC"]
+    if source_state["status"] == "COMPLETE":
+        _validate_authorized_europe_pmc_terminal_recovery(source_state, root_path)
+        return state
+    if source_state["status"] != "FAILED":
+        raise ExternalRetrievalWaveError(
+            "Europe PMC terminal recovery requires a terminal FAILED component"
+        )
+    if state["external_retrieval_cutoff_date"] is not None:
+        raise ExternalRetrievalWaveError(
+            "Europe PMC recovery cannot alter a closed external retrieval wave"
+        )
+    if source_state.get("execution_episodes"):
+        raise ExternalRetrievalWaveError(
+            "Europe PMC terminal recovery requires the original failed lineage"
+        )
+
+    checkpoint_reference = source_state.get("checkpoint_dataset")
+    if not checkpoint_reference:
+        raise ExternalRetrievalWaveError("Europe PMC failed checkpoint is absent")
+    failed_checkpoint = _safe_output_path(
+        root_path, str(checkpoint_reference["path"])
+    )
+    _verify_file_reference(failed_checkpoint, checkpoint_reference, root_path)
+    failed_checkpoint_bytes = failed_checkpoint.read_bytes()
+    failed_payload = json.loads(failed_checkpoint_bytes)
+    source_attempt_manifest_hash = _hash_payload(
+        {"retrieval_attempts": failed_payload.get("retrieval_attempts", [])}
+    )
+    dataset = load_review_dataset(failed_checkpoint)
+    other_sources_before = {
+        key: json.loads(json.dumps(value, sort_keys=True))
+        for key, value in state["sources"].items()
+        if key != "EuropePMC"
+    }
+    recovered_at = timestamp()
+    recovery = _reparse_failed_europe_pmc_checkpoint(
+        dataset=dataset,
+        checkpoint_dir=failed_checkpoint.parent,
+        wave=wave,
+        recovered_at=recovered_at,
+    )
+
+    recovery_checkpoint_relative = (
+        f"{EXECUTION_ROOT}/EuropePMC/episodes/episode-002/checkpoint"
+    )
+    recovery_checkpoint_dir = _safe_output_path(
+        root_path, recovery_checkpoint_relative
+    )
+    if recovery_checkpoint_dir.exists():
+        raise ExternalRetrievalWaveError(
+            "Europe PMC recovery checkpoint exists without valid state lineage"
+        )
+    recovery_store = CheckpointStore(recovery_checkpoint_dir)
+    raw_bindings = []
+    for relative_path, expected_hash in recovery["raw_response_references"]:
+        response_path = Path(relative_path)
+        if (
+            response_path.is_absolute()
+            or ".." in response_path.parts
+            or not response_path.parts
+            or response_path.parts[0] != "responses"
+        ):
+            raise ExternalRetrievalWaveError(
+                "Europe PMC raw response path is unsafe"
+            )
+        source = failed_checkpoint.parent / response_path
+        raw = source.read_bytes()
+        if _sha256(raw) != expected_hash:
+            raise ExternalRetrievalWaveError(
+                f"Europe PMC raw response hash mismatch: {relative_path}"
+            )
+        destination = recovery_checkpoint_dir / response_path
+        atomic_write(destination, raw)
+        if destination.read_bytes() != raw:
+            raise ExternalRetrievalWaveError(
+                f"Europe PMC recovery response copy mismatch: {relative_path}"
+            )
+        raw_bindings.append(
+            {
+                "failed_episode_path": source.relative_to(root_path).as_posix(),
+                "recovery_copy_path": destination.relative_to(root_path).as_posix(),
+                "byte_size": len(raw),
+                "raw_sha256": expected_hash,
+            }
+        )
+
+    run = dataset.retrieval_runs[0]
+    run.metadata["offline_terminal_sentinel_recovery"] = {
+        "recovery_episode_number": 2,
+        "source_episode_number": 1,
+        "source_checkpoint": dict(checkpoint_reference),
+        "source_attempt_manifest_hash": source_attempt_manifest_hash,
+        "source_raw_response_count": len(raw_bindings),
+        "source_raw_response_manifest_hash": _hash_payload(
+            {"responses": raw_bindings}
+        ),
+        "query_occurrence_counts": recovery["query_occurrence_counts"],
+        "network_used": False,
+    }
+    checkpoint_hash = recovery_store.save_dataset(dataset)
+    recovery_checkpoint_reference = _file_reference(
+        recovery_store.dataset_path, root_path
+    )
+    if checkpoint_hash != recovery_checkpoint_reference["raw_sha256"]:
+        raise ExternalRetrievalWaveError(
+            "Europe PMC recovery checkpoint hash disagreement"
+        )
+    if failed_checkpoint.read_bytes() != failed_checkpoint_bytes:
+        raise ExternalRetrievalWaveError(
+            "Europe PMC failed checkpoint changed during recovery"
+        )
+    for binding in raw_bindings:
+        source = root_path / binding["failed_episode_path"]
+        raw = source.read_bytes()
+        if len(raw) != binding["byte_size"] or _sha256(raw) != binding["raw_sha256"]:
+            raise ExternalRetrievalWaveError(
+                "Europe PMC failed raw response changed during recovery"
+            )
+
+    failed_episode = {
+        "episode_number": 1,
+        "episode_id": "EuropePMC-episode-001",
+        "run_id": run.run_id,
+        "status": "FAILED",
+        "failure_classification": (
+            "TERMINAL_SENTINEL_PARSER_REJECTION_AFTER_EXACT_COUNT"
+        ),
+        "started_at_utc": source_state.get("last_session_started_at_utc"),
+        "completed_at_utc": source_state.get("last_session_completed_at_utc"),
+        "checkpoint_path": source_state["checkpoint_path"],
+        "checkpoint_dataset": dict(checkpoint_reference),
+        "attempt_count": source_state["attempt_count"],
+        "occurrence_count": source_state["occurrence_count"],
+        "completed_query_count": source_state["completed_query_count"],
+        "failure_reason": source_state["failure_reason"],
+        "source_attempt_manifest_hash": source_attempt_manifest_hash,
+        "immutable": True,
+    }
+    recovery_episode = {
+        "episode_number": 2,
+        "episode_id": "EuropePMC-episode-002",
+        "run_id": run.run_id,
+        "status": EUROPE_PMC_TERMINAL_RECOVERY_STATUS,
+        "recovery_of_episode_number": 1,
+        "authorization_reason": "OFFLINE_REPEATED_CURSOR_TERMINAL_RECONCILIATION",
+        "authorized_at_utc": recovered_at,
+        "checkpoint_path": recovery_checkpoint_relative,
+        "checkpoint_dataset": recovery_checkpoint_reference,
+        "frozen_wave_manifest_hash": wave.manifest_hash(),
+        "frozen_query_plan_hash": wave.query_plan_hash,
+        "source_episode_checkpoint": dict(checkpoint_reference),
+        "source_attempt_manifest_hash": source_attempt_manifest_hash,
+        "source_raw_responses": raw_bindings,
+        "query_occurrence_counts": recovery["query_occurrence_counts"],
+        "occurrence_count": len(dataset.occurrences),
+        "attempt_count": len(dataset.retrieval_attempts),
+        "completed_query_count": 5,
+        "network_used": False,
+        "immutable": True,
+    }
+    source_state.update(
+        {
+            "status": "COMPLETE",
+            "execution_episodes": [failed_episode, recovery_episode],
+            "active_episode_number": 2,
+            "active_run_id": run.run_id,
+            "active_checkpoint_path": recovery_checkpoint_relative,
+            "checkpoint_path": recovery_checkpoint_relative,
+            "checkpoint_dataset": recovery_checkpoint_reference,
+            "completed_query_count": 5,
+            "total_query_count": 5,
+            "occurrence_count": len(dataset.occurrences),
+            "attempt_count": len(dataset.retrieval_attempts),
+            "requests_this_session": 0,
+            "pause_reason": None,
+            "failure_reason": None,
+            "last_session_started_at_utc": recovered_at,
+            "last_session_completed_at_utc": recovered_at,
+        }
+    )
+    if {
+        key: value for key, value in state["sources"].items() if key != "EuropePMC"
+    } != other_sources_before:
+        raise ExternalRetrievalWaveError(
+            "Europe PMC recovery changed another source component"
+        )
+    _finalize_execution_state(state, recovered_at)
+    if state["external_retrieval_cutoff_date"] is not None:
+        raise ExternalRetrievalWaveError(
+            "Europe PMC recovery unexpectedly closed the external retrieval wave"
+        )
+    _save_execution_state(state_path, state)
+    return state
+
+
 def execute_external_source_session(
     *,
     root: str | Path,
@@ -1531,6 +1746,374 @@ def _load_execution_state(
     ):
         raise ExternalRetrievalWaveError("execution checkpoint frozen-wave hash mismatch")
     return state
+
+
+def _reparse_failed_europe_pmc_checkpoint(
+    *,
+    dataset: Any,
+    checkpoint_dir: Path,
+    wave: ProductionRetrievalWave,
+    recovered_at: str,
+) -> dict[str, Any]:
+    dataset.validate()
+    if len(dataset.retrieval_runs) != 1:
+        raise ExternalRetrievalWaveError(
+            "Europe PMC terminal recovery requires exactly one run"
+        )
+    run = dataset.retrieval_runs[0]
+    if (
+        run.completion_status is not RetrievalCompletionStatus.FAILED
+        or run.retrieval_cutoff_date is not None
+        or run.query_plan_version != wave.query_plan_hash
+    ):
+        raise ExternalRetrievalWaveError(
+            "Europe PMC checkpoint is not an eligible terminal-sentinel failure"
+        )
+    if len(dataset.retrieval_attempts) != EUROPE_PMC_RECOVERY_EXPECTED_ATTEMPTS:
+        raise ExternalRetrievalWaveError(
+            "Europe PMC failed attempt count changed"
+        )
+    if len(dataset.occurrences) != sum(EUROPE_PMC_RECOVERY_EXPECTED_COUNTS):
+        raise ExternalRetrievalWaveError(
+            "Europe PMC failed occurrence count changed"
+        )
+
+    specs = _source_query_specs(wave, "EuropePMC", ieee_credential="")
+    if len(dataset.source_queries) != len(specs):
+        raise ExternalRetrievalWaveError("Europe PMC query count changed")
+    adapter = PAGINATED_SOURCE_ADAPTERS["EuropePMC"]
+    response_store = CheckpointStore(checkpoint_dir)
+    raw_response_references: list[tuple[str, str]] = []
+    seen_response_paths: set[str] = set()
+    recovered_counts: dict[str, int] = {}
+    failed_query_count = 0
+
+    for query_index, (query, spec) in enumerate(
+        zip(dataset.source_queries, specs, strict=True)
+    ):
+        expected_count = EUROPE_PMC_RECOVERY_EXPECTED_COUNTS[query_index]
+        if (
+            query.source_database != "EuropePMC"
+            or query.query_text != spec.query_text
+            or query.query_version != spec.query_version
+            or query.metadata.get("production_query_id")
+            != spec.metadata["production_query_id"]
+            or query.metadata.get("frozen_request_specification_hash")
+            != spec.metadata["frozen_request_specification_hash"]
+        ):
+            raise ExternalRetrievalWaveError(
+                "Europe PMC frozen query/request binding changed"
+            )
+        was_failed = query.completion_status is RetrievalCompletionStatus.FAILED
+        if was_failed:
+            failed_query_count += 1
+            if query.errors != [EUROPE_PMC_TERMINAL_ERROR]:
+                raise ExternalRetrievalWaveError(
+                    "Europe PMC recovery refused a non-terminal-sentinel failure"
+                )
+        elif (
+            query.completion_status is not RetrievalCompletionStatus.COMPLETE
+            or query.status is not ProcessingStatus.OK
+            or query.errors
+        ):
+            raise ExternalRetrievalWaveError(
+                "Europe PMC recovery found an unsupported query state"
+            )
+
+        pages = sorted(
+            (
+                page
+                for page in dataset.retrieval_pages
+                if page.source_query_id == query.query_id
+            ),
+            key=lambda item: item.ordinal,
+        )
+        if not pages or [page.ordinal for page in pages] != list(range(len(pages))):
+            raise ExternalRetrievalWaveError(
+                "Europe PMC page lineage is incomplete or unordered"
+            )
+        expected_cursor = "*"
+        cumulative_count = 0
+        exact_hit_count: int | None = None
+        for page in pages:
+            if (
+                page.strategy != adapter.strategy
+                or page.adapter_version != adapter.version
+                or page.request_state != {"cursor_mark": expected_cursor}
+            ):
+                raise ExternalRetrievalWaveError(
+                    "Europe PMC persisted pagination/request lineage changed"
+                )
+            request = adapter.build_request(spec, page.request_state)
+            attempts = sorted(
+                (
+                    attempt
+                    for attempt in dataset.retrieval_attempts
+                    if attempt.page_id == page.page_id
+                ),
+                key=lambda item: item.attempt_number,
+            )
+            if (
+                not attempts
+                or [attempt.attempt_id for attempt in attempts] != page.attempt_ids
+                or [attempt.attempt_number for attempt in attempts]
+                != list(range(1, len(attempts) + 1))
+            ):
+                raise ExternalRetrievalWaveError(
+                    "Europe PMC attempt lineage is incomplete or unordered"
+                )
+
+            parsed_attempts = []
+            parse_state = {
+                "cursor_mark": expected_cursor,
+                "retrieved_count": cumulative_count,
+                "expected_hit_count": exact_hit_count,
+            }
+            for attempt in attempts:
+                if (
+                    attempt.response_status is None
+                    or not 200 <= attempt.response_status < 300
+                    or not attempt.raw_response_path
+                    or not attempt.raw_response_hash
+                    or attempt.request_method != request.method
+                    or attempt.request_url != request.url
+                    or attempt.request_params != request.sanitized_params()
+                    or attempt.request_headers != request.sanitized_headers()
+                    or attempt.request_hash != request.request_hash()
+                ):
+                    raise ExternalRetrievalWaveError(
+                        "Europe PMC recovery requires exact successful HTTP request lineage"
+                    )
+                if attempt.status is RetrievalAttemptStatus.FAILED:
+                    if attempt.error != EUROPE_PMC_TERMINAL_ERROR:
+                        raise ExternalRetrievalWaveError(
+                            "Europe PMC recovery refused a non-parser attempt failure"
+                        )
+                elif attempt.status is not RetrievalAttemptStatus.SUCCEEDED:
+                    raise ExternalRetrievalWaveError(
+                        "Europe PMC recovery found an unsupported attempt state"
+                    )
+                if attempt.raw_response_path in seen_response_paths:
+                    raise ExternalRetrievalWaveError(
+                        "Europe PMC raw response path is reused"
+                    )
+                try:
+                    response = response_store.load_response(
+                        attempt.raw_response_path, attempt.raw_response_hash
+                    )
+                except (OSError, ValueError) as exc:
+                    raise ExternalRetrievalWaveError(
+                        f"Europe PMC raw response hash/read failure: {exc}"
+                    ) from exc
+                seen_response_paths.add(attempt.raw_response_path)
+                raw_response_references.append(
+                    (attempt.raw_response_path, attempt.raw_response_hash)
+                )
+                try:
+                    parsed = adapter.parse_response(spec, parse_state, response)
+                except Exception as exc:
+                    raise ExternalRetrievalWaveError(
+                        "Europe PMC offline terminal recovery parse failed: "
+                        f"{type(exc).__name__}: {exc}"
+                    ) from exc
+                parsed_attempts.append(parsed)
+
+            parsed = parsed_attempts[-1]
+            signatures = {
+                _hash_payload(
+                    {
+                        "raw_item_count": item.raw_item_count,
+                        "native_identifiers": item.native_identifiers,
+                        "next_state": item.next_state,
+                        "terminal": item.terminal,
+                        "source_reported_total": item.source_reported_total,
+                    }
+                )
+                for item in parsed_attempts
+            }
+            if len(signatures) != 1:
+                raise ExternalRetrievalWaveError(
+                    "Europe PMC retry responses disagree for one page"
+                )
+            page_occurrences = sorted(
+                (
+                    occurrence
+                    for occurrence in dataset.occurrences
+                    if occurrence.retrieval_page_id == page.page_id
+                ),
+                key=lambda item: item.source_rank or 0,
+            )
+            if (
+                len(page_occurrences) != parsed.raw_item_count
+                or [item.source_identifier for item in page_occurrences]
+                != parsed.native_identifiers
+                or page.returned_item_count != parsed.raw_item_count
+                or page.native_identifiers != parsed.native_identifiers
+            ):
+                raise ExternalRetrievalWaveError(
+                    "Europe PMC persisted record/page accounting changed"
+                )
+            if parsed.source_reported_total != expected_count or not parsed.total_is_exact:
+                raise ExternalRetrievalWaveError(
+                    "Europe PMC exact provider hitCount changed"
+                )
+
+            parsed_legacy_next_state = (
+                {"cursor_mark": parsed.next_state["cursor_mark"]}
+                if parsed.next_state is not None
+                else None
+            )
+            final_attempt = attempts[-1]
+            if page.status is RetrievalCompletionStatus.COMPLETE:
+                if (
+                    page.next_state != parsed_legacy_next_state
+                    or page.source_reported_total != parsed.source_reported_total
+                    or page.total_is_exact != parsed.total_is_exact
+                    or page.terminal != parsed.terminal
+                    or page.completion_proof != parsed.completion_proof
+                    or final_attempt.status is not RetrievalAttemptStatus.SUCCEEDED
+                ):
+                    raise ExternalRetrievalWaveError(
+                        "Europe PMC completed-page evidence changed"
+                    )
+            else:
+                if (
+                    not was_failed
+                    or page is not pages[-1]
+                    or page.status is not RetrievalCompletionStatus.FAILED
+                    or not parsed.terminal
+                    or not parsed.metadata.get("repeated_cursor_terminal_sentinel")
+                ):
+                    raise ExternalRetrievalWaveError(
+                        "Europe PMC recovery found a non-terminal failed page"
+                    )
+                prior_completion_error = page.metadata.get("completion_error")
+                page.status = RetrievalCompletionStatus.COMPLETE
+                page.source_reported_total = parsed.source_reported_total
+                page.total_is_exact = parsed.total_is_exact
+                page.terminal = parsed.terminal
+                page.completion_proof = parsed.completion_proof
+                page.next_state = parsed_legacy_next_state
+                page.metadata = {
+                    **parsed.metadata,
+                    "offline_terminal_sentinel_recovery": True,
+                    "raw_response_reused_without_network": True,
+                    "prior_completion_error": prior_completion_error,
+                }
+                final_attempt.metadata = {
+                    **final_attempt.metadata,
+                    "offline_terminal_sentinel_recovery": True,
+                    "prior_error": final_attempt.error,
+                    "raw_response_reused_without_network": True,
+                }
+                final_attempt.status = RetrievalAttemptStatus.SUCCEEDED
+                final_attempt.error = None
+            cumulative_count += parsed.raw_item_count
+            exact_hit_count = parsed.source_reported_total
+            if parsed.next_state is not None:
+                expected_cursor = str(parsed.next_state["cursor_mark"])
+            elif page is not pages[-1]:
+                raise ExternalRetrievalWaveError(
+                    "Europe PMC terminal page is not last in its query lineage"
+                )
+
+        if not pages[-1].terminal or pages[-1].completion_proof != (
+            "europe_pmc_cursor_exhausted"
+        ):
+            raise ExternalRetrievalWaveError(
+                "Europe PMC query lacks a verified terminal page"
+            )
+        if cumulative_count != expected_count:
+            raise ExternalRetrievalWaveError(
+                "Europe PMC cumulative count does not match exact hitCount"
+            )
+        if was_failed:
+            query.status = ProcessingStatus.OK
+            query.completion_status = RetrievalCompletionStatus.COMPLETE
+            query.completion_proof = pages[-1].completion_proof
+            query.result_count = cumulative_count
+            query.source_reported_total = expected_count
+            query.total_is_exact = True
+            query.errors = []
+            query.retrieval_ended_at = recovered_at
+            query.metadata["offline_terminal_sentinel_recovery"] = True
+        elif (
+            query.result_count != cumulative_count
+            or query.source_reported_total != expected_count
+            or not query.total_is_exact
+            or query.completion_proof != pages[-1].completion_proof
+        ):
+            raise ExternalRetrievalWaveError(
+                "Europe PMC completed QF02 accounting changed"
+            )
+        recovered_counts[spec.metadata["production_query_id"]] = cumulative_count
+
+    if failed_query_count != 4:
+        raise ExternalRetrievalWaveError(
+            "Europe PMC recovery expected exactly four sentinel-rejected queries"
+        )
+    if len(raw_response_references) != EUROPE_PMC_RECOVERY_EXPECTED_ATTEMPTS:
+        raise ExternalRetrievalWaveError(
+            "Europe PMC raw-response accounting changed"
+        )
+    run.status = ProcessingStatus.OK
+    run.completion_status = RetrievalCompletionStatus.COMPLETE
+    run.retrieval_completed_at = recovered_at
+    run.retrieval_cutoff_date = recovered_at[:10]
+    run.errors = []
+    run.metadata["offline_terminal_sentinel_recovery"] = True
+    run.metadata["network_requests_during_recovery"] = 0
+    run.metadata["source_raw_response_count"] = len(raw_response_references)
+    dataset.validate()
+    return {
+        "raw_response_references": raw_response_references,
+        "query_occurrence_counts": recovered_counts,
+    }
+
+
+def _validate_authorized_europe_pmc_terminal_recovery(
+    source_state: dict[str, Any], root: Path
+) -> None:
+    episodes = source_state.get("execution_episodes", [])
+    if len(episodes) != 2:
+        raise ExternalRetrievalWaveError(
+            "Europe PMC recovery episode lineage changed"
+        )
+    failed, recovered = episodes
+    if (
+        failed.get("episode_number") != 1
+        or failed.get("status") != "FAILED"
+        or not failed.get("immutable")
+        or recovered.get("episode_number") != 2
+        or recovered.get("status") != EUROPE_PMC_TERMINAL_RECOVERY_STATUS
+        or recovered.get("recovery_of_episode_number") != 1
+        or not recovered.get("immutable")
+        or recovered.get("network_used") is not False
+        or source_state.get("active_episode_number") != 2
+        or source_state.get("active_checkpoint_path")
+        != recovered.get("checkpoint_path")
+    ):
+        raise ExternalRetrievalWaveError(
+            "authorized Europe PMC terminal-recovery lineage changed"
+        )
+    source_checkpoint = _safe_output_path(
+        root, recovered["source_episode_checkpoint"]["path"]
+    )
+    _verify_file_reference(
+        source_checkpoint, recovered["source_episode_checkpoint"], root
+    )
+    recovery_checkpoint = _safe_output_path(
+        root, recovered["checkpoint_dataset"]["path"]
+    )
+    _verify_file_reference(recovery_checkpoint, recovered["checkpoint_dataset"], root)
+    for binding in recovered.get("source_raw_responses", []):
+        for key in ("failed_episode_path", "recovery_copy_path"):
+            path = _safe_output_path(root, binding[key])
+            raw = path.read_bytes()
+            if len(raw) != binding["byte_size"] or _sha256(raw) != binding["raw_sha256"]:
+                raise ExternalRetrievalWaveError(
+                    "authorized Europe PMC recovery raw-response binding changed"
+                )
 
 
 def _reparse_failed_pubmed_checkpoint(
@@ -2137,13 +2720,57 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--authorize-live-external-retrieval", action="store_true")
     parser.add_argument("--authorize-transport-retry-reset", action="store_true")
     parser.add_argument("--authorize-pubmed-parser-recovery", action="store_true")
+    parser.add_argument(
+        "--authorize-europe-pmc-terminal-recovery", action="store_true"
+    )
     args = parser.parse_args(argv)
+    if args.authorize_europe_pmc_terminal_recovery:
+        if args.source != "EuropePMC":
+            parser.error(
+                "terminal recovery is supported only for --source EuropePMC"
+            )
+        if (
+            args.authorize_live_external_retrieval
+            or args.authorize_transport_retry_reset
+            or args.authorize_pubmed_parser_recovery
+            or args.resume
+        ):
+            parser.error(
+                "Europe PMC terminal recovery is a separate offline authorization boundary"
+            )
+        state = authorize_europe_pmc_terminal_recovery(root=args.root)
+        source_state = state["sources"]["EuropePMC"]
+        active = source_state["execution_episodes"][1]
+        print(
+            json.dumps(
+                {
+                    "execution_status": state["status"],
+                    "source": "EuropePMC",
+                    "source_status": source_state["status"],
+                    "active_episode_number": source_state[
+                        "active_episode_number"
+                    ],
+                    "query_occurrence_counts": active[
+                        "query_occurrence_counts"
+                    ],
+                    "occurrence_count": source_state["occurrence_count"],
+                    "external_retrieval_cutoff_date": state[
+                        "external_retrieval_cutoff_date"
+                    ],
+                    "network_used": False,
+                },
+                sort_keys=True,
+                indent=2,
+            )
+        )
+        return 0
     if args.authorize_pubmed_parser_recovery:
         if args.source != "PubMed":
             parser.error("parser recovery is supported only for --source PubMed")
         if (
             args.authorize_live_external_retrieval
             or args.authorize_transport_retry_reset
+            or args.authorize_europe_pmc_terminal_recovery
             or args.resume
         ):
             parser.error("parser recovery is a separate offline authorization boundary")
@@ -2184,6 +2811,7 @@ def main(argv: list[str] | None = None) -> int:
         if (
             args.authorize_live_external_retrieval
             or args.authorize_pubmed_parser_recovery
+            or args.authorize_europe_pmc_terminal_recovery
             or args.resume
         ):
             parser.error(
