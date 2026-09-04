@@ -37,12 +37,13 @@ from h2h_lit.production_wave import (
 )
 from h2h_lit.query_development import load_semantic_control_set
 from h2h_lit.retrieval import (
+    PAGINATED_SOURCE_ADAPTERS,
     RetrievalQuerySpec,
     execute_paginated_retrieval_run,
     load_review_dataset,
     save_review_dataset,
 )
-from h2h_lit.review import RetrievalCompletionStatus
+from h2h_lit.review import RetrievalAttemptStatus, RetrievalCompletionStatus
 from h2h_lit.sources.acm_dl import import_acm_selected_reconciliation
 
 PLAN_PATH = "config/star_production_query_plan_v1.json"
@@ -69,6 +70,10 @@ IEEE_VERIFICATION_PATH = (
 SEMANTIC_CONTROL_PATH = "config/star_query_semantic_controls_v0_3.json"
 SEMANTIC_CONTROL_GATE_PATH = (
     f"{EXECUTION_ROOT}/SemanticScholar/control_gate/control_gate.json"
+)
+PUBMED_TRANSPORT_RETRY_STATUS = "TRANSPORT_RETRY_AUTHORIZED_NOT_STARTED"
+TRANSPORT_ENVIRONMENT_FAILURE_TYPES = frozenset(
+    {"ConnectionError", "ConnectTimeout", "ProxyError", "ReadTimeout", "SSLError", "Timeout"}
 )
 
 
@@ -655,6 +660,134 @@ def validate_persisted_external_preflight(
     return expected_wave, preflight
 
 
+def authorize_pubmed_transport_retry(
+    *,
+    root: str | Path,
+    timestamp: Callable[[], str] = utc_now,
+) -> dict[str, Any]:
+    """Authorize a new PubMed episode after a response-free transport failure."""
+
+    root_path = Path(root).resolve()
+    wave, preflight = validate_persisted_external_preflight(root=root_path)
+    state_path = _safe_output_path(root_path, EXECUTION_STATE_PATH)
+    if not state_path.is_file():
+        raise ExternalRetrievalWaveError("external execution state does not exist")
+    state = _load_execution_state(state_path, root_path, wave, preflight)
+    source_state = state["sources"]["PubMed"]
+    if source_state["status"] == PUBMED_TRANSPORT_RETRY_STATUS:
+        _validate_authorized_pubmed_retry(source_state, root_path)
+        return state
+    if source_state["status"] != "FAILED":
+        raise ExternalRetrievalWaveError(
+            "PubMed transport retry requires a terminal FAILED component"
+        )
+    if state["external_retrieval_cutoff_date"] is not None:
+        raise ExternalRetrievalWaveError(
+            "PubMed transport retry cannot alter a closed external retrieval wave"
+        )
+
+    checkpoint_path = source_state.get("checkpoint_dataset", {}).get("path")
+    if not checkpoint_path:
+        raise ExternalRetrievalWaveError("failed PubMed state lacks a checkpoint binding")
+    checkpoint = _safe_output_path(root_path, checkpoint_path)
+    _verify_file_reference(checkpoint, source_state["checkpoint_dataset"], root_path)
+    dataset = load_review_dataset(checkpoint)
+    _validate_response_free_pubmed_transport_failure(
+        dataset=dataset,
+        checkpoint_dir=checkpoint.parent,
+        wave=wave,
+    )
+
+    episodes = source_state.setdefault("execution_episodes", [])
+    if episodes:
+        active_number = int(source_state.get("active_episode_number", len(episodes)))
+        active = next(
+            (item for item in episodes if item["episode_number"] == active_number), None
+        )
+        if active is None or active.get("status") != "FAILED":
+            raise ExternalRetrievalWaveError(
+                "PubMed retry episode lineage does not match the failed component"
+            )
+        active["checkpoint_dataset"] = dict(source_state["checkpoint_dataset"])
+        active["immutable"] = True
+    else:
+        active_number = 1
+        run = dataset.retrieval_runs[0]
+        episodes.append(
+            {
+                "episode_number": active_number,
+                "episode_id": "PubMed-episode-001",
+                "run_id": run.run_id,
+                "status": "FAILED",
+                "failure_classification": (
+                    "TRANSPORT_ENVIRONMENT_FAILURE_BEFORE_PROVIDER_RESPONSE"
+                ),
+                "checkpoint_path": checkpoint.parent.relative_to(root_path).as_posix(),
+                "checkpoint_dataset": dict(source_state["checkpoint_dataset"]),
+                "attempt_count": len(dataset.retrieval_attempts),
+                "successful_http_response_count": 0,
+                "raw_provider_response_count": 0,
+                "occurrence_count": 0,
+                "canonical_record_count": 0,
+                "request_hashes": sorted(
+                    {item.request_hash for item in dataset.retrieval_attempts}
+                ),
+                "started_at_utc": source_state.get("last_session_started_at_utc"),
+                "completed_at_utc": source_state.get("last_session_completed_at_utc"),
+                "immutable": True,
+            }
+        )
+
+    next_number = active_number + 1
+    retry_checkpoint_path = (
+        f"{EXECUTION_ROOT}/PubMed/episodes/episode-{next_number:03d}/checkpoint"
+    )
+    authorized_at = timestamp()
+    retry_episode = {
+        "episode_number": next_number,
+        "episode_id": f"PubMed-episode-{next_number:03d}",
+        "run_id": f"{WAVE_ID}:PubMed:episode-{next_number:03d}",
+        "status": PUBMED_TRANSPORT_RETRY_STATUS,
+        "retry_of_episode_number": active_number,
+        "authorization_reason": (
+            "TRANSPORT_ENVIRONMENT_FAILURE_BEFORE_PROVIDER_RESPONSE"
+        ),
+        "authorized_at_utc": authorized_at,
+        "checkpoint_path": retry_checkpoint_path,
+        "frozen_wave_manifest_hash": wave.manifest_hash(),
+        "frozen_query_plan_hash": wave.query_plan_hash,
+        "prior_episode_checkpoint_sha256": source_state["checkpoint_dataset"][
+            "raw_sha256"
+        ],
+        "immutable": False,
+    }
+    episodes.append(retry_episode)
+    source_state.update(
+        {
+            "status": PUBMED_TRANSPORT_RETRY_STATUS,
+            "active_episode_number": next_number,
+            "active_run_id": retry_episode["run_id"],
+            "active_checkpoint_path": retry_checkpoint_path,
+            "checkpoint_path": retry_checkpoint_path,
+            "checkpoint_dataset": None,
+            "completed_query_count": 0,
+            "total_query_count": 5,
+            "occurrence_count": 0,
+            "attempt_count": 0,
+            "requests_this_session": 0,
+            "pause_reason": None,
+            "failure_reason": None,
+            "last_session_started_at_utc": None,
+            "last_session_completed_at_utc": None,
+        }
+    )
+    state["status"] = "RUNNING"
+    state["external_retrieval_completed_at_utc"] = None
+    state["external_retrieval_cutoff_date"] = None
+    _save_execution_state(state_path, state)
+    return state
+
+
 def execute_external_source_session(
     *,
     root: str | Path,
@@ -694,6 +827,7 @@ def execute_external_source_session(
             "failure_reason": None,
         }
     )
+    _sync_active_retry_episode(source_state)
     _save_execution_state(state_path, state)
     if source == "ACMDigitalLibrary":
         _execute_acm_import(root_path, wave, state, source_state, timestamp)
@@ -733,9 +867,12 @@ def execute_external_source_session(
             _save_execution_state(state_path, state)
             return state
 
-    checkpoint_dir = _safe_output_path(
-        root_path, f"{EXECUTION_ROOT}/{source}/checkpoint"
+    checkpoint_relative = source_state.get(
+        "active_checkpoint_path", f"{EXECUTION_ROOT}/{source}/checkpoint"
     )
+    if not str(checkpoint_relative).startswith(f"{EXECUTION_ROOT}/{source}/"):
+        raise ExternalRetrievalWaveError("source checkpoint escaped its component namespace")
+    checkpoint_dir = _safe_output_path(root_path, str(checkpoint_relative))
     checkpoint_exists = (checkpoint_dir / "review_dataset.json").exists()
     if checkpoint_exists and not resume:
         raise ExternalRetrievalWaveError(
@@ -761,7 +898,7 @@ def execute_external_source_session(
 
     before_attempts = _checkpoint_attempt_count(checkpoint_dir)
     dataset = execute_paginated_retrieval_run(
-        run_id=f"{WAVE_ID}:{source}",
+        run_id=source_state.get("active_run_id", f"{WAVE_ID}:{source}"),
         queries=specs,
         http_clients={source: http},
         checkpoint_dir=checkpoint_dir,
@@ -822,6 +959,7 @@ def execute_external_source_session(
             "known_calls_after_session": quota["known_calls_before_session"]
             + requests_this_session,
         }
+    _sync_active_retry_episode(source_state)
     _finalize_execution_state(state, timestamp())
     _save_execution_state(state_path, state)
     return state
@@ -1186,6 +1324,170 @@ def _load_execution_state(
     return state
 
 
+def _validate_response_free_pubmed_transport_failure(
+    *,
+    dataset: Any,
+    checkpoint_dir: Path,
+    wave: ProductionRetrievalWave,
+) -> None:
+    if dataset.occurrences or dataset.canonical_records or dataset.duplicate_decisions:
+        raise ExternalRetrievalWaveError(
+            "PubMed transport retry refused because records were already imported"
+        )
+    dataset.validate()
+    if len(dataset.retrieval_runs) != 1:
+        raise ExternalRetrievalWaveError("PubMed failure checkpoint must contain one run")
+    run = dataset.retrieval_runs[0]
+    if run.completion_status is not RetrievalCompletionStatus.FAILED:
+        raise ExternalRetrievalWaveError("PubMed checkpoint is not terminal FAILED")
+    if run.query_plan_version != wave.query_plan_hash:
+        raise ExternalRetrievalWaveError("PubMed failed episode query-plan binding changed")
+    if not dataset.retrieval_attempts:
+        raise ExternalRetrievalWaveError("PubMed failed episode contains no attempts")
+    if any(
+        attempt.status is not RetrievalAttemptStatus.FAILED
+        or attempt.response_status is not None
+        or attempt.raw_response_path is not None
+        or attempt.raw_response_hash is not None
+        or attempt.response_url is not None
+        for attempt in dataset.retrieval_attempts
+    ):
+        raise ExternalRetrievalWaveError(
+            "PubMed transport retry refused because an HTTP response exists"
+        )
+    response_dir = checkpoint_dir / "responses"
+    if response_dir.exists() and any(response_dir.iterdir()):
+        raise ExternalRetrievalWaveError(
+            "PubMed transport retry refused because raw provider responses exist"
+        )
+    for attempt in dataset.retrieval_attempts:
+        error_type = str(attempt.error or "").partition(":")[0]
+        if error_type not in TRANSPORT_ENVIRONMENT_FAILURE_TYPES:
+            raise ExternalRetrievalWaveError(
+                "PubMed transport retry refused for a non-transport failure"
+            )
+
+    specs = _source_query_specs(wave, "PubMed", ieee_credential="")
+    if len(dataset.source_queries) != len(specs):
+        raise ExternalRetrievalWaveError("PubMed failed episode query count changed")
+    adapter = PAGINATED_SOURCE_ADAPTERS["PubMed"]
+    for query, spec in zip(dataset.source_queries, specs, strict=True):
+        if (
+            query.source_database != "PubMed"
+            or query.query_text != spec.query_text
+            or query.query_version != spec.query_version
+            or query.metadata.get("production_query_id")
+            != spec.metadata["production_query_id"]
+            or query.metadata.get("frozen_request_specification_hash")
+            != spec.metadata["frozen_request_specification_hash"]
+        ):
+            raise ExternalRetrievalWaveError(
+                "PubMed failed episode frozen query/request binding changed"
+            )
+        pages = [
+            page for page in dataset.retrieval_pages if page.source_query_id == query.query_id
+        ]
+        if len(pages) != 1 or pages[0].request_state != adapter.initial_state(spec):
+            raise ExternalRetrievalWaveError(
+                "PubMed failed episode does not contain only its initial ESearch page"
+            )
+        expected_request = adapter.build_request(spec, pages[0].request_state)
+        attempts = [
+            attempt
+            for attempt in dataset.retrieval_attempts
+            if attempt.page_id == pages[0].page_id
+        ]
+        if not attempts or any(
+            attempt.request_method != "POST"
+            or attempt.request_hash != expected_request.request_hash()
+            for attempt in attempts
+        ):
+            raise ExternalRetrievalWaveError(
+                "PubMed failed episode ESearch request hash/method changed"
+            )
+
+
+def _validate_authorized_pubmed_retry(
+    source_state: dict[str, Any], root: Path
+) -> None:
+    episodes = source_state.get("execution_episodes", [])
+    active_number = source_state.get("active_episode_number")
+    if not episodes or active_number is None:
+        raise ExternalRetrievalWaveError("authorized PubMed retry lacks episode lineage")
+    active = next(
+        (item for item in episodes if item["episode_number"] == active_number), None
+    )
+    if (
+        active is None
+        or active.get("status") != PUBMED_TRANSPORT_RETRY_STATUS
+        or source_state.get("active_checkpoint_path") != active.get("checkpoint_path")
+        or source_state.get("active_run_id") != active.get("run_id")
+    ):
+        raise ExternalRetrievalWaveError("authorized PubMed retry lineage changed")
+    if _safe_output_path(root, active["checkpoint_path"]).exists():
+        raise ExternalRetrievalWaveError(
+            "authorized PubMed retry checkpoint already exists; use normal --resume"
+        )
+    previous = next(
+        (
+            item
+            for item in episodes
+            if item["episode_number"] == active["retry_of_episode_number"]
+        ),
+        None,
+    )
+    if previous is None or not previous.get("immutable"):
+        raise ExternalRetrievalWaveError("prior PubMed failure episode is not preserved")
+    checkpoint = _safe_output_path(root, previous["checkpoint_dataset"]["path"])
+    _verify_file_reference(checkpoint, previous["checkpoint_dataset"], root)
+
+
+def _sync_active_retry_episode(source_state: dict[str, Any]) -> None:
+    active_number = source_state.get("active_episode_number")
+    if active_number is None:
+        return
+    active = next(
+        (
+            item
+            for item in source_state.get("execution_episodes", [])
+            if item["episode_number"] == active_number
+        ),
+        None,
+    )
+    if active is None:
+        raise ExternalRetrievalWaveError("active retry episode is missing")
+    active.update(
+        {
+            "status": source_state["status"],
+            "started_at_utc": source_state.get("last_session_started_at_utc"),
+            "completed_at_utc": source_state.get("last_session_completed_at_utc"),
+            "checkpoint_dataset": source_state.get("checkpoint_dataset"),
+            "attempt_count": source_state.get("attempt_count", 0),
+            "occurrence_count": source_state.get("occurrence_count", 0),
+            "completed_query_count": source_state.get("completed_query_count", 0),
+            "failure_reason": source_state.get("failure_reason"),
+            "pause_reason": source_state.get("pause_reason"),
+            "immutable": source_state["status"] in {"COMPLETE", "FAILED"},
+        }
+    )
+
+
+def _verify_file_reference(
+    path: Path, reference: Mapping[str, Any], root: Path
+) -> None:
+    if (
+        not path.is_file()
+        or path.relative_to(root).as_posix() != reference.get("path")
+    ):
+        raise ExternalRetrievalWaveError("checkpoint file binding changed")
+    raw = path.read_bytes()
+    if (
+        len(raw) != reference.get("byte_size")
+        or _sha256(raw) != reference.get("raw_sha256")
+    ):
+        raise ExternalRetrievalWaveError("checkpoint file hash/size changed")
+
+
 def _finalize_execution_state(state: dict[str, Any], completed_at: str) -> None:
     if all(item["status"] == "COMPLETE" for item in state["sources"].values()):
         state["status"] = "COMPLETE"
@@ -1257,7 +1559,34 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--source", choices=list(EXTERNAL_IDENTIFICATION_SOURCES_V2))
     parser.add_argument("--resume", action="store_true")
     parser.add_argument("--authorize-live-external-retrieval", action="store_true")
+    parser.add_argument("--authorize-transport-retry-reset", action="store_true")
     args = parser.parse_args(argv)
+    if args.authorize_transport_retry_reset:
+        if args.source != "PubMed":
+            parser.error("transport retry reset is supported only for --source PubMed")
+        if args.authorize_live_external_retrieval or args.resume:
+            parser.error(
+                "transport retry reset is a separate offline authorization boundary"
+            )
+        state = authorize_pubmed_transport_retry(root=args.root)
+        source_state = state["sources"]["PubMed"]
+        print(
+            json.dumps(
+                {
+                    "execution_status": state["status"],
+                    "source": "PubMed",
+                    "source_status": source_state["status"],
+                    "active_episode_number": source_state["active_episode_number"],
+                    "external_retrieval_cutoff_date": state[
+                        "external_retrieval_cutoff_date"
+                    ],
+                    "network_used": False,
+                },
+                sort_keys=True,
+                indent=2,
+            )
+        )
+        return 0
     if args.authorize_live_external_retrieval:
         if not args.source:
             parser.error("--source is required for authorized execution")

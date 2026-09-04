@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -14,6 +15,7 @@ from h2h_lit.external_retrieval_wave import (
     WAVE_PATH,
     ExternalRetrievalWaveError,
     _safe_output_path,
+    authorize_pubmed_transport_retry,
     build_external_retrieval_wave,
     execute_external_source_session,
     preflight_external_retrieval_wave,
@@ -201,6 +203,201 @@ def _ieee_page(identifier: str, *, total: int) -> dict:
         "total_records": total,
         "articles": [{"article_number": identifier, "title": identifier}],
     }
+
+
+def _failed_pubmed_episode(
+    tmp_path, monkeypatch, external_wave, external_preflight, *, failures=None
+):
+    _install_isolated_runtime(
+        tmp_path, monkeypatch, external_wave, external_preflight
+    )
+    clock = Clock()
+    queued = failures or [ConnectionError("DNS resolution failed") for _ in range(15)]
+    state = execute_external_source_session(
+        root=tmp_path,
+        source="PubMed",
+        http=FakeHttp(queued),
+        resume=False,
+        timestamp=clock,
+        retry_policy=RetryPolicy(max_attempts=3),
+        rate_limiter=RateLimiter({}),
+        retry_sleep=lambda _: None,
+    )
+    assert state["sources"]["PubMed"]["status"] == "FAILED"
+    return state, clock
+
+
+def _pubmed_search(pmid: str) -> bytes:
+    return (
+        "<eSearchResult><Count>1</Count><QueryKey>1</QueryKey>"
+        f"<WebEnv>env-{pmid}</WebEnv><IdList><Id>{pmid}</Id></IdList>"
+        "</eSearchResult>"
+    ).encode()
+
+
+def _pubmed_fetch(pmid: str) -> bytes:
+    return f"""<PubmedArticleSet><PubmedArticle><MedlineCitation>
+      <PMID>{pmid}</PMID><Article><ArticleTitle>Title {pmid}</ArticleTitle>
+      <Abstract><AbstractText>Abstract {pmid}</AbstractText></Abstract>
+      <Journal><Title>Journal</Title><JournalIssue><PubDate><Year>2026</Year>
+      </PubDate></JournalIssue></Journal></Article></MedlineCitation>
+      <PubmedData><ArticleIdList><ArticleId IdType="doi">10.1000/{pmid}</ArticleId>
+      </ArticleIdList></PubmedData></PubmedArticle></PubmedArticleSet>""".encode()
+
+
+def test_dns_only_pubmed_failure_authorizes_new_immutable_episode(
+    tmp_path, monkeypatch, external_wave, external_preflight
+) -> None:
+    failed, clock = _failed_pubmed_episode(
+        tmp_path, monkeypatch, external_wave, external_preflight
+    )
+    original_ref = failed["sources"]["PubMed"]["checkpoint_dataset"]
+    original = tmp_path / original_ref["path"]
+    original_bytes = original.read_bytes()
+    other_sources_before = {
+        key: dict(value)
+        for key, value in failed["sources"].items()
+        if key != "PubMed"
+    }
+
+    reset = authorize_pubmed_transport_retry(root=tmp_path, timestamp=clock)
+    pubmed = reset["sources"]["PubMed"]
+    assert pubmed["status"] == "TRANSPORT_RETRY_AUTHORIZED_NOT_STARTED"
+    assert pubmed["active_episode_number"] == 2
+    assert len(pubmed["execution_episodes"]) == 2
+    assert pubmed["execution_episodes"][0]["immutable"] is True
+    assert pubmed["execution_episodes"][0]["attempt_count"] == 15
+    assert pubmed["execution_episodes"][0]["checkpoint_dataset"] == original_ref
+    assert pubmed["execution_episodes"][1]["retry_of_episode_number"] == 1
+    assert original.read_bytes() == original_bytes
+    assert hashlib.sha256(original_bytes).hexdigest() == original_ref["raw_sha256"]
+    assert {
+        key: value for key, value in reset["sources"].items() if key != "PubMed"
+    } == other_sources_before
+    assert reset["external_retrieval_cutoff_date"] is None
+
+    repeated = authorize_pubmed_transport_retry(root=tmp_path, timestamp=clock)
+    assert repeated == reset
+
+
+def test_pubmed_transport_retry_refuses_any_http_response(
+    tmp_path, monkeypatch, external_wave, external_preflight
+) -> None:
+    _failed_pubmed_episode(
+        tmp_path,
+        monkeypatch,
+        external_wave,
+        external_preflight,
+        failures=[FakeResponse(status_code=503) for _ in range(15)],
+    )
+    with pytest.raises(ExternalRetrievalWaveError, match="HTTP response exists"):
+        authorize_pubmed_transport_retry(root=tmp_path, timestamp=Clock())
+
+
+@pytest.mark.parametrize("failure_kind", ["provider_query", "authentication", "parser"])
+def test_pubmed_transport_retry_refuses_provider_query_auth_and_parser_failures(
+    tmp_path, monkeypatch, external_wave, external_preflight, failure_kind
+) -> None:
+    if failure_kind == "provider_query":
+        failures = [FakeResponse(status_code=400) for _ in range(15)]
+    elif failure_kind == "authentication":
+        failures = [FakeResponse(status_code=401) for _ in range(15)]
+    else:
+        failures = [FakeResponse(content=b"not XML") for _ in range(15)]
+    _failed_pubmed_episode(
+        tmp_path,
+        monkeypatch,
+        external_wave,
+        external_preflight,
+        failures=failures,
+    )
+    with pytest.raises(ExternalRetrievalWaveError, match="HTTP response exists"):
+        authorize_pubmed_transport_retry(root=tmp_path, timestamp=Clock())
+
+
+def test_pubmed_transport_retry_refuses_imported_occurrence(
+    tmp_path, monkeypatch, external_wave, external_preflight
+) -> None:
+    state, _ = _failed_pubmed_episode(
+        tmp_path, monkeypatch, external_wave, external_preflight
+    )
+    checkpoint = tmp_path / state["sources"]["PubMed"]["checkpoint_dataset"]["path"]
+    dataset = external_module.load_review_dataset(checkpoint)
+    dataset.occurrences.append(object())
+    monkeypatch.setattr(external_module, "load_review_dataset", lambda _: dataset)
+    with pytest.raises(ExternalRetrievalWaveError, match="records were already imported"):
+        authorize_pubmed_transport_retry(root=tmp_path, timestamp=Clock())
+
+
+def test_pubmed_transport_retry_refuses_changed_frozen_request_hash(
+    tmp_path, monkeypatch, external_wave, external_preflight
+) -> None:
+    state, _ = _failed_pubmed_episode(
+        tmp_path, monkeypatch, external_wave, external_preflight
+    )
+    checkpoint = tmp_path / state["sources"]["PubMed"]["checkpoint_dataset"]["path"]
+    dataset = external_module.load_review_dataset(checkpoint)
+    for attempt in dataset.retrieval_attempts:
+        attempt.request_hash = "0" * 64
+    monkeypatch.setattr(external_module, "load_review_dataset", lambda _: dataset)
+    with pytest.raises(ExternalRetrievalWaveError, match="request hash/method changed"):
+        authorize_pubmed_transport_retry(root=tmp_path, timestamp=Clock())
+
+
+def test_pubmed_transport_retry_refuses_nontransport_failure(
+    tmp_path, monkeypatch, external_wave, external_preflight
+) -> None:
+    _failed_pubmed_episode(
+        tmp_path,
+        monkeypatch,
+        external_wave,
+        external_preflight,
+        failures=[ValueError("provider query/parser failure") for _ in range(15)],
+    )
+    with pytest.raises(ExternalRetrievalWaveError, match="non-transport failure"):
+        authorize_pubmed_transport_retry(root=tmp_path, timestamp=Clock())
+
+
+def test_authorized_pubmed_second_episode_completes_after_environment_recovery(
+    tmp_path, monkeypatch, external_wave, external_preflight
+) -> None:
+    failed, clock = _failed_pubmed_episode(
+        tmp_path, monkeypatch, external_wave, external_preflight
+    )
+    original_ref = failed["sources"]["PubMed"]["checkpoint_dataset"]
+    original_bytes = (tmp_path / original_ref["path"]).read_bytes()
+    authorize_pubmed_transport_retry(root=tmp_path, timestamp=clock)
+    responses = []
+    for index in range(1, 6):
+        pmid = str(1000 + index)
+        responses.extend(
+            [
+                FakeResponse(content=_pubmed_search(pmid)),
+                FakeResponse(content=_pubmed_fetch(pmid)),
+            ]
+        )
+
+    completed = execute_external_source_session(
+        root=tmp_path,
+        source="PubMed",
+        http=FakeHttp(responses),
+        resume=False,
+        timestamp=clock,
+        retry_policy=RetryPolicy(max_attempts=1),
+        rate_limiter=RateLimiter({}),
+    )
+    pubmed = completed["sources"]["PubMed"]
+    assert pubmed["status"] == "COMPLETE"
+    assert pubmed["completed_query_count"] == 5
+    assert pubmed["occurrence_count"] == 5
+    assert pubmed["attempt_count"] == 10
+    assert pubmed["execution_episodes"][0]["status"] == "FAILED"
+    assert pubmed["execution_episodes"][0]["immutable"] is True
+    assert pubmed["execution_episodes"][1]["status"] == "COMPLETE"
+    assert pubmed["execution_episodes"][1]["immutable"] is True
+    assert pubmed["execution_episodes"][1]["run_id"].endswith("episode-002")
+    assert (tmp_path / original_ref["path"]).read_bytes() == original_bytes
+    assert completed["external_retrieval_cutoff_date"] is None
 
 
 def test_source_execution_is_idempotent_after_complete(
