@@ -17,8 +17,14 @@ from pathlib import Path
 from typing import Any
 
 from h2h_lit.acm_field_execution import load_acm_final_reconciliation_manifest
+from h2h_lit.bibtex_io import (
+    parse_bibtex_with_diagnostics,
+    record_from_bibtex_fields,
+    split_bib_entries,
+)
 from h2h_lit.checkpoint import atomic_write
 from h2h_lit.http import HttpClient, HttpResponse, RequestsHttpClient
+from h2h_lit.normalize import dedupe_key, normalize_doi, normalize_title
 from h2h_lit.pagination import RateLimiter, RetryPolicy, redact_url
 from h2h_lit.production_query_plan import load_production_query_plan
 from h2h_lit.sources.common import make_record
@@ -43,6 +49,7 @@ EXPECTED_AUTHORIZATION_FLAGS = {
     "llm": "--authorize-llm-inference",
 }
 PUBMED_EXECUTION_ARTIFACT_CLASS = "PROVISIONAL_PUBMED_EXECUTION_ONLY"
+OFFLINE_STAGE_ARTIFACT_CLASS = "PROVISIONAL_ACM_PUBMED_LOCAL_VALIDATION_ONLY"
 PUBMED_SEARCH_ENDPOINT = PUBMED_EUTILS + "esearch.fcgi"
 PUBMED_FETCH_ENDPOINT = PUBMED_EUTILS + "efetch.fcgi"
 
@@ -1410,6 +1417,639 @@ def execute_pubmed_boundary(
     return execution, execution_path
 
 
+def _provisional_record(fields: dict[str, str]) -> dict[str, Any]:
+    parsed = record_from_bibtex_fields(fields)
+    return {
+        "title": parsed.title,
+        "abstract": parsed.abstract,
+        "authors": parsed.authors,
+        "year": parsed.year,
+        "doi": parsed.doi,
+        "source_identifier": fields.get("_key"),
+        "source_database": "ACMDigitalLibrary",
+        "source_url": parsed.source_url,
+        "journal": parsed.journal,
+    }
+
+
+def _load_selected_acm_occurrences(
+    *, root: Path, manifest: dict[str, Any]
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    occurrences: list[dict[str, Any]] = []
+    artifact_summaries: list[dict[str, Any]] = []
+    for family in manifest["families"]:
+        family_code = _family_code(family["family_id"])
+        for child in family["children"]:
+            for artifact in child["selected_artifacts"]:
+                relative = Path(artifact["relative_path"])
+                if relative.is_absolute() or ".." in relative.parts:
+                    raise ProvisionalValidationError("ACM selected artifact path is unsafe")
+                path = root / relative
+                raw = path.read_bytes()
+                if len(raw) != artifact["byte_size"] or _sha256_bytes(raw) != artifact[
+                    "raw_sha256"
+                ]:
+                    raise ProvisionalValidationError(
+                        f"ACM selected artifact binding failed: {relative}"
+                    )
+                text = raw.decode("utf-8")
+                diagnostic = parse_bibtex_with_diagnostics(text)
+                if (
+                    diagnostic.physical_header_count != artifact["physical_header_count"]
+                    or diagnostic.accounted_record_count
+                    != artifact["total_accounted_entry_count"]
+                    or len(diagnostic.issues) != artifact["malformed_entry_count"]
+                ):
+                    raise ProvisionalValidationError(
+                        f"ACM parser accounting changed: {relative}"
+                    )
+                artifact_issue_count = 0
+                for ordinal, raw_entry in enumerate(split_bib_entries(text), start=1):
+                    item = parse_bibtex_with_diagnostics(raw_entry)
+                    issue = item.issues[0] if item.issues else None
+                    fields = item.entries[0] if item.entries else issue.partial_fields
+                    if issue is not None:
+                        artifact_issue_count += 1
+                    native_id = fields.get("_key") or (issue.key if issue else None)
+                    raw_entry_hash = _sha256_bytes(raw_entry.encode("utf-8"))
+                    occurrence_id = "provisional-acm-occurrence:" + _sha256_bytes(
+                        (
+                            f"{artifact['raw_sha256']}\x1f{ordinal}\x1f"
+                            f"{native_id or raw_entry_hash}"
+                        ).encode()
+                    )[:24]
+                    record = _provisional_record(fields)
+                    record["source_identifier"] = native_id
+                    occurrences.append(
+                        {
+                            "occurrence_id": occurrence_id,
+                            "route": "ACM",
+                            "source_database": "ACMDigitalLibrary",
+                            "family_id": family["family_id"],
+                            "family_code": family_code,
+                            "child_query_id": child["child_query_id"],
+                            "field_key": child["field_key"],
+                            "artifact_relative_path": relative.as_posix(),
+                            "artifact_sha256": artifact["raw_sha256"],
+                            "artifact_record_ordinal": ordinal,
+                            "source_identifier": native_id,
+                            "raw_entry_sha256": raw_entry_hash,
+                            "malformed": issue is not None,
+                            "parse_issue": (
+                                {
+                                    "code": issue.code,
+                                    "message": issue.message,
+                                    "brace_depth": issue.brace_depth,
+                                    "native_id": issue.key,
+                                }
+                                if issue
+                                else None
+                            ),
+                            "record": record,
+                        }
+                    )
+                if artifact_issue_count != artifact["malformed_entry_count"]:
+                    raise ProvisionalValidationError(
+                        f"ACM malformed record count changed: {relative}"
+                    )
+                artifact_summaries.append(
+                    {
+                        "family_id": family["family_id"],
+                        "child_query_id": child["child_query_id"],
+                        "field_key": child["field_key"],
+                        **artifact,
+                        "provisional_occurrence_count": diagnostic.accounted_record_count,
+                    }
+                )
+    if len(occurrences) != 11664:
+        raise ProvisionalValidationError("ACM selected occurrence total changed")
+    malformed = sum(item["malformed"] for item in occurrences)
+    if malformed != 3:
+        raise ProvisionalValidationError("ACM malformed occurrence total changed")
+    return occurrences, {
+        "selected_artifact_count": len(artifact_summaries),
+        "selected_artifact_occurrence_count": len(occurrences),
+        "malformed_but_identified_occurrence_count": malformed,
+        "selected_artifacts": artifact_summaries,
+        "nonselected_preserved_artifacts": manifest[
+            "nonselected_preserved_bibtex_artifacts"
+        ],
+    }
+
+
+def _load_sampled_pubmed_occurrences(
+    *, output: Path, execution: dict[str, Any]
+) -> list[dict[str, Any]]:
+    occurrences: list[dict[str, Any]] = []
+    for family in execution["families"]:
+        payload = _verify_json_artifact(output, family["family_artifact"])
+        _validate_embedded_hash(payload, "manifest_hash")
+        family_code = family["family_code"]
+        for rank, record in enumerate(payload["metadata_fetch"]["records"], start=1):
+            pmid = str(record.get("pmid") or record.get("source_identifier") or "")
+            if not pmid:
+                raise ProvisionalValidationError("sampled PubMed record lacks PMID")
+            occurrences.append(
+                {
+                    "occurrence_id": "provisional-pubmed-occurrence:"
+                    + _sha256_bytes(
+                        f"{family['family_id']}\x1f{pmid}".encode()
+                    )[:24],
+                    "route": "PubMed",
+                    "source_database": "PubMed",
+                    "family_id": family["family_id"],
+                    "family_code": family_code,
+                    "child_query_id": family["production_query_id"],
+                    "field_key": None,
+                    "artifact_relative_path": family["family_artifact"]["relative_path"],
+                    "artifact_sha256": family["family_artifact"]["sha256"],
+                    "artifact_record_ordinal": rank,
+                    "source_identifier": pmid,
+                    "raw_entry_sha256": _sha256_json(record),
+                    "malformed": False,
+                    "parse_issue": None,
+                    "record": record,
+                }
+            )
+    if len(occurrences) != 500:
+        raise ProvisionalValidationError("PubMed sampled occurrence total changed")
+    return occurrences
+
+
+def _canonicalize_provisional(
+    occurrences: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, Any]]:
+    by_key: dict[str, dict[str, Any]] = {}
+    decisions: list[dict[str, Any]] = []
+    doi_titles: dict[str, set[str]] = {}
+    unresolved: list[str] = []
+    for occurrence in occurrences:
+        record = occurrence["record"]
+        key = dedupe_key(doi=record.get("doi"), title=record.get("title"))
+        if key.startswith("doi:"):
+            match_rule = "normalized_doi"
+            title = normalize_title(record.get("title"))
+            if title:
+                doi_titles.setdefault(title, set()).add(key)
+        elif key.startswith("title:"):
+            match_rule = "exact_normalized_title_fallback"
+        else:
+            key = f"occurrence:{occurrence['occurrence_id']}"
+            match_rule = "occurrence_fallback_missing_doi_and_title"
+            unresolved.append(occurrence["occurrence_id"])
+        canonical = by_key.get(key)
+        outcome = "DUPLICATE" if canonical is not None else "UNIQUE"
+        if canonical is None:
+            canonical = {
+                "canonical_id": "provisional-canonical:"
+                + _sha256_bytes(key.encode())[:24],
+                "dedupe_key": key,
+                "match_basis": match_rule,
+                "representative_record": record,
+                "occurrences": [],
+            }
+            by_key[key] = canonical
+        canonical["occurrences"].append(
+            {key: value for key, value in occurrence.items() if key != "record"}
+        )
+        decisions.append(
+            {
+                "occurrence_id": occurrence["occurrence_id"],
+                "canonical_id": canonical["canonical_id"],
+                "outcome": outcome,
+                "match_key": key,
+                "match_rule": match_rule,
+            }
+        )
+    canonical_records = list(by_key.values())
+    title_ambiguities = [
+        {
+            "canonical_id": item["canonical_id"],
+            "normalized_title": item["dedupe_key"].removeprefix("title:"),
+            "doi_identity_count_with_same_title": len(
+                doi_titles.get(item["dedupe_key"].removeprefix("title:"), set())
+            ),
+        }
+        for item in canonical_records
+        if item["dedupe_key"].startswith("title:")
+        and doi_titles.get(item["dedupe_key"].removeprefix("title:"))
+    ]
+    route_sets = [
+        tuple(sorted({item["route"] for item in canonical["occurrences"]}))
+        for canonical in canonical_records
+    ]
+    family_sets = [
+        tuple(sorted({item["family_code"] for item in canonical["occurrences"]}))
+        for canonical in canonical_records
+    ]
+    route_patterns: dict[str, int] = {}
+    family_patterns: dict[str, int] = {}
+    for routes in route_sets:
+        label = "+".join(routes)
+        route_patterns[label] = route_patterns.get(label, 0) + 1
+    for families in family_sets:
+        label = "+".join(families)
+        family_patterns[label] = family_patterns.get(label, 0) + 1
+    duplicate_decisions = [item for item in decisions if item["outcome"] == "DUPLICATE"]
+    stats = {
+        "occurrence_count": len(occurrences),
+        "canonical_identity_count": len(canonical_records),
+        "duplicate_occurrence_count": len(duplicate_decisions),
+        "doi_match_duplicate_count": sum(
+            item["match_rule"] == "normalized_doi" for item in duplicate_decisions
+        ),
+        "title_fallback_duplicate_count": sum(
+            item["match_rule"] == "exact_normalized_title_fallback"
+            for item in duplicate_decisions
+        ),
+        "unresolved_missing_doi_and_title_count": len(unresolved),
+        "unresolved_occurrence_ids": unresolved,
+        "title_fallback_ambiguity_count": len(title_ambiguities),
+        "title_fallback_ambiguities": title_ambiguities,
+        "route_membership_patterns": dict(sorted(route_patterns.items())),
+        "query_family_membership_patterns": dict(sorted(family_patterns.items())),
+        "acm_pubmed_exact_identity_overlap": route_patterns.get("ACM+PubMed", 0),
+    }
+    return canonical_records, decisions, stats
+
+
+def _build_validation_cohort(
+    *, canonical_records: list[dict[str, Any]], config_hash: str, target: int
+) -> dict[str, Any]:
+    by_id = {item["canonical_id"]: item for item in canonical_records}
+    strata: dict[str, dict[str, Any]] = {}
+    selected_by: dict[str, list[str]] = {}
+    for family_code in ("QF01", "QF02", "QF03", "QF04", "QF05"):
+        for route in ("ACM", "PubMed"):
+            stratum_id = f"{family_code}|{route}"
+            eligible = [
+                item["canonical_id"]
+                for item in canonical_records
+                if any(
+                    occurrence["family_code"] == family_code
+                    and occurrence["route"] == route
+                    for occurrence in item["occurrences"]
+                )
+            ]
+            ranked = sorted(
+                eligible,
+                key=lambda canonical_id: (
+                    _sha256_bytes(
+                        f"{config_hash}\x1f{stratum_id}\x1f{canonical_id}".encode()
+                    ),
+                    canonical_id,
+                ),
+            )
+            if len(ranked) < 50:
+                raise ProvisionalValidationError(
+                    f"provisional stratum {stratum_id} has fewer than 50 identities"
+                )
+            chosen = ranked[:50]
+            for canonical_id in chosen:
+                selected_by.setdefault(canonical_id, []).append(stratum_id)
+            strata[stratum_id] = {
+                "eligible_identity_count": len(eligible),
+                "quota": 50,
+                "selected_canonical_ids": chosen,
+                "selected_identity_digest_sha256": _sha256_bytes(
+                    "\n".join(chosen).encode()
+                ),
+            }
+    quota_union = set(selected_by)
+    remaining = sorted(
+        (canonical_id for canonical_id in by_id if canonical_id not in quota_union),
+        key=lambda canonical_id: (
+            _sha256_bytes(f"{config_hash}\x1f{canonical_id}".encode()),
+            canonical_id,
+        ),
+    )
+    if len(by_id) < target:
+        raise ProvisionalValidationError("fewer than 750 provisional identities exist")
+    final_ids = quota_union | set(remaining[: target - len(quota_union)])
+    if len(final_ids) != target:
+        raise ProvisionalValidationError("provisional cohort did not reach exactly 750")
+    rows = [
+        {
+            "canonical_id": canonical_id,
+            "global_selection_sha256": _sha256_bytes(
+                f"{config_hash}\x1f{canonical_id}".encode()
+            ),
+            "selected_by_strata": sorted(selected_by.get(canonical_id, [])),
+            "selected_as_global_fill": canonical_id not in quota_union,
+            "representative_record": by_id[canonical_id]["representative_record"],
+            "occurrences": by_id[canonical_id]["occurrences"],
+        }
+        for canonical_id in sorted(
+            final_ids,
+            key=lambda value: (
+                _sha256_bytes(f"{config_hash}\x1f{value}".encode()),
+                value,
+            ),
+        )
+    ]
+    return {
+        "artifact_class": "PROVISIONAL_DETERMINISTIC_VALIDATION_COHORT",
+        "target_count": target,
+        "actual_count": len(rows),
+        "selection_inputs": ["config_raw_sha256", "canonical_id", "stratum_id"],
+        "content_or_eligibility_inspected_for_selection": False,
+        "jfr25_membership_inspected_for_selection": False,
+        "quota_union_count": len(quota_union),
+        "global_fill_count": target - len(quota_union),
+        "strata": strata,
+        "cohort_identity_digest_sha256": _sha256_bytes(
+            "\n".join(sorted(final_ids)).encode()
+        ),
+        "records": rows,
+    }
+
+
+def _jfr25_matches(
+    *,
+    entries: list[dict[str, Any]],
+    canonical_records: list[dict[str, Any]],
+    cohort_ids: set[str],
+) -> list[dict[str, Any]]:
+    doi_index: dict[str, str] = {}
+    title_index: dict[str, list[str]] = {}
+    by_id = {item["canonical_id"]: item for item in canonical_records}
+    for item in canonical_records:
+        record = item["representative_record"]
+        doi = normalize_doi(record.get("doi"))
+        title = normalize_title(record.get("title"))
+        if doi:
+            doi_index[doi] = item["canonical_id"]
+        if title:
+            title_index.setdefault(title, []).append(item["canonical_id"])
+    results: list[dict[str, Any]] = []
+    for entry in entries:
+        doi = normalize_doi(entry.get("doi"))
+        title = normalize_title(entry.get("title"))
+        canonical_id: str | None = None
+        method: str | None = None
+        ambiguity = 0
+        if doi:
+            canonical_id = doi_index.get(doi)
+            method = "exact_normalized_doi" if canonical_id else None
+        elif title:
+            candidates = title_index.get(title, [])
+            ambiguity = len(candidates)
+            if len(candidates) == 1:
+                canonical_id = candidates[0]
+                method = "unique_exact_normalized_title"
+        canonical = by_id.get(canonical_id) if canonical_id else None
+        memberships = (
+            sorted(
+                {
+                    f"{item['family_code']}|{item['route']}"
+                    for item in canonical["occurrences"]
+                }
+            )
+            if canonical
+            else []
+        )
+        results.append(
+            {
+                "entry_id": entry["entry_id"],
+                "source_member_id": entry["source_member_id"],
+                "doi": doi,
+                "normalized_title": title,
+                "match_status": "REDISCOVERED" if canonical_id else "NOT_REDISCOVERED",
+                "match_method": method,
+                "title_candidate_count_when_doi_unavailable": ambiguity if not doi else None,
+                "canonical_id": canonical_id,
+                "source_family_route_memberships": memberships,
+                "in_750_cohort": canonical_id in cohort_ids if canonical_id else False,
+            }
+        )
+    return results
+
+
+def execute_offline_validation_stage(
+    *, root: str | Path, config_path: str | Path
+) -> tuple[dict[str, Any], Path]:
+    """Import and compare only isolated, already-preserved local evidence."""
+
+    root_path = Path(root).resolve()
+    config_file = Path(config_path)
+    if not config_file.is_absolute():
+        config_file = root_path / config_file
+    config = load_validation_config(config_file)
+    preflight = build_preflight(
+        root=root_path, config_path=config_file, verify_acm_artifacts=True
+    )
+    pubmed_verification = validate_pubmed_execution_artifacts(
+        root=root_path, config_path=config_file
+    )
+    output = resolve_output_namespace(root_path, config["output_namespace"])
+    offline_root = output / "offline"
+    if offline_root.exists():
+        raise FileExistsError("provisional offline stage already exists")
+
+    acm_binding = config["bindings"]["acm_final_reconciliation"]
+    acm_path, acm_file_binding = _bound_file(root_path, acm_binding)
+    acm_manifest = load_acm_final_reconciliation_manifest(
+        acm_path, root=root_path, verify_artifacts=True
+    )
+    acm_occurrences, acm_accounting = _load_selected_acm_occurrences(
+        root=root_path, manifest=acm_manifest
+    )
+    pubmed_execution_path = output / "pubmed/pubmed_execution.json"
+    pubmed_execution = json.loads(pubmed_execution_path.read_text(encoding="utf-8"))
+    _validate_embedded_hash(pubmed_execution, "execution_hash")
+    pubmed_occurrences = _load_sampled_pubmed_occurrences(
+        output=output, execution=pubmed_execution
+    )
+
+    acm_canonical, _, acm_stats = _canonicalize_provisional(acm_occurrences)
+    pubmed_canonical, _, pubmed_stats = _canonicalize_provisional(pubmed_occurrences)
+    combined_canonical, decisions, combined_stats = _canonicalize_provisional(
+        acm_occurrences + pubmed_occurrences
+    )
+    config_hash = _sha256_bytes(config_file.read_bytes())
+    cohort = _build_validation_cohort(
+        canonical_records=combined_canonical,
+        config_hash=config_hash,
+        target=config["candidate_selection"]["target_canonical_records"],
+    )
+
+    jfr_path, jfr_binding = _bound_file(
+        root_path, config["bindings"]["jfr25_seed_manifest"]
+    )
+    jfr_manifest = json.loads(jfr_path.read_text(encoding="utf-8"))
+    if (
+        jfr_manifest.get("status") != "POPULATED_VALIDATED_NOT_IMPORTED"
+        or len(jfr_manifest.get("entries", [])) != 138
+        or jfr_manifest.get("occurrences_created") != 0
+    ):
+        raise ProvisionalValidationError("JFR25 comparison binding is not validated")
+    matches = _jfr25_matches(
+        entries=jfr_manifest["entries"],
+        canonical_records=combined_canonical,
+        cohort_ids={item["canonical_id"] for item in cohort["records"]},
+    )
+    metadata_rediscovered = sum(item["canonical_id"] is not None for item in matches)
+    cohort_rediscovered = sum(item["in_750_cohort"] for item in matches)
+    enumerated_unique = pubmed_execution["complete_identity_enumeration_overlap"][
+        "unique_pmid_count_across_families"
+    ]
+    sampled_unique_pmids = len(
+        {item["source_identifier"] for item in pubmed_occurrences}
+    )
+
+    base_classification = {
+        "purpose": "PROVISIONAL_NONPRODUCTION_VALIDATION",
+        "production_import_allowed": False,
+        "production_completion_claimed": False,
+        "retrieval_cutoff": None,
+        "production_retrieval_wave_instantiated": False,
+        "disposition": "DISCARD_ONLY",
+    }
+    acm_payload = {
+        "artifact_class": "PROVISIONAL_ACM_IMPORT_ACCOUNTING",
+        "classification": base_classification,
+        "acm_manifest_binding": acm_file_binding,
+        **acm_accounting,
+        "actual_unique_canonical_acm_identity_count": len(acm_canonical),
+        "canonicalization_statistics": acm_stats,
+        "occurrences": acm_occurrences,
+    }
+    acm_payload["artifact_hash"] = _sha256_json(acm_payload)
+    offline_root.mkdir(parents=True)
+    acm_artifact = _write_json(offline_root / "acm_import_accounting.json", acm_payload)
+    acm_artifact["relative_path"] = (
+        offline_root / "acm_import_accounting.json"
+    ).relative_to(output).as_posix()
+
+    canonical_payload = {
+        "artifact_class": "PROVISIONAL_LOCAL_CANONICALIZATION",
+        "classification": base_classification,
+        "rule": "normalized DOI first; exact normalized title fallback; occurrence fallback",
+        "acm": acm_stats,
+        "pubmed_sample": pubmed_stats,
+        "combined": combined_stats,
+        "canonical_records": combined_canonical,
+        "duplicate_decisions": decisions,
+    }
+    canonical_payload["artifact_hash"] = _sha256_json(canonical_payload)
+    canonical_artifact = _write_json(
+        offline_root / "provisional_canonicalization.json", canonical_payload
+    )
+    canonical_artifact["relative_path"] = (
+        offline_root / "provisional_canonicalization.json"
+    ).relative_to(output).as_posix()
+
+    cohort.update({"classification": base_classification, "config_raw_sha256": config_hash})
+    cohort["artifact_hash"] = _sha256_json(cohort)
+    cohort_artifact = _write_json(
+        offline_root / "validation_cohort_750.json", cohort
+    )
+    cohort_artifact["relative_path"] = (
+        offline_root / "validation_cohort_750.json"
+    ).relative_to(output).as_posix()
+
+    rediscovery = {
+        "artifact_class": "PROVISIONAL_JFR25_REDISCOVERY_DIAGNOSTIC",
+        "classification": base_classification,
+        "jfr25_manifest_binding": jfr_binding,
+        "jfr25_occurrences_created": 0,
+        "terminology": "rediscovery diagnostic; not recall or precision",
+        "matching_rules": {
+            "doi_bearing_member": "exact normalized DOI only",
+            "doi_unavailable_member": "unique exact normalized title only",
+            "fuzzy_or_semantic_matching": False,
+        },
+        "full_provisional_acquisition_universe": {
+            "acm_selected_occurrence_count": len(acm_occurrences),
+            "acm_canonical_identity_count": len(acm_canonical),
+            "complete_pubmed_enumerated_unique_pmid_count": enumerated_unique,
+            "pubmed_metadata_bearing_unique_pmid_count": sampled_unique_pmids,
+            "pubmed_enumeration_only_pmid_count": enumerated_unique
+            - sampled_unique_pmids,
+            "rediscovered_member_count_detectable_with_available_metadata": metadata_rediscovered,
+            "limitation": (
+                "enumeration-only PMIDs have no DOI/title metadata and cannot be assessed "
+                "under the approved exact identity rules"
+            ),
+        },
+        "combined_metadata_bearing_universe": {
+            "canonical_identity_count": len(combined_canonical),
+            "rediscovered_member_count": metadata_rediscovered,
+        },
+        "deterministic_750_cohort": {
+            "canonical_identity_count": len(cohort["records"]),
+            "rediscovered_member_count": cohort_rediscovered,
+        },
+        "members": matches,
+    }
+    rediscovery["artifact_hash"] = _sha256_json(rediscovery)
+    rediscovery_artifact = _write_json(
+        offline_root / "jfr25_rediscovery.json", rediscovery
+    )
+    rediscovery_artifact["relative_path"] = (
+        offline_root / "jfr25_rediscovery.json"
+    ).relative_to(output).as_posix()
+
+    summary = {
+        "schema_version": "1.0.0",
+        "artifact_class": OFFLINE_STAGE_ARTIFACT_CLASS,
+        "generated_at_utc": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+        "classification": base_classification,
+        "preflight_hash": preflight["preflight_hash"],
+        "pubmed_execution_verification": pubmed_verification,
+        "inputs": {
+            "config_raw_sha256": config_hash,
+            "acm_final_reconciliation": acm_file_binding,
+            "pubmed_execution_file_sha256": _sha256_bytes(
+                pubmed_execution_path.read_bytes()
+            ),
+            "jfr25_seed_manifest": jfr_binding,
+        },
+        "results": {
+            "raw_acm_selected_occurrences": len(acm_occurrences),
+            "unique_acm_identities": len(acm_canonical),
+            "pubmed_sampled_occurrences": len(pubmed_occurrences),
+            "unique_pubmed_sampled_identities": len(pubmed_canonical),
+            "acm_pubmed_exact_identity_overlap": combined_stats[
+                "acm_pubmed_exact_identity_overlap"
+            ],
+            "combined_canonical_identity_count": len(combined_canonical),
+            "doi_match_duplicate_count": combined_stats["doi_match_duplicate_count"],
+            "title_fallback_duplicate_count": combined_stats[
+                "title_fallback_duplicate_count"
+            ],
+            "unresolved_missing_identity_count": combined_stats[
+                "unresolved_missing_doi_and_title_count"
+            ],
+            "cohort_count": len(cohort["records"]),
+            "jfr25_metadata_universe_rediscovered": metadata_rediscovered,
+            "jfr25_cohort_rediscovered": cohort_rediscovered,
+        },
+        "artifacts": {
+            "acm_import_accounting": acm_artifact,
+            "canonicalization": canonical_artifact,
+            "validation_cohort": cohort_artifact,
+            "jfr25_rediscovery": rediscovery_artifact,
+        },
+        "prohibited_effects": {
+            "network_requests": 0,
+            "llm_inference": False,
+            "production_retrieval_cutoff": None,
+            "production_retrieval_wave": False,
+            "production_review_dataset": False,
+            "authoritative_screening_or_adjudication": False,
+            "prisma": False,
+            "corpus_membership": False,
+            "production_deduplication_or_identification_closure": False,
+            "jfr25_occurrences": 0,
+        },
+    }
+    summary["artifact_hash"] = _sha256_json(summary)
+    summary_path = offline_root / "offline_stage_summary.json"
+    _write_json(summary_path, summary)
+    return summary, summary_path
+
+
 def write_preflight(report: dict[str, Any], *, root: str | Path) -> Path:
     """Persist only the preflight inside its guarded ignored namespace."""
 
@@ -1437,6 +2077,7 @@ def main() -> int:
     boundary = parser.add_mutually_exclusive_group(required=True)
     boundary.add_argument("--preflight", action="store_true")
     boundary.add_argument("--authorize-pubmed-execution", action="store_true")
+    boundary.add_argument("--authorize-acm-provisional-import", action="store_true")
     args = parser.parse_args()
 
     root = args.root.resolve()
@@ -1459,6 +2100,14 @@ def main() -> int:
         path = write_preflight(report, root=root)
         print(path.relative_to(root).as_posix())
         print(report["preflight_hash"])
+        return 0
+
+    if args.authorize_acm_provisional_import:
+        summary, path = execute_offline_validation_stage(
+            root=root, config_path=args.config
+        )
+        print(path.relative_to(root).as_posix())
+        print(summary["artifact_hash"])
         return 0
 
     execution, path = execute_pubmed_boundary(

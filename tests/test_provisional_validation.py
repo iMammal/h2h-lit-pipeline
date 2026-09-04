@@ -310,3 +310,123 @@ def test_pubmed_boundary_resumes_only_verified_partial_artifacts(
     assert [method for method, _ in resumed.calls] == ["GET", "GET"]
     assert execution["request_accounting"]["logical_request_count"] == 10
     assert execution["request_accounting"]["actual_attempt_count"] == 10
+
+
+def _occurrence(
+    occurrence_id: str,
+    *,
+    route: str,
+    family_code: str,
+    doi: str | None = None,
+    title: str = "",
+) -> dict[str, Any]:
+    return {
+        "occurrence_id": occurrence_id,
+        "route": route,
+        "source_database": "PubMed" if route == "PubMed" else "ACMDigitalLibrary",
+        "family_id": f"STAR-{family_code}",
+        "family_code": family_code,
+        "child_query_id": f"query:{family_code}:{route}",
+        "field_key": None,
+        "artifact_relative_path": f"artifact:{occurrence_id}",
+        "artifact_sha256": "a" * 64,
+        "artifact_record_ordinal": 1,
+        "source_identifier": occurrence_id,
+        "raw_entry_sha256": "b" * 64,
+        "malformed": False,
+        "parse_issue": None,
+        "record": {"doi": doi, "title": title},
+    }
+
+
+def test_provisional_canonicalization_uses_doi_then_exact_title() -> None:
+    records, decisions, stats = provisional_validation._canonicalize_provisional(
+        [
+            _occurrence("a", route="ACM", family_code="QF01", doi="10.1000/example"),
+            _occurrence("b", route="PubMed", family_code="QF02", doi="10.1000/EXAMPLE"),
+            _occurrence("c", route="ACM", family_code="QF01", title="Exact Title"),
+            _occurrence("d", route="ACM", family_code="QF03", title="Exact title!"),
+            _occurrence("e", route="ACM", family_code="QF04"),
+        ]
+    )
+
+    assert len(records) == 3
+    assert len([item for item in decisions if item["outcome"] == "DUPLICATE"]) == 2
+    assert stats["doi_match_duplicate_count"] == 1
+    assert stats["title_fallback_duplicate_count"] == 1
+    assert stats["unresolved_missing_doi_and_title_count"] == 1
+    assert stats["acm_pubmed_exact_identity_overlap"] == 1
+
+
+def test_validation_cohort_has_independent_strata_and_unique_final_records() -> None:
+    canonical = []
+    for index in range(800):
+        occurrences = [
+            {
+                "family_code": family,
+                "route": route,
+                "occurrence_id": f"{index}:{family}:{route}",
+            }
+            for family in ("QF01", "QF02", "QF03", "QF04", "QF05")
+            for route in ("ACM", "PubMed")
+        ]
+        canonical.append(
+            {
+                "canonical_id": f"canonical:{index:04d}",
+                "representative_record": {
+                    "title": f"content must not affect selection {index}",
+                    "abstract": "ignored",
+                },
+                "occurrences": occurrences,
+            }
+        )
+
+    cohort = provisional_validation._build_validation_cohort(
+        canonical_records=canonical,
+        config_hash="c" * 64,
+        target=750,
+    )
+    ids = [item["canonical_id"] for item in cohort["records"]]
+    assert len(ids) == len(set(ids)) == 750
+    assert len(cohort["strata"]) == 10
+    assert all(len(item["selected_canonical_ids"]) == 50 for item in cohort["strata"].values())
+    assert cohort["content_or_eligibility_inspected_for_selection"] is False
+    assert cohort["jfr25_membership_inspected_for_selection"] is False
+
+
+def test_jfr25_comparison_is_exact_first_and_creates_no_seed_occurrences() -> None:
+    canonical = [
+        {
+            "canonical_id": "doi-record",
+            "representative_record": {"doi": "10.1000/shared", "title": "Wrong title"},
+            "occurrences": [{"family_code": "QF01", "route": "ACM"}],
+        },
+        {
+            "canonical_id": "title-record",
+            "representative_record": {"doi": None, "title": "Unique title"},
+            "occurrences": [{"family_code": "QF02", "route": "PubMed"}],
+        },
+    ]
+    matches = provisional_validation._jfr25_matches(
+        entries=[
+            {
+                "entry_id": "jfr-doi",
+                "source_member_id": "1",
+                "doi": "https://doi.org/10.1000/SHARED",
+                "title": "does not matter",
+            },
+            {
+                "entry_id": "jfr-title",
+                "source_member_id": "2",
+                "doi": None,
+                "title": "Unique title!",
+            },
+        ],
+        canonical_records=canonical,
+        cohort_ids={"doi-record"},
+    )
+    assert [item["match_method"] for item in matches] == [
+        "exact_normalized_doi",
+        "unique_exact_normalized_title",
+    ]
+    assert [item["in_750_cohort"] for item in matches] == [True, False]
