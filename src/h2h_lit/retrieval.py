@@ -92,6 +92,17 @@ from h2h_lit.sources.semantic_scholar import (
 SourceAdapter = Callable[..., list[LiteratureRecord]]
 TimestampFactory = Callable[[], str]
 
+RESPONSE_FREE_TRANSIENT_TRANSPORT_ERRORS = frozenset(
+    {
+        "ConnectionError",
+        "ConnectTimeout",
+        "ProxyError",
+        "ReadTimeout",
+        "SSLError",
+        "Timeout",
+    }
+)
+
 
 SOURCE_ADAPTERS: dict[str, SourceAdapter] = {
     "PubMed": search_pubmed,
@@ -361,6 +372,7 @@ def execute_paginated_retrieval_run(
     retry_sleep: Callable[[float], None] = time.sleep,
     request_budget: int | None = None,
     pause_status_codes: frozenset[int] = frozenset(),
+    resumable_transport_exhaustion_sources: frozenset[str] = frozenset(),
 ) -> ReviewDataset:
     """Execute a complete, checkpointed retrieval wave without scientific filtering."""
 
@@ -494,6 +506,8 @@ def execute_paginated_retrieval_run(
     run.metadata.pop("pause_metadata", None)
     run.metadata.pop("session_request_count", None)
     requests_made = 0
+    attempt_record_baselines: dict[str, int] = {}
+    ordinary_attempt_baselines: dict[str, int] = {}
     limiter = rate_limiter
     if limiter is None:
         live = any(
@@ -580,9 +594,22 @@ def execute_paginated_retrieval_run(
                     interrupted.ended_at = timestamp()
                     interrupted.error = "interrupted before response persistence"
 
-            while response is None and _ordinary_attempt_count(
-                existing_attempts
-            ) < retry_policy.max_attempts:
+            attempt_records_before_invocation = attempt_record_baselines.setdefault(
+                page.page_id, len(existing_attempts)
+            )
+            ordinary_attempts_before_invocation = ordinary_attempt_baselines.setdefault(
+                page.page_id, _ordinary_attempt_count(existing_attempts)
+            )
+
+            while response is None and _attempt_budget_remaining(
+                existing_attempts,
+                ordinary_attempts_before_invocation,
+                retry_policy.max_attempts,
+                per_invocation=(
+                    spec.source_database
+                    in resumable_transport_exhaustion_sources
+                ),
+            ):
                 if request_budget is not None and requests_made >= request_budget:
                     return _pause_retrieval(
                         store,
@@ -661,8 +688,25 @@ def execute_paginated_retrieval_run(
                     attempt.status = RetrievalAttemptStatus.FAILED
                     attempt.ended_at = timestamp()
                     attempt.error = f"{type(exc).__name__}: {exc}"
-                    if attempt_number < retry_policy.max_attempts:
-                        delay = retry_policy.delay(attempt_number)
+                    if _attempt_budget_remaining(
+                        existing_attempts,
+                        ordinary_attempts_before_invocation,
+                        retry_policy.max_attempts,
+                        per_invocation=(
+                            spec.source_database
+                            in resumable_transport_exhaustion_sources
+                        ),
+                    ):
+                        invocation_attempt_number = (
+                            _ordinary_attempt_count(existing_attempts)
+                            - ordinary_attempts_before_invocation
+                        )
+                        delay = retry_policy.delay(
+                            invocation_attempt_number
+                            if spec.source_database
+                            in resumable_transport_exhaustion_sources
+                            else attempt_number
+                        )
                         attempt.retry_delay_seconds = delay
                         retry_sleep(delay)
                     _touch(dataset, query, attempt.ended_at)
@@ -671,6 +715,47 @@ def execute_paginated_retrieval_run(
                     )
 
             if response is None:
+                invocation_attempts = existing_attempts[
+                    attempt_records_before_invocation:
+                ]
+                if (
+                    spec.source_database
+                    in resumable_transport_exhaustion_sources
+                    and len(invocation_attempts) == retry_policy.max_attempts
+                    and all(
+                        _is_response_free_transient_transport_failure(item)
+                        for item in invocation_attempts
+                    )
+                    and all(
+                        _is_response_free_transient_transport_failure(item)
+                        or _is_provider_rate_limit_pause_attempt(item)
+                        for item in existing_attempts
+                    )
+                ):
+                    return _pause_retrieval(
+                        store,
+                        dataset,
+                        query,
+                        pause_state="TRANSIENT_TRANSPORT_EXHAUSTED",
+                        reason="TRANSIENT_TRANSPORT_EXHAUSTED_NO_RESPONSE",
+                        pause_metadata={
+                            "source_database": spec.source_database,
+                            "response_received": False,
+                            "attempts_this_invocation": len(invocation_attempts),
+                            "maximum_attempts_per_invocation": (
+                                retry_policy.max_attempts
+                            ),
+                            "failure_types": [
+                                str(item.error or "").partition(":")[0]
+                                for item in invocation_attempts
+                            ],
+                        },
+                        requests_made=requests_made,
+                        timestamp=timestamp,
+                        protocol_version=protocol_version,
+                        rubric_version=rubric_version,
+                        software_version=software_version,
+                    )
                 _fail_page(page, query, "retrieval attempts exhausted before a response")
                 break
 
@@ -868,6 +953,46 @@ def _ordinary_attempt_count(attempts: list[RetrievalAttempt]) -> int:
             ("PROVIDER_QUOTA_EXHAUSTED_HTTP_", "PROVIDER_RATE_LIMIT_PAUSED_HTTP_")
         )
         for item in attempts
+    )
+
+
+def _attempt_budget_remaining(
+    attempts: list[RetrievalAttempt],
+    attempts_before_invocation: int,
+    maximum_attempts: int,
+    *,
+    per_invocation: bool,
+) -> bool:
+    ordinary_attempts = _ordinary_attempt_count(attempts)
+    if per_invocation:
+        ordinary_attempts -= attempts_before_invocation
+    return ordinary_attempts < maximum_attempts
+
+
+def _is_response_free_transient_transport_failure(
+    attempt: RetrievalAttempt,
+) -> bool:
+    failure_type = str(attempt.error or "").partition(":")[0]
+    return (
+        attempt.status is RetrievalAttemptStatus.FAILED
+        and failure_type in RESPONSE_FREE_TRANSIENT_TRANSPORT_ERRORS
+        and attempt.response_status is None
+        and attempt.raw_response_path is None
+        and attempt.raw_response_hash is None
+        and attempt.response_url is None
+        and not attempt.response_headers
+    )
+
+
+def _is_provider_rate_limit_pause_attempt(attempt: RetrievalAttempt) -> bool:
+    return (
+        attempt.status is RetrievalAttemptStatus.FAILED
+        and attempt.response_status == 429
+        and str(attempt.error or "").startswith(
+            "PROVIDER_RATE_LIMIT_PAUSED_HTTP_"
+        )
+        and attempt.raw_response_path is not None
+        and attempt.raw_response_hash is not None
     )
 
 

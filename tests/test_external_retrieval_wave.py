@@ -12,6 +12,7 @@ import h2h_lit.external_retrieval_wave as external_module
 import h2h_lit.sources.pubmed as pubmed_module
 from h2h_lit.external_retrieval_wave import (
     ACM_RECONCILIATION_PATH,
+    ARXIV_MIXED_RECOVERY_STATUS,
     ARXIV_RATE_LIMIT_RECOVERY_STATUS,
     EUROPE_PMC_TERMINAL_RECOVERY_STATUS,
     IEEE_REPEATED_WINDOW_RECOVERY_STATUS,
@@ -23,6 +24,7 @@ from h2h_lit.external_retrieval_wave import (
     WAVE_PATH,
     ExternalRetrievalWaveError,
     _safe_output_path,
+    authorize_arxiv_mixed_state_recovery,
     authorize_arxiv_rate_limit_recovery,
     authorize_europe_pmc_terminal_recovery,
     authorize_ieee_repeated_window_recovery,
@@ -251,6 +253,7 @@ def _failed_arxiv_rate_limit_episode(
 
     def execute_with_legacy_429_failure(**kwargs):
         kwargs["pause_status_codes"] = frozenset()
+        kwargs["resumable_transport_exhaustion_sources"] = frozenset()
         return original_execute(**kwargs)
 
     monkeypatch.setattr(
@@ -277,6 +280,57 @@ def _failed_arxiv_rate_limit_episode(
     assert failed["sources"]["arXiv"]["status"] == "FAILED"
     assert failed["sources"]["arXiv"]["attempt_count"] == 15
     return failed, clock
+
+
+def _paused_arxiv_mixed_episode(
+    tmp_path, monkeypatch, external_wave, external_preflight
+):
+    _, clock = _failed_arxiv_rate_limit_episode(
+        tmp_path, monkeypatch, external_wave, external_preflight
+    )
+    authorize_arxiv_rate_limit_recovery(root=tmp_path, timestamp=clock)
+    failures = [
+        *[ReadTimeout("timed out") for _ in range(3)],
+        *[ReadTimeout("timed out") for _ in range(3)],
+        *[ReadTimeout("timed out") for _ in range(3)],
+        FakeResponse(status_code=429, content=b"Rate exceeded."),
+    ]
+    original_execute = external_module.execute_paginated_retrieval_run
+
+    def execute_with_legacy_terminal_timeouts(**kwargs):
+        kwargs["resumable_transport_exhaustion_sources"] = frozenset()
+        return original_execute(**kwargs)
+
+    monkeypatch.setattr(
+        external_module,
+        "execute_paginated_retrieval_run",
+        execute_with_legacy_terminal_timeouts,
+    )
+    paused = execute_external_source_session(
+        root=tmp_path,
+        source="arXiv",
+        http=FakeHttp(failures),
+        resume=True,
+        timestamp=clock,
+        retry_policy=RetryPolicy(max_attempts=3, base_delay_seconds=0),
+        rate_limiter=RateLimiter({}),
+        retry_sleep=lambda _: None,
+    )
+    monkeypatch.setattr(
+        external_module,
+        "execute_paginated_retrieval_run",
+        original_execute,
+    )
+    source_state = paused["sources"]["arXiv"]
+    assert source_state["status"] == "PAUSED_PROVIDER_RATE_LIMIT"
+    assert source_state["attempt_count"] == 10
+    assert source_state["occurrence_count"] == 0
+    monkeypatch.setattr(
+        external_module,
+        "ARXIV_MIXED_EXPECTED_CHECKPOINT_SHA256",
+        source_state["checkpoint_dataset"]["raw_sha256"],
+    )
+    return paused, clock
 
 
 def test_arxiv_rate_limit_recovery_creates_fresh_episode_and_preserves_evidence(
@@ -481,6 +535,259 @@ def test_arxiv_episode_2_repeated_429_pauses_and_malformed_feed_fails_closed(
     )
     assert failed["sources"]["arXiv"]["status"] == "FAILED"
     assert "ParseError" in failed["sources"]["arXiv"]["failure_reason"]
+
+
+def test_arxiv_mixed_state_recovery_creates_episode_3_and_preserves_evidence(
+    tmp_path, monkeypatch, external_wave, external_preflight
+) -> None:
+    paused, clock = _paused_arxiv_mixed_episode(
+        tmp_path, monkeypatch, external_wave, external_preflight
+    )
+    arxiv_before = paused["sources"]["arXiv"]
+    episode_checkpoint_bytes = {
+        episode["episode_number"]: (
+            tmp_path / episode["checkpoint_dataset"]["path"]
+        ).read_bytes()
+        for episode in arxiv_before["execution_episodes"]
+    }
+    response_bytes = {
+        path.relative_to(tmp_path).as_posix(): path.read_bytes()
+        for episode in arxiv_before["execution_episodes"]
+        for path in (
+            tmp_path / episode["checkpoint_path"] / "responses"
+        ).glob("*.json")
+    }
+    other_sources_before = {
+        key: json.loads(json.dumps(value, sort_keys=True))
+        for key, value in paused["sources"].items()
+        if key != "arXiv"
+    }
+
+    recovered = authorize_arxiv_mixed_state_recovery(
+        root=tmp_path, timestamp=clock
+    )
+
+    arxiv = recovered["sources"]["arXiv"]
+    assert arxiv["status"] == ARXIV_MIXED_RECOVERY_STATUS
+    assert arxiv["active_episode_number"] == 3
+    assert arxiv["attempt_count"] == 0
+    assert arxiv["occurrence_count"] == 0
+    assert arxiv["preserved_source_attempt_count"] == 25
+    assert arxiv["preserved_source_raw_response_count"] == 8
+    episode_1, episode_2, episode_3 = arxiv["execution_episodes"]
+    assert episode_1["immutable"] is True
+    assert episode_2["immutable"] is True
+    assert episode_2["attempt_count"] == 10
+    assert episode_2["status"] == "PAUSED_PROVIDER_RATE_LIMIT"
+    assert episode_3["immutable"] is False
+    assert episode_3["network_used"] is False
+    assert episode_3["source_attempt_count"] == 25
+    assert episode_3["source_raw_response_count"] == 8
+    assert [
+        item["attempt_kinds"]
+        for item in episode_3["episode_2_query_attempt_signatures"]
+    ] == [
+        ["ReadTimeout", "ReadTimeout", "ReadTimeout"],
+        ["ReadTimeout", "ReadTimeout", "ReadTimeout"],
+        ["ReadTimeout", "ReadTimeout", "ReadTimeout"],
+        ["HTTP_429"],
+        [],
+    ]
+    assert [item["request_state"] for item in episode_3["restart_states"]] == [
+        {"start": 0}
+    ] * 5
+    assert [item["max_results"] for item in episode_3["restart_states"]] == [
+        2000
+    ] * 5
+    assert len(episode_3["episode_2_raw_responses"]) == 1
+    assert (
+        episode_3["episode_2_raw_responses"][0][
+            "retry_after_header_present"
+        ]
+        is False
+    )
+    assert episode_3["episode_2_raw_responses"][0]["retry_after"] is None
+    assert {
+        episode["episode_number"]: (
+            tmp_path / episode["checkpoint_dataset"]["path"]
+        ).read_bytes()
+        for episode in arxiv["execution_episodes"][:2]
+    } == episode_checkpoint_bytes
+    assert {
+        path.relative_to(tmp_path).as_posix(): path.read_bytes()
+        for episode in arxiv["execution_episodes"][:2]
+        for path in (
+            tmp_path / episode["checkpoint_path"] / "responses"
+        ).glob("*.json")
+    } == response_bytes
+    assert {
+        key: value for key, value in recovered["sources"].items() if key != "arXiv"
+    } == other_sources_before
+    assert recovered["external_retrieval_cutoff_date"] is None
+
+    active = external_module.load_review_dataset(
+        tmp_path / arxiv["checkpoint_dataset"]["path"]
+    )
+    assert active.retrieval_pages == []
+    assert active.retrieval_attempts == []
+    assert active.occurrences == []
+    assert all(
+        query.completion_status is external_module.RetrievalCompletionStatus.PLANNED
+        and query.result_count == 0
+        and query.page_ids == []
+        for query in active.source_queries
+    )
+
+    repeated = authorize_arxiv_mixed_state_recovery(
+        root=tmp_path, timestamp=clock
+    )
+    assert repeated == recovered
+
+
+def test_arxiv_mixed_state_recovery_refuses_response_hash_corruption(
+    tmp_path, monkeypatch, external_wave, external_preflight
+) -> None:
+    paused, clock = _paused_arxiv_mixed_episode(
+        tmp_path, monkeypatch, external_wave, external_preflight
+    )
+    checkpoint = tmp_path / paused["sources"]["arXiv"]["checkpoint_dataset"]["path"]
+    response = next((checkpoint.parent / "responses").iterdir())
+    response.write_bytes(response.read_bytes() + b"corrupt")
+
+    with pytest.raises(ExternalRetrievalWaveError, match="hash/read failure"):
+        authorize_arxiv_mixed_state_recovery(root=tmp_path, timestamp=clock)
+
+
+@pytest.mark.parametrize(
+    "drift_kind",
+    ["signature", "query", "request_hash", "successful_page", "occurrence"],
+)
+def test_arxiv_mixed_state_recovery_refuses_signature_query_or_data_drift(
+    tmp_path,
+    monkeypatch,
+    external_wave,
+    external_preflight,
+    drift_kind,
+) -> None:
+    paused, clock = _paused_arxiv_mixed_episode(
+        tmp_path, monkeypatch, external_wave, external_preflight
+    )
+    episode_2_path = (
+        tmp_path / paused["sources"]["arXiv"]["checkpoint_dataset"]["path"]
+    ).resolve()
+    original_load = external_module.load_review_dataset
+
+    def load_with_drift(path):
+        dataset = original_load(path)
+        if Path(path).resolve() != episode_2_path:
+            return dataset
+        if drift_kind == "signature":
+            dataset.retrieval_attempts[0].error = "ConnectionError: changed"
+        elif drift_kind == "query":
+            dataset.source_queries[0].query_text += " changed"
+        elif drift_kind == "request_hash":
+            dataset.retrieval_attempts[0].request_hash = "0" * 64
+        elif drift_kind == "successful_page":
+            dataset.retrieval_pages[0].status = (
+                external_module.RetrievalCompletionStatus.COMPLETE
+            )
+        else:
+            dataset.occurrences.append(object())
+        return dataset
+
+    monkeypatch.setattr(external_module, "load_review_dataset", load_with_drift)
+    with pytest.raises(
+        ExternalRetrievalWaveError,
+        match="signature|query|request|successful page|frozen",
+    ):
+        authorize_arxiv_mixed_state_recovery(root=tmp_path, timestamp=clock)
+
+
+def test_arxiv_episode_3_live_resume_starts_all_families_at_zero(
+    tmp_path, monkeypatch, external_wave, external_preflight
+) -> None:
+    _, clock = _paused_arxiv_mixed_episode(
+        tmp_path, monkeypatch, external_wave, external_preflight
+    )
+    authorize_arxiv_mixed_state_recovery(root=tmp_path, timestamp=clock)
+    http = FakeHttp(
+        [FakeResponse(content=_arxiv_feed(f"family-{index}")) for index in range(5)]
+    )
+
+    completed = execute_external_source_session(
+        root=tmp_path,
+        source="arXiv",
+        http=http,
+        resume=True,
+        timestamp=clock,
+        retry_policy=RetryPolicy(max_attempts=1),
+        rate_limiter=RateLimiter({}),
+    )
+
+    assert [call["params"]["start"] for call in http.calls] == [0] * 5
+    assert [call["params"]["max_results"] for call in http.calls] == [2000] * 5
+    arxiv = completed["sources"]["arXiv"]
+    assert arxiv["status"] == "COMPLETE"
+    assert arxiv["completed_query_count"] == 5
+    assert arxiv["occurrence_count"] == 5
+    assert [item["immutable"] for item in arxiv["execution_episodes"]] == [
+        True,
+        True,
+        True,
+    ]
+
+
+def test_arxiv_live_transport_pause_is_resumable_without_terminal_query_skip(
+    tmp_path, monkeypatch, external_wave, external_preflight
+) -> None:
+    _install_isolated_runtime(
+        tmp_path, monkeypatch, external_wave, external_preflight
+    )
+    clock = Clock()
+    first_http = FakeHttp([ReadTimeout("timed out") for _ in range(3)])
+
+    paused = execute_external_source_session(
+        root=tmp_path,
+        source="arXiv",
+        http=first_http,
+        resume=False,
+        timestamp=clock,
+        retry_policy=RetryPolicy(max_attempts=3, base_delay_seconds=0),
+        rate_limiter=RateLimiter({}),
+        retry_sleep=lambda _: None,
+    )
+
+    arxiv = paused["sources"]["arXiv"]
+    assert arxiv["status"] == "PAUSED_TRANSIENT_TRANSPORT"
+    assert arxiv["requests_this_session"] == 3
+    checkpoint = external_module.load_review_dataset(
+        tmp_path / arxiv["checkpoint_dataset"]["path"]
+    )
+    assert checkpoint.source_queries[0].completion_status is (
+        external_module.RetrievalCompletionStatus.RUNNING
+    )
+    assert all(
+        query.completion_status is external_module.RetrievalCompletionStatus.PLANNED
+        for query in checkpoint.source_queries[1:]
+    )
+
+    resumed_http = FakeHttp(
+        [FakeResponse(content=_arxiv_feed(f"family-{index}")) for index in range(5)]
+    )
+    completed = execute_external_source_session(
+        root=tmp_path,
+        source="arXiv",
+        http=resumed_http,
+        resume=True,
+        timestamp=clock,
+        retry_policy=RetryPolicy(max_attempts=3, base_delay_seconds=0),
+        rate_limiter=RateLimiter({}),
+        retry_sleep=lambda _: None,
+    )
+
+    assert len(resumed_http.calls) == 5
+    assert [call["params"]["start"] for call in resumed_http.calls] == [0] * 5
+    assert completed["sources"]["arXiv"]["status"] == "COMPLETE"
 
 
 def _ieee_page(identifier: str, *, total: int) -> dict:

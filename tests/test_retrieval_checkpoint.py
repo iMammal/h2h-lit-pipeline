@@ -23,6 +23,10 @@ class Clock:
         return result
 
 
+class ReadTimeout(Exception):
+    """Deterministic response-free transient transport failure."""
+
+
 def _crossref_item(identifier: str, *, title: str | None = None) -> dict:
     item = {"DOI": identifier, "container-title": ["Venue"]}
     if title is not None:
@@ -290,6 +294,7 @@ def test_arxiv_429_pauses_once_and_records_retry_after_evidence(
         retry_policy=RetryPolicy(max_attempts=3),
         retry_sleep=lambda _: pytest.fail("arXiv 429 must pause without retrying"),
         pause_status_codes=frozenset({429}),
+        resumable_transport_exhaustion_sources=frozenset({"arXiv"}),
     )
 
     assert len(http.calls) == 1
@@ -322,6 +327,7 @@ def test_arxiv_rate_limit_pause_resumes_same_frozen_initial_request(tmp_path):
         timestamp=Clock(),
         retry_policy=RetryPolicy(max_attempts=1),
         pause_status_codes=frozenset({429}),
+        resumable_transport_exhaustion_sources=frozenset({"arXiv"}),
     )
     resumed_http = FakeHttp(
         [FakeResponse(content=_arxiv_feed("a1", total=1, start=0))]
@@ -335,6 +341,7 @@ def test_arxiv_rate_limit_pause_resumes_same_frozen_initial_request(tmp_path):
         timestamp=Clock(),
         retry_policy=RetryPolicy(max_attempts=1),
         pause_status_codes=frozenset({429}),
+        resumable_transport_exhaustion_sources=frozenset({"arXiv"}),
     )
 
     assert resumed_http.calls[0]["params"]["start"] == 0
@@ -353,6 +360,7 @@ def test_arxiv_successful_response_validation_remains_fail_closed(tmp_path):
         timestamp=Clock(),
         retry_policy=RetryPolicy(max_attempts=1),
         pause_status_codes=frozenset({429}),
+        resumable_transport_exhaustion_sources=frozenset({"arXiv"}),
     )
 
     assert malformed.retrieval_runs[0].completion_status is (
@@ -383,6 +391,7 @@ def test_arxiv_identity_and_pagination_validation_remain_fail_closed(
         timestamp=Clock(),
         retry_policy=RetryPolicy(max_attempts=1),
         pause_status_codes=frozenset({429}),
+        resumable_transport_exhaustion_sources=frozenset({"arXiv"}),
     )
 
     assert dataset.retrieval_runs[0].completion_status is (
@@ -394,6 +403,151 @@ def test_arxiv_identity_and_pagination_validation_remain_fail_closed(
         assert "repeated native identifiers across pages" in errors[0]
     else:
         assert "startIndex does not match" in errors[0]
+
+
+def test_arxiv_response_free_transport_exhaustion_pauses_and_is_bounded(
+    tmp_path,
+):
+    checkpoint = tmp_path / "arxiv-response-free-transport"
+    spec = RetrievalQuerySpec("arXiv", "cells", "arxiv-v2", limit=2)
+    first_http = FakeHttp([ReadTimeout("timed out") for _ in range(3)])
+    first = execute_paginated_retrieval_run(
+        run_id="run:arxiv-response-free-transport",
+        queries=[spec],
+        http_clients={"arXiv": first_http},
+        checkpoint_dir=checkpoint,
+        timestamp=Clock(),
+        retry_policy=RetryPolicy(max_attempts=3, base_delay_seconds=0),
+        retry_sleep=lambda _: None,
+        pause_status_codes=frozenset({429}),
+        resumable_transport_exhaustion_sources=frozenset({"arXiv"}),
+    )
+
+    assert len(first_http.calls) == 3
+    assert first.retrieval_runs[0].completion_status is (
+        RetrievalCompletionStatus.RUNNING
+    )
+    assert first.retrieval_runs[0].metadata["pause_state"] == (
+        "TRANSIENT_TRANSPORT_EXHAUSTED"
+    )
+    assert first.retrieval_pages[0].status is RetrievalCompletionStatus.RUNNING
+    assert first.source_queries[0].completion_status is RetrievalCompletionStatus.RUNNING
+
+    second_http = FakeHttp([ReadTimeout("timed out again") for _ in range(3)])
+    second = execute_paginated_retrieval_run(
+        run_id="run:arxiv-response-free-transport",
+        queries=[spec],
+        http_clients={"arXiv": second_http},
+        checkpoint_dir=checkpoint,
+        resume=True,
+        timestamp=Clock(),
+        retry_policy=RetryPolicy(max_attempts=3, base_delay_seconds=0),
+        retry_sleep=lambda _: None,
+        pause_status_codes=frozenset({429}),
+        resumable_transport_exhaustion_sources=frozenset({"arXiv"}),
+    )
+
+    assert len(second_http.calls) == 3
+    assert [item.attempt_number for item in second.retrieval_attempts] == list(
+        range(1, 7)
+    )
+    assert second.retrieval_runs[0].metadata["session_request_count"] == 3
+    assert second.retrieval_runs[0].metadata["pause_state"] == (
+        "TRANSIENT_TRANSPORT_EXHAUSTED"
+    )
+
+    completed_http = FakeHttp(
+        [FakeResponse(content=_arxiv_feed("a1", total=1, start=0))]
+    )
+    completed = execute_paginated_retrieval_run(
+        run_id="run:arxiv-response-free-transport",
+        queries=[spec],
+        http_clients={"arXiv": completed_http},
+        checkpoint_dir=checkpoint,
+        resume=True,
+        timestamp=Clock(),
+        retry_policy=RetryPolicy(max_attempts=3, base_delay_seconds=0),
+        retry_sleep=lambda _: None,
+        pause_status_codes=frozenset({429}),
+        resumable_transport_exhaustion_sources=frozenset({"arXiv"}),
+    )
+
+    assert len(completed_http.calls) == 1
+    assert completed.retrieval_runs[0].completion_status is (
+        RetrievalCompletionStatus.COMPLETE
+    )
+    assert [item.attempt_number for item in completed.retrieval_attempts] == list(
+        range(1, 8)
+    )
+
+
+def test_arxiv_nontransport_response_free_error_remains_terminal(tmp_path):
+    dataset = execute_paginated_retrieval_run(
+        run_id="run:arxiv-local-integrity-error",
+        queries=[RetrievalQuerySpec("arXiv", "cells", "arxiv-v2", limit=2)],
+        http_clients={"arXiv": FakeHttp([OSError("local persistence failed")])},
+        checkpoint_dir=tmp_path / "arxiv-local-integrity-error",
+        timestamp=Clock(),
+        retry_policy=RetryPolicy(max_attempts=1),
+        retry_sleep=lambda _: None,
+        resumable_transport_exhaustion_sources=frozenset({"arXiv"}),
+    )
+
+    assert dataset.retrieval_runs[0].completion_status is (
+        RetrievalCompletionStatus.FAILED
+    )
+    assert dataset.source_queries[0].completion_status is (
+        RetrievalCompletionStatus.FAILED
+    )
+
+
+def test_arxiv_parser_failure_cannot_be_reclassified_by_later_timeouts(tmp_path):
+    http = FakeHttp(
+        [
+            FakeResponse(content=b"not XML"),
+            ReadTimeout("timed out"),
+            ReadTimeout("timed out"),
+        ]
+    )
+    dataset = execute_paginated_retrieval_run(
+        run_id="run:arxiv-parser-then-timeout",
+        queries=[RetrievalQuerySpec("arXiv", "cells", "arxiv-v2", limit=2)],
+        http_clients={"arXiv": http},
+        checkpoint_dir=tmp_path / "arxiv-parser-then-timeout",
+        timestamp=Clock(),
+        retry_policy=RetryPolicy(max_attempts=3, base_delay_seconds=0),
+        retry_sleep=lambda _: None,
+        resumable_transport_exhaustion_sources=frozenset({"arXiv"}),
+    )
+
+    assert len(http.calls) == 3
+    assert dataset.retrieval_runs[0].completion_status is (
+        RetrievalCompletionStatus.FAILED
+    )
+    assert dataset.source_queries[0].completion_status is (
+        RetrievalCompletionStatus.FAILED
+    )
+    assert "pause_state" not in dataset.retrieval_runs[0].metadata
+
+
+def test_other_provider_transport_exhaustion_remains_terminal(tmp_path):
+    dataset = execute_paginated_retrieval_run(
+        run_id="run:crossref-response-free-transport",
+        queries=[RetrievalQuerySpec("CrossRef", "cells", "crossref-v2", limit=2)],
+        http_clients={"CrossRef": FakeHttp([ReadTimeout("timed out")])},
+        checkpoint_dir=tmp_path / "crossref-response-free-transport",
+        timestamp=Clock(),
+        retry_policy=RetryPolicy(max_attempts=1),
+        retry_sleep=lambda _: None,
+        resumable_transport_exhaustion_sources=frozenset({"arXiv"}),
+    )
+
+    assert dataset.retrieval_runs[0].completion_status is (
+        RetrievalCompletionStatus.FAILED
+    )
+    assert dataset.source_queries[0].completion_status is (
+        RetrievalCompletionStatus.FAILED
+    )
 
 
 @pytest.mark.parametrize(
