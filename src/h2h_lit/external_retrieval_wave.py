@@ -124,6 +124,24 @@ SEMANTIC_CONTROL_PATH = "config/star_query_semantic_controls_v0_3.json"
 SEMANTIC_CONTROL_GATE_PATH = (
     f"{EXECUTION_ROOT}/SemanticScholar/control_gate/control_gate.json"
 )
+SEMANTIC_CONTROL_RECOVERY_GATE_PATH = (
+    f"{EXECUTION_ROOT}/SemanticScholar/control_gate/control_gate_recovered.json"
+)
+SEMANTIC_CONTROL_5XX_RECOVERY_STATUS = (
+    "CONTROL_5XX_RECOVERY_READY_TO_RESUME"
+)
+SEMANTIC_CONTROL_BLOCKED_MANIFEST_RAW_SHA256 = (
+    "14871e26bf45540ce9933c1023277f8f3c71e964c40108ad481d17948430fc86"
+)
+SEMANTIC_CONTROL_BLOCKED_MANIFEST_LOGICAL_HASH = (
+    "7f0184a2066abb468092899362929bfd08e835f3e856cc8f92cbbac94a7fcd3d"
+)
+SEMANTIC_CONTROL_5XX_EXPECTED_SIGNATURE = (
+    ("atomic-a", (500, 200), "SUCCEEDED", 943168),
+    ("atomic-b", (500, 500, 200), "SUCCEEDED", 955441),
+    ("a-and-b", (200,), "SUCCEEDED", 14246),
+    ("a-or-b", (500, 500, 500), "UNRESOLVED", None),
+)
 PUBMED_TRANSPORT_RETRY_STATUS = "TRANSPORT_RETRY_AUTHORIZED_NOT_STARTED"
 PUBMED_PARSER_RECOVERY_STATUS = "PARSER_RECOVERY_COMPLETE_READY_TO_RESUME"
 ARXIV_RATE_LIMIT_RECOVERY_STATUS = "RATE_LIMIT_RECOVERY_READY_TO_RESUME"
@@ -751,6 +769,429 @@ def validate_persisted_external_preflight(
                 f"persisted preflight field changed: {key}"
             )
     return expected_wave, preflight
+
+
+def _semantic_control_request(probe_id: str, expression: str) -> PageRequest:
+    return PageRequest(
+        "GET",
+        "https://api.semanticscholar.org/graph/v1/paper/search/bulk",
+        params={
+            "query": expression,
+            "limit": 1,
+            "fields": "paperId",
+            "sort": "paperId:asc",
+        },
+        state={"probe_id": probe_id},
+    )
+
+
+def _validate_blocked_semantic_control_5xx_gate(
+    *, root: Path, source_state: Mapping[str, Any]
+) -> dict[str, Any]:
+    manifest_path = _safe_output_path(root, SEMANTIC_CONTROL_GATE_PATH)
+    manifest_bytes = manifest_path.read_bytes()
+    if _sha256(manifest_bytes) != SEMANTIC_CONTROL_BLOCKED_MANIFEST_RAW_SHA256:
+        raise ExternalRetrievalWaveError(
+            "Semantic Scholar blocked control-manifest raw hash changed"
+        )
+    manifest = json.loads(manifest_bytes)
+    _validate_embedded_hash(manifest, "manifest_hash")
+    if (
+        manifest.get("manifest_hash")
+        != SEMANTIC_CONTROL_BLOCKED_MANIFEST_LOGICAL_HASH
+    ):
+        raise ExternalRetrievalWaveError(
+            "Semantic Scholar blocked control-manifest logical hash changed"
+        )
+
+    control_path = root / SEMANTIC_CONTROL_PATH
+    controls = load_semantic_control_set(control_path)
+    control_reference = manifest.get("control_set", {})
+    if (
+        control_reference.get("path") != SEMANTIC_CONTROL_PATH
+        or control_reference.get("raw_sha256")
+        != _sha256(control_path.read_bytes())
+        or control_reference.get("canonical_hash") != controls.control_set_hash()
+        or manifest.get("assertions")
+        != [assertion.to_dict() for assertion in controls.assertions]
+    ):
+        raise ExternalRetrievalWaveError(
+            "Semantic Scholar frozen control/query binding changed"
+        )
+    if (
+        manifest.get("status") != "UNRESOLVED"
+        or manifest.get("candidate_queries_executed") is not False
+        or manifest.get("requests_this_session") != 9
+        or manifest.get("unresolved_control_ids") != ["a-or-b"]
+        or manifest.get("failed_assertion_ids") != []
+        or manifest.get("assertion_results") != []
+    ):
+        raise ExternalRetrievalWaveError(
+            "Semantic Scholar control gate is not the known 5xx-exhausted block"
+        )
+
+    probes = {probe.probe_id: probe for probe in controls.probes}
+    observations = manifest.get("controls")
+    if not isinstance(observations, list) or len(observations) != 4:
+        raise ExternalRetrievalWaveError(
+            "Semantic Scholar control attempt signature changed"
+        )
+    response_bindings: list[dict[str, Any]] = []
+    observed_response_paths: set[str] = set()
+    for observation, expected in zip(
+        observations, SEMANTIC_CONTROL_5XX_EXPECTED_SIGNATURE, strict=True
+    ):
+        probe_id, statuses, final_status, reported_count = expected
+        probe = probes[probe_id]
+        request = _semantic_control_request(probe_id, probe.expression)
+        attempts = observation.get("attempts")
+        if (
+            observation.get("probe_id") != probe_id
+            or observation.get("expression") != probe.expression
+            or observation.get("expression_sha256")
+            != _sha256(probe.expression.encode("utf-8"))
+            or observation.get("request")
+            != {
+                "method": request.method,
+                "url": request.url,
+                "params": request.sanitized_params(),
+            }
+            or observation.get("request_hash") != request.request_hash()
+            or observation.get("status") != final_status
+            or observation.get("reported_count") != reported_count
+            or not isinstance(attempts, list)
+            or len(attempts) != len(statuses)
+        ):
+            raise ExternalRetrievalWaveError(
+                "Semantic Scholar control attempt/query signature changed"
+            )
+        for attempt_number, (attempt, status) in enumerate(
+            zip(attempts, statuses, strict=True), start=1
+        ):
+            response_reference = attempt.get("response")
+            expected_attempt_status = "SUCCEEDED" if status == 200 else "FAILED"
+            if (
+                attempt.get("attempt_number") != attempt_number
+                or attempt.get("request_hash") != request.request_hash()
+                or attempt.get("status") != expected_attempt_status
+                or attempt.get("error")
+                != (None if status == 200 else f"HTTP {status}")
+                or not isinstance(response_reference, dict)
+                or response_reference.get("status") != status
+                or response_reference.get("retry_after_header_present") is not False
+                or response_reference.get("retry_after") is not None
+            ):
+                raise ExternalRetrievalWaveError(
+                    "Semantic Scholar control attempt signature changed"
+                )
+            relative_path = response_reference.get("path")
+            if not isinstance(relative_path, str) or relative_path in observed_response_paths:
+                raise ExternalRetrievalWaveError(
+                    "Semantic Scholar control response binding changed"
+                )
+            response_path = (manifest_path.parent / relative_path).resolve()
+            try:
+                response_path.relative_to(manifest_path.parent.resolve())
+            except ValueError as exc:
+                raise ExternalRetrievalWaveError(
+                    "Semantic Scholar control response escaped its gate directory"
+                ) from exc
+            response_bytes = response_path.read_bytes()
+            if (
+                len(response_bytes) != response_reference.get("byte_size")
+                or _sha256(response_bytes) != response_reference.get("sha256")
+            ):
+                raise ExternalRetrievalWaveError(
+                    "Semantic Scholar control response hash/size changed"
+                )
+            try:
+                stored = CheckpointStore(manifest_path.parent).load_response(
+                    relative_path, response_reference["sha256"]
+                )
+                payload = stored.json()
+            except (KeyError, OSError, ValueError, json.JSONDecodeError) as exc:
+                raise ExternalRetrievalWaveError(
+                    "Semantic Scholar control response hash/read failure"
+                ) from exc
+            if stored.status_code != status:
+                raise ExternalRetrievalWaveError(
+                    "Semantic Scholar control response status changed"
+                )
+            if status == 500:
+                if payload != {"message": "Internal Server Error"}:
+                    raise ExternalRetrievalWaveError(
+                        "Semantic Scholar 5xx recovery response signature changed"
+                    )
+            elif not isinstance(payload, dict) or int(payload.get("total", -1)) != int(
+                reported_count
+            ):
+                raise ExternalRetrievalWaveError(
+                    "Semantic Scholar successful control result changed"
+                )
+            observed_response_paths.add(relative_path)
+            response_bindings.append(
+                {
+                    "probe_id": probe_id,
+                    "attempt_number": attempt_number,
+                    **dict(response_reference),
+                }
+            )
+
+    response_dir = manifest_path.parent / "responses"
+    persisted_response_paths = {
+        path.relative_to(manifest_path.parent).as_posix()
+        for path in response_dir.iterdir()
+        if path.is_file()
+    }
+    if persisted_response_paths != observed_response_paths:
+        raise ExternalRetrievalWaveError(
+            "Semantic Scholar control response inventory changed"
+        )
+    if [probe.probe_id for probe in controls.probes[4:]] != [
+        "grouped-left",
+        "grouped-right",
+    ]:
+        raise ExternalRetrievalWaveError(
+            "Semantic Scholar grouped control order changed"
+        )
+    if (
+        source_state.get("status") != "BLOCKED_SEMANTIC_CONTROL_GATE"
+        or source_state.get("completed_query_count") != 0
+        or source_state.get("total_query_count") != 5
+        or source_state.get("candidate_request_count") != 0
+        or source_state.get("failure_reason")
+        != "Semantic Scholar control gate is UNRESOLVED"
+        or source_state.get("pause_reason") is not None
+        or source_state.get("semantic_control_gate")
+        != {
+            "status": "UNRESOLVED",
+            "manifest_path": SEMANTIC_CONTROL_GATE_PATH,
+            "manifest_hash": SEMANTIC_CONTROL_BLOCKED_MANIFEST_LOGICAL_HASH,
+        }
+    ):
+        raise ExternalRetrievalWaveError(
+            "Semantic Scholar source state is not the known blocked control gate"
+        )
+    candidate_checkpoint = _safe_output_path(
+        root, f"{EXECUTION_ROOT}/SemanticScholar/checkpoint"
+    )
+    if candidate_checkpoint.exists():
+        raise ExternalRetrievalWaveError(
+            "Semantic Scholar candidate state exists before control recovery"
+        )
+    return {
+        "manifest": manifest,
+        "manifest_reference": _file_reference(manifest_path, root),
+        "response_bindings": response_bindings,
+    }
+
+
+def _validate_authorized_semantic_control_5xx_recovery(
+    *, root: Path, source_state: Mapping[str, Any]
+) -> None:
+    recovery_state = source_state.get("control_gate_recovery")
+    if not isinstance(recovery_state, dict) or not isinstance(
+        recovery_state.get("source_state"), dict
+    ):
+        raise ExternalRetrievalWaveError(
+            "authorized Semantic Scholar control recovery lacks source provenance"
+        )
+    original = _validate_blocked_semantic_control_5xx_gate(
+        root=root,
+        source_state=recovery_state["source_state"],
+    )
+    recovered_reference = source_state.get("semantic_control_gate", {})
+    if (
+        source_state.get("status") != SEMANTIC_CONTROL_5XX_RECOVERY_STATUS
+        or recovered_reference.get("manifest_path")
+        != SEMANTIC_CONTROL_RECOVERY_GATE_PATH
+        or recovered_reference.get("status") != "PAUSED_TRANSIENT_PROVIDER"
+        or source_state.get("candidate_request_count") != 0
+    ):
+        raise ExternalRetrievalWaveError(
+            "authorized Semantic Scholar control recovery lineage changed"
+        )
+    recovered_path = _safe_output_path(
+        root, SEMANTIC_CONTROL_RECOVERY_GATE_PATH
+    )
+    active_reference = recovery_state.get("active_manifest")
+    if not isinstance(active_reference, dict):
+        raise ExternalRetrievalWaveError(
+            "authorized Semantic Scholar recovery lacks an active manifest binding"
+        )
+    _verify_file_reference(recovered_path, active_reference, root)
+    recovered = _load_json(recovered_path)
+    _validate_embedded_hash(recovered, "manifest_hash")
+    provenance = recovered.get("recovery_provenance", {})
+    expected_provenance_hash = _hash_payload(
+        {
+            "manifest": original["manifest_reference"],
+            "responses": original["response_bindings"],
+            "source_state": recovery_state["source_state"],
+        }
+    )
+    if (
+        recovered_reference.get("manifest_hash") != recovered.get("manifest_hash")
+        or recovered.get("status") != "PAUSED_TRANSIENT_PROVIDER"
+        or recovered.get("candidate_queries_executed") is not False
+        or recovered.get("requests_this_session") != 0
+        or provenance.get("source_manifest") != original["manifest_reference"]
+        or provenance.get("source_responses") != original["response_bindings"]
+        or provenance.get("source_state") != recovery_state["source_state"]
+        or provenance.get("source_provenance_hash") != expected_provenance_hash
+        or recovery_state.get("source_provenance_hash")
+        != expected_provenance_hash
+        or recovery_state.get("source_responses")
+        != original["response_bindings"]
+    ):
+        raise ExternalRetrievalWaveError(
+            "authorized Semantic Scholar recovered manifest changed"
+        )
+
+
+def authorize_semantic_scholar_control_5xx_recovery(
+    *, root: str | Path, timestamp: Callable[[], str] = utc_now
+) -> dict[str, Any]:
+    """Reopen only the retryable-5xx-exhausted Semantic Scholar control."""
+
+    root_path = Path(root).resolve()
+    wave, preflight = validate_persisted_external_preflight(root=root_path)
+    state_path = _safe_output_path(root_path, EXECUTION_STATE_PATH)
+    if not state_path.is_file():
+        raise ExternalRetrievalWaveError("external execution state does not exist")
+    state = _load_execution_state(state_path, root_path, wave, preflight)
+    source_state = state["sources"]["SemanticScholar"]
+    if source_state.get("status") == SEMANTIC_CONTROL_5XX_RECOVERY_STATUS:
+        _validate_authorized_semantic_control_5xx_recovery(
+            root=root_path, source_state=source_state
+        )
+        return state
+    recovered_path = _safe_output_path(
+        root_path, SEMANTIC_CONTROL_RECOVERY_GATE_PATH
+    )
+    if recovered_path.exists():
+        raise ExternalRetrievalWaveError(
+            "Semantic Scholar recovered control manifest exists without valid lineage"
+        )
+    if state.get("external_retrieval_cutoff_date") is not None:
+        raise ExternalRetrievalWaveError(
+            "Semantic Scholar control recovery cannot alter a closed retrieval wave"
+        )
+
+    other_sources_before = {
+        key: json.loads(json.dumps(value, sort_keys=True))
+        for key, value in state["sources"].items()
+        if key != "SemanticScholar"
+    }
+    source_state_before = json.loads(json.dumps(source_state, sort_keys=True))
+    validated = _validate_blocked_semantic_control_5xx_gate(
+        root=root_path, source_state=source_state
+    )
+    original_path = _safe_output_path(root_path, SEMANTIC_CONTROL_GATE_PATH)
+    immutable_files = {
+        original_path: original_path.read_bytes(),
+        **{
+            original_path.parent / binding["path"]: (
+                original_path.parent / binding["path"]
+            ).read_bytes()
+            for binding in validated["response_bindings"]
+        },
+    }
+    recovered_at = timestamp()
+    recovered = json.loads(json.dumps(validated["manifest"], sort_keys=True))
+    recovered["schema_version"] = "1.2.0"
+    recovered["status"] = "PAUSED_TRANSIENT_PROVIDER"
+    recovered["pause_state"] = "TRANSIENT_PROVIDER_5XX_EXHAUSTED"
+    recovered["pause_reason"] = "RETRYABLE_PROVIDER_5XX_EXHAUSTED"
+    recovered["pause_metadata"] = {
+        "source_database": "SemanticScholar",
+        "probe_id": "a-or-b",
+        "http_statuses": [500, 500, 500],
+        "retry_after_header_present": False,
+        "retry_after": None,
+        "attempts_this_invocation": 3,
+        "maximum_attempts_per_invocation": 3,
+    }
+    recovered["requests_this_session"] = 0
+    for observation in recovered["controls"]:
+        if observation["probe_id"] == "a-or-b":
+            observation["status"] = "PAUSED_TRANSIENT_PROVIDER"
+    recovered["recovery_provenance"] = {
+        "authorization_reason": (
+            "OFFLINE_SEMANTIC_SCHOLAR_CONTROL_5XX_EXHAUSTION_RECOVERY"
+        ),
+        "authorized_at_utc": recovered_at,
+        "source_manifest": validated["manifest_reference"],
+        "source_manifest_logical_hash": (
+            SEMANTIC_CONTROL_BLOCKED_MANIFEST_LOGICAL_HASH
+        ),
+        "source_state": source_state_before,
+        "source_response_count": len(validated["response_bindings"]),
+        "source_responses": validated["response_bindings"],
+        "source_provenance_hash": _hash_payload(
+            {
+                "manifest": validated["manifest_reference"],
+                "responses": validated["response_bindings"],
+                "source_state": source_state_before,
+            }
+        ),
+        "retained_successful_control_ids": [
+            "atomic-a",
+            "atomic-b",
+            "a-and-b",
+        ],
+        "reopened_control_id": "a-or-b",
+        "unattempted_control_ids": ["grouped-left", "grouped-right"],
+        "candidate_request_count": 0,
+        "network_used": False,
+        "immutable_source": True,
+    }
+    _save_hashed_json(recovered_path, recovered, "manifest_hash")
+
+    source_state.update(
+        {
+            "status": SEMANTIC_CONTROL_5XX_RECOVERY_STATUS,
+            "completed_query_count": 0,
+            "total_query_count": 5,
+            "candidate_request_count": 0,
+            "semantic_control_gate": {
+                "status": recovered["status"],
+                "manifest_path": SEMANTIC_CONTROL_RECOVERY_GATE_PATH,
+                "manifest_hash": recovered["manifest_hash"],
+            },
+            "control_gate_recovery": {
+                **recovered["recovery_provenance"],
+                "source_state": source_state_before,
+                "active_manifest": _file_reference(recovered_path, root_path),
+            },
+            "control_requests_this_session": 0,
+            "pause_reason": (
+                "OFFLINE_CONTROL_5XX_RECOVERY_COMPLETE; LIVE_RESUME_REQUIRED"
+            ),
+            "pause_metadata": dict(recovered["pause_metadata"]),
+            "failure_reason": None,
+            "last_session_started_at_utc": recovered_at,
+            "last_session_completed_at_utc": recovered_at,
+        }
+    )
+    if {
+        key: value
+        for key, value in state["sources"].items()
+        if key != "SemanticScholar"
+    } != other_sources_before:
+        raise ExternalRetrievalWaveError(
+            "Semantic Scholar control recovery changed another source"
+        )
+    state["status"] = "RUNNING"
+    state["external_retrieval_completed_at_utc"] = None
+    state["external_retrieval_cutoff_date"] = None
+    _save_execution_state(state_path, state)
+    for path, expected_bytes in immutable_files.items():
+        if path.read_bytes() != expected_bytes:
+            raise ExternalRetrievalWaveError(
+                "Semantic Scholar immutable control evidence changed during recovery"
+            )
+    return state
 
 
 def authorize_arxiv_rate_limit_recovery(
@@ -2265,6 +2706,9 @@ def execute_external_source_session(
         raise ExternalRetrievalWaveError(f"{IEEE_CREDENTIAL_NAME} is required")
 
     if source == "SemanticScholar":
+        semantic_manifest_path = source_state.get(
+            "semantic_control_gate", {}
+        ).get("manifest_path", SEMANTIC_CONTROL_GATE_PATH)
         gate = _execute_semantic_control_gate(
             root=root_path,
             http=http,
@@ -2273,14 +2717,16 @@ def execute_external_source_session(
             retry_policy=retry_policy or RetryPolicy(),
             rate_limiter=rate_limiter,
             retry_sleep=retry_sleep,
+            manifest_relative_path=str(semantic_manifest_path),
         )
         source_state["semantic_control_gate"] = {
             "status": gate["status"],
-            "manifest_path": SEMANTIC_CONTROL_GATE_PATH,
+            "manifest_path": semantic_manifest_path,
             "manifest_hash": gate["manifest_hash"],
         }
         if gate["status"] in {
             "PAUSED_PROVIDER_RATE_LIMIT",
+            "PAUSED_TRANSIENT_PROVIDER",
             "PAUSED_TRANSIENT_TRANSPORT",
         }:
             source_state["status"] = gate["status"]
@@ -2578,8 +3024,16 @@ def _execute_semantic_control_gate(
     retry_policy: RetryPolicy,
     rate_limiter: RateLimiter | None,
     retry_sleep: Callable[[float], None],
+    manifest_relative_path: str = SEMANTIC_CONTROL_GATE_PATH,
 ) -> dict[str, Any]:
-    path = _safe_output_path(root, SEMANTIC_CONTROL_GATE_PATH)
+    if manifest_relative_path not in {
+        SEMANTIC_CONTROL_GATE_PATH,
+        SEMANTIC_CONTROL_RECOVERY_GATE_PATH,
+    }:
+        raise ExternalRetrievalWaveError(
+            "Semantic Scholar control manifest path is not authorized"
+        )
+    path = _safe_output_path(root, manifest_relative_path)
     control_path = root / SEMANTIC_CONTROL_PATH
     controls = load_semantic_control_set(control_path)
     if path.exists():
@@ -2626,17 +3080,7 @@ def _execute_semantic_control_gate(
         if observation and observation["status"] == "SUCCEEDED":
             continue
         if observation is None:
-            request = PageRequest(
-                "GET",
-                "https://api.semanticscholar.org/graph/v1/paper/search/bulk",
-                params={
-                    "query": probe.expression,
-                    "limit": 1,
-                    "fields": "paperId",
-                    "sort": "paperId:asc",
-                },
-                state={"probe_id": probe.probe_id},
-            )
+            request = _semantic_control_request(probe.probe_id, probe.expression)
             observation = {
                 "probe_id": probe.probe_id,
                 "expression": probe.expression,
@@ -2804,6 +3248,40 @@ def _execute_semantic_control_gate(
                         _save_hashed_json(path, manifest, "manifest_hash")
                         retry_sleep(delay)
                         continue
+                    if (
+                        500 <= response.status_code < 600
+                        and response.status_code in retry_policy.retry_statuses
+                    ):
+                        invocation_attempts = observation["attempts"][
+                            attempts_before_invocation:
+                        ]
+                        pause_metadata = {
+                            "source_database": "SemanticScholar",
+                            "probe_id": probe.probe_id,
+                            "http_statuses": [
+                                item["response"]["status"]
+                                for item in invocation_attempts
+                            ],
+                            "retry_after_header_present": retry_after is not None,
+                            "retry_after": retry_after,
+                            "attempts_this_invocation": len(invocation_attempts),
+                            "maximum_attempts_per_invocation": (
+                                retry_policy.max_attempts
+                            ),
+                        }
+                        attempt["provider_pause"] = dict(pause_metadata)
+                        observation["status"] = "PAUSED_TRANSIENT_PROVIDER"
+                        manifest["status"] = "PAUSED_TRANSIENT_PROVIDER"
+                        manifest["pause_state"] = (
+                            "TRANSIENT_PROVIDER_5XX_EXHAUSTED"
+                        )
+                        manifest["pause_reason"] = (
+                            "RETRYABLE_PROVIDER_5XX_EXHAUSTED"
+                        )
+                        manifest["pause_metadata"] = pause_metadata
+                        manifest["candidate_queries_executed"] = False
+                        _save_hashed_json(path, manifest, "manifest_hash")
+                        return manifest
                     observation["status"] = "UNRESOLVED"
                     terminal_unresolved = True
                     _save_hashed_json(path, manifest, "manifest_hash")
@@ -5758,7 +6236,63 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--authorize-arxiv-mixed-state-recovery", action="store_true"
     )
+    parser.add_argument(
+        "--authorize-semantic-scholar-control-5xx-recovery",
+        action="store_true",
+    )
     args = parser.parse_args(argv)
+    if args.authorize_semantic_scholar_control_5xx_recovery:
+        if args.source != "SemanticScholar":
+            parser.error(
+                "control-5xx recovery is supported only for --source SemanticScholar"
+            )
+        if (
+            args.authorize_live_external_retrieval
+            or args.authorize_transport_retry_reset
+            or args.authorize_pubmed_parser_recovery
+            or args.authorize_europe_pmc_terminal_recovery
+            or args.authorize_ieee_total_drift_recovery
+            or args.authorize_ieee_repeated_window_recovery
+            or args.authorize_arxiv_rate_limit_recovery
+            or args.authorize_arxiv_mixed_state_recovery
+            or args.resume
+        ):
+            parser.error(
+                "Semantic Scholar control-5xx recovery is a separate offline "
+                "authorization boundary"
+            )
+        state = authorize_semantic_scholar_control_5xx_recovery(root=args.root)
+        source_state = state["sources"]["SemanticScholar"]
+        recovery = source_state["control_gate_recovery"]
+        print(
+            json.dumps(
+                {
+                    "execution_status": state["status"],
+                    "source": "SemanticScholar",
+                    "source_status": source_state["status"],
+                    "retained_successful_control_ids": recovery[
+                        "retained_successful_control_ids"
+                    ],
+                    "reopened_control_id": recovery["reopened_control_id"],
+                    "unattempted_control_ids": recovery[
+                        "unattempted_control_ids"
+                    ],
+                    "preserved_control_request_count": recovery[
+                        "source_response_count"
+                    ],
+                    "candidate_request_count": source_state[
+                        "candidate_request_count"
+                    ],
+                    "external_retrieval_cutoff_date": state[
+                        "external_retrieval_cutoff_date"
+                    ],
+                    "network_used": False,
+                },
+                sort_keys=True,
+                indent=2,
+            )
+        )
+        return 0
     if args.authorize_arxiv_mixed_state_recovery:
         if args.source != "arXiv":
             parser.error(
@@ -6109,6 +6643,7 @@ def main(argv: list[str] | None = None) -> int:
                 "PAUSED_DAILY_QUOTA",
                 "PAUSED_PROVIDER_QUOTA",
                 "PAUSED_PROVIDER_RATE_LIMIT",
+                "PAUSED_TRANSIENT_PROVIDER",
                 "PAUSED_TRANSIENT_TRANSPORT",
             }
             else 2

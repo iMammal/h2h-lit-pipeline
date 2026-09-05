@@ -21,7 +21,9 @@ from h2h_lit.external_retrieval_wave import (
     PUBMED_EPISODE_2_OMITTED_BOOK_PMIDS,
     PUBMED_PARSER_RECOVERY_STATUS,
     READY_STATUS,
+    SEMANTIC_CONTROL_5XX_RECOVERY_STATUS,
     SEMANTIC_CONTROL_GATE_PATH,
+    SEMANTIC_CONTROL_RECOVERY_GATE_PATH,
     WAVE_PATH,
     ExternalRetrievalWaveError,
     _safe_output_path,
@@ -32,6 +34,7 @@ from h2h_lit.external_retrieval_wave import (
     authorize_ieee_total_drift_recovery,
     authorize_pubmed_parser_recovery,
     authorize_pubmed_transport_retry,
+    authorize_semantic_scholar_control_5xx_recovery,
     build_external_retrieval_wave,
     execute_external_source_session,
     preflight_external_retrieval_wave,
@@ -2128,6 +2131,310 @@ def _semantic_candidate_responses() -> list[FakeResponse]:
     ]
 
 
+def _semantic_500() -> FakeResponse:
+    return FakeResponse(
+        status_code=500,
+        payload={"message": "Internal Server Error"},
+    )
+
+
+def _blocked_semantic_control_5xx_gate(
+    tmp_path, monkeypatch, external_wave, external_preflight
+):
+    _install_semantic_runtime(
+        tmp_path, monkeypatch, external_wave, external_preflight
+    )
+    responses = [
+        _semantic_500(),
+        FakeResponse(payload={"total": 943168}),
+        _semantic_500(),
+        _semantic_500(),
+        FakeResponse(payload={"total": 955441}),
+        FakeResponse(payload={"total": 14246}),
+        _semantic_500(),
+        _semantic_500(),
+        _semantic_500(),
+    ]
+    clock = Clock()
+    paused = execute_external_source_session(
+        root=tmp_path,
+        source="SemanticScholar",
+        http=FakeHttp(responses),
+        resume=False,
+        timestamp=clock,
+        retry_policy=RetryPolicy(max_attempts=3, base_delay_seconds=0),
+        rate_limiter=RateLimiter({}),
+        retry_sleep=lambda _: None,
+    )
+    assert paused["sources"]["SemanticScholar"]["status"] == (
+        "PAUSED_TRANSIENT_PROVIDER"
+    )
+
+    gate_path = tmp_path / SEMANTIC_CONTROL_GATE_PATH
+    gate = json.loads(gate_path.read_text())
+    gate["status"] = "UNRESOLVED"
+    gate.pop("pause_state")
+    gate.pop("pause_reason")
+    gate.pop("pause_metadata")
+    gate["controls"][-1]["status"] = "UNRESOLVED"
+    gate["controls"][-1]["attempts"][-1].pop("provider_pause")
+    gate["assertion_results"] = []
+    gate["failed_assertion_ids"] = []
+    gate["unresolved_control_ids"] = ["a-or-b"]
+    external_module._save_hashed_json(gate_path, gate, "manifest_hash")
+    monkeypatch.setattr(
+        external_module,
+        "SEMANTIC_CONTROL_BLOCKED_MANIFEST_RAW_SHA256",
+        hashlib.sha256(gate_path.read_bytes()).hexdigest(),
+    )
+    monkeypatch.setattr(
+        external_module,
+        "SEMANTIC_CONTROL_BLOCKED_MANIFEST_LOGICAL_HASH",
+        gate["manifest_hash"],
+    )
+
+    state_path = tmp_path / external_module.EXECUTION_STATE_PATH
+    state = json.loads(state_path.read_text())
+    source = state["sources"]["SemanticScholar"]
+    source["status"] = "BLOCKED_SEMANTIC_CONTROL_GATE"
+    source["failure_reason"] = "Semantic Scholar control gate is UNRESOLVED"
+    source["pause_reason"] = None
+    source.pop("pause_metadata", None)
+    source.pop("control_requests_this_session", None)
+    source["candidate_request_count"] = 0
+    source["semantic_control_gate"] = {
+        "status": "UNRESOLVED",
+        "manifest_path": SEMANTIC_CONTROL_GATE_PATH,
+        "manifest_hash": gate["manifest_hash"],
+    }
+    external_module._save_execution_state(state_path, state)
+    return state, clock
+
+
+def test_semantic_control_5xx_exhaustion_pauses_with_fresh_resume_budget(
+    tmp_path, monkeypatch, external_wave, external_preflight
+) -> None:
+    _install_semantic_runtime(
+        tmp_path, monkeypatch, external_wave, external_preflight
+    )
+    final_response = _semantic_500()
+    final_response.headers = {"Retry-After": "17"}
+    first_http = FakeHttp([_semantic_500(), _semantic_500(), final_response])
+    clock = Clock()
+    paused = execute_external_source_session(
+        root=tmp_path,
+        source="SemanticScholar",
+        http=first_http,
+        resume=False,
+        timestamp=clock,
+        retry_policy=RetryPolicy(max_attempts=3, base_delay_seconds=0),
+        rate_limiter=RateLimiter({}),
+        retry_sleep=lambda _: None,
+    )
+
+    source = paused["sources"]["SemanticScholar"]
+    assert len(first_http.calls) == 3
+    assert source["status"] == "PAUSED_TRANSIENT_PROVIDER"
+    assert source["candidate_request_count"] == 0
+    assert source["pause_metadata"] == {
+        "source_database": "SemanticScholar",
+        "probe_id": "atomic-a",
+        "http_statuses": [500, 500, 500],
+        "retry_after_header_present": True,
+        "retry_after": "17",
+        "attempts_this_invocation": 3,
+        "maximum_attempts_per_invocation": 3,
+    }
+
+    second_http = FakeHttp([_semantic_500() for _ in range(3)])
+    paused_again = execute_external_source_session(
+        root=tmp_path,
+        source="SemanticScholar",
+        http=second_http,
+        resume=True,
+        timestamp=clock,
+        retry_policy=RetryPolicy(max_attempts=3, base_delay_seconds=0),
+        rate_limiter=RateLimiter({}),
+        retry_sleep=lambda _: None,
+    )
+    assert len(second_http.calls) == 3
+    assert paused_again["sources"]["SemanticScholar"]["status"] == (
+        "PAUSED_TRANSIENT_PROVIDER"
+    )
+    gate = json.loads((tmp_path / SEMANTIC_CONTROL_GATE_PATH).read_text())
+    assert [
+        attempt["attempt_number"] for attempt in gate["controls"][0]["attempts"]
+    ] == [1, 2, 3, 4, 5, 6]
+    assert all(
+        attempt["response"]["sha256"]
+        for attempt in gate["controls"][0]["attempts"]
+    )
+
+
+def test_semantic_control_5xx_recovery_preserves_evidence_and_resumes_in_order(
+    tmp_path, monkeypatch, external_wave, external_preflight
+) -> None:
+    blocked, clock = _blocked_semantic_control_5xx_gate(
+        tmp_path, monkeypatch, external_wave, external_preflight
+    )
+    gate_path = tmp_path / SEMANTIC_CONTROL_GATE_PATH
+    gate_bytes = gate_path.read_bytes()
+    response_bytes = {
+        path.name: path.read_bytes()
+        for path in sorted((gate_path.parent / "responses").iterdir())
+    }
+    other_sources = {
+        key: json.loads(json.dumps(value, sort_keys=True))
+        for key, value in blocked["sources"].items()
+        if key != "SemanticScholar"
+    }
+
+    recovered = authorize_semantic_scholar_control_5xx_recovery(
+        root=tmp_path, timestamp=clock
+    )
+    source = recovered["sources"]["SemanticScholar"]
+    assert source["status"] == SEMANTIC_CONTROL_5XX_RECOVERY_STATUS
+    assert source["candidate_request_count"] == 0
+    assert source["semantic_control_gate"]["manifest_path"] == (
+        SEMANTIC_CONTROL_RECOVERY_GATE_PATH
+    )
+    assert source["control_gate_recovery"]["retained_successful_control_ids"] == [
+        "atomic-a",
+        "atomic-b",
+        "a-and-b",
+    ]
+    assert source["control_gate_recovery"]["reopened_control_id"] == "a-or-b"
+    assert source["control_gate_recovery"]["unattempted_control_ids"] == [
+        "grouped-left",
+        "grouped-right",
+    ]
+    assert source["control_gate_recovery"]["source_response_count"] == 9
+    assert gate_path.read_bytes() == gate_bytes
+    assert {
+        name: (gate_path.parent / "responses" / name).read_bytes()
+        for name in response_bytes
+    } == response_bytes
+    assert {
+        key: value
+        for key, value in recovered["sources"].items()
+        if key != "SemanticScholar"
+    } == other_sources
+    assert recovered["external_retrieval_cutoff_date"] is None
+    assert (
+        authorize_semantic_scholar_control_5xx_recovery(
+            root=tmp_path, timestamp=clock
+        )
+        == recovered
+    )
+
+    paused_http = FakeHttp([_semantic_500() for _ in range(3)])
+    paused_again = execute_external_source_session(
+        root=tmp_path,
+        source="SemanticScholar",
+        http=paused_http,
+        resume=True,
+        timestamp=clock,
+        retry_policy=RetryPolicy(max_attempts=3, base_delay_seconds=0),
+        rate_limiter=RateLimiter({}),
+        retry_sleep=lambda _: None,
+    )
+    assert len(paused_http.calls) == 3
+    assert all(
+        call["params"]["query"] == "visualization | biology"
+        for call in paused_http.calls
+    )
+    assert paused_again["sources"]["SemanticScholar"]["status"] == (
+        "PAUSED_TRANSIENT_PROVIDER"
+    )
+    active_gate_path = tmp_path / SEMANTIC_CONTROL_RECOVERY_GATE_PATH
+    active_gate = json.loads(active_gate_path.read_text())
+    assert [item["probe_id"] for item in active_gate["controls"]] == [
+        "atomic-a",
+        "atomic-b",
+        "a-and-b",
+        "a-or-b",
+    ]
+
+    live_http = FakeHttp(
+        [
+            FakeResponse(payload={"total": 1883934}),
+            FakeResponse(payload={"total": 86875}),
+            FakeResponse(payload={"total": 86875}),
+            *_semantic_candidate_responses(),
+        ]
+    )
+    completed = execute_external_source_session(
+        root=tmp_path,
+        source="SemanticScholar",
+        http=live_http,
+        resume=True,
+        timestamp=clock,
+        retry_policy=RetryPolicy(max_attempts=3, base_delay_seconds=0),
+        rate_limiter=RateLimiter({}),
+        retry_sleep=lambda _: None,
+    )
+    assert completed["sources"]["SemanticScholar"]["status"] == "COMPLETE"
+    assert len(live_http.calls) == 8
+    assert [call["params"]["query"] for call in live_http.calls[:3]] == [
+        "visualization | biology",
+        "visualization + (biology | interactive)",
+        "(visualization + biology) | (visualization + interactive)",
+    ]
+    final_gate = json.loads(active_gate_path.read_text())
+    assert final_gate["status"] == "PASSED"
+    assert final_gate["failed_assertion_ids"] == []
+    assert all(item["passed"] for item in final_gate["assertion_results"])
+    assert [
+        len(item["attempts"]) for item in final_gate["controls"][:3]
+    ] == [2, 3, 1]
+    assert gate_path.read_bytes() == gate_bytes
+    for name, content in response_bytes.items():
+        assert (gate_path.parent / "responses" / name).read_bytes() == content
+
+
+@pytest.mark.parametrize("corruption", ["response", "query", "candidate"])
+def test_semantic_control_5xx_recovery_refuses_drift(
+    tmp_path,
+    monkeypatch,
+    external_wave,
+    external_preflight,
+    corruption,
+) -> None:
+    state, clock = _blocked_semantic_control_5xx_gate(
+        tmp_path, monkeypatch, external_wave, external_preflight
+    )
+    gate_path = tmp_path / SEMANTIC_CONTROL_GATE_PATH
+    if corruption == "response":
+        response = next((gate_path.parent / "responses").iterdir())
+        response.write_bytes(response.read_bytes() + b"corrupt")
+        error = "response hash/size changed"
+    elif corruption == "query":
+        gate = json.loads(gate_path.read_text())
+        gate["controls"][0]["expression"] = "changed"
+        external_module._save_hashed_json(gate_path, gate, "manifest_hash")
+        monkeypatch.setattr(
+            external_module,
+            "SEMANTIC_CONTROL_BLOCKED_MANIFEST_RAW_SHA256",
+            hashlib.sha256(gate_path.read_bytes()).hexdigest(),
+        )
+        monkeypatch.setattr(
+            external_module,
+            "SEMANTIC_CONTROL_BLOCKED_MANIFEST_LOGICAL_HASH",
+            gate["manifest_hash"],
+        )
+        error = "attempt/query signature changed"
+    else:
+        state_path = tmp_path / external_module.EXECUTION_STATE_PATH
+        state["sources"]["SemanticScholar"]["candidate_request_count"] = 1
+        external_module._save_execution_state(state_path, state)
+        error = "source state is not the known blocked"
+
+    with pytest.raises(ExternalRetrievalWaveError, match=error):
+        authorize_semantic_scholar_control_5xx_recovery(
+            root=tmp_path, timestamp=clock
+        )
+
+
 @pytest.mark.parametrize(
     ("headers", "present", "value"),
     [({}, False, None), ({"Retry-After": "120"}, True, "120")],
@@ -2368,6 +2675,8 @@ def test_semantic_control_failure_executes_zero_candidate_queries(
     ("response", "error"),
     [
         (FakeResponse(status_code=400, content=b"Invalid query"), "HTTP 400"),
+        (FakeResponse(status_code=401, content=b"Unauthorized"), "HTTP 401"),
+        (FakeResponse(status_code=403, content=b"Forbidden"), "HTTP 403"),
         (FakeResponse(payload={"data": []}), "response omitted total"),
     ],
 )
