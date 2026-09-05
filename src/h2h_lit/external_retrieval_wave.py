@@ -126,6 +126,16 @@ SEMANTIC_CONTROL_GATE_PATH = (
 )
 PUBMED_TRANSPORT_RETRY_STATUS = "TRANSPORT_RETRY_AUTHORIZED_NOT_STARTED"
 PUBMED_PARSER_RECOVERY_STATUS = "PARSER_RECOVERY_COMPLETE_READY_TO_RESUME"
+ARXIV_RATE_LIMIT_RECOVERY_STATUS = "RATE_LIMIT_RECOVERY_READY_TO_RESUME"
+ARXIV_RATE_LIMIT_EXPECTED_ATTEMPT_KINDS = (
+    ("ReadTimeout", "ReadTimeout", "ReadTimeout"),
+    ("ReadTimeout", "ReadTimeout", "ReadTimeout"),
+    ("ReadTimeout", "ReadTimeout", "HTTP_429"),
+    ("HTTP_429", "HTTP_429", "HTTP_429"),
+    ("HTTP_429", "HTTP_429", "HTTP_429"),
+)
+ARXIV_RATE_LIMIT_EXPECTED_ATTEMPTS = 15
+ARXIV_RATE_LIMIT_EXPECTED_RESPONSES = 7
 EUROPE_PMC_TERMINAL_RECOVERY_STATUS = "TERMINAL_SENTINEL_RECOVERY_COMPLETE"
 EUROPE_PMC_TERMINAL_ERROR = (
     "PaginationError: Europe PMC returned an empty non-terminal cursor page"
@@ -726,6 +736,238 @@ def validate_persisted_external_preflight(
                 f"persisted preflight field changed: {key}"
             )
     return expected_wave, preflight
+
+
+def authorize_arxiv_rate_limit_recovery(
+    *,
+    root: str | Path,
+    timestamp: Callable[[], str] = utc_now,
+) -> dict[str, Any]:
+    """Authorize a fresh arXiv episode from the immutable timeout/429 failure."""
+
+    root_path = Path(root).resolve()
+    wave, preflight = validate_persisted_external_preflight(root=root_path)
+    state_path = _safe_output_path(root_path, EXECUTION_STATE_PATH)
+    if not state_path.is_file():
+        raise ExternalRetrievalWaveError("external execution state does not exist")
+    state = _load_execution_state(state_path, root_path, wave, preflight)
+    source_state = state["sources"]["arXiv"]
+    if source_state["status"] == ARXIV_RATE_LIMIT_RECOVERY_STATUS:
+        _validate_authorized_arxiv_rate_limit_recovery(source_state, root_path, wave)
+        return state
+    if source_state["status"] != "FAILED":
+        raise ExternalRetrievalWaveError(
+            "arXiv rate-limit recovery requires the known terminal FAILED component"
+        )
+    if (
+        source_state.get("completed_query_count") != 0
+        or source_state.get("total_query_count") != 5
+        or source_state.get("occurrence_count") != 0
+        or source_state.get("attempt_count") != ARXIV_RATE_LIMIT_EXPECTED_ATTEMPTS
+        or source_state.get("requests_this_session")
+        != ARXIV_RATE_LIMIT_EXPECTED_ATTEMPTS
+        or source_state.get("pause_reason") is not None
+    ):
+        raise ExternalRetrievalWaveError(
+            "arXiv source state is not the known timeout/rate-limit failure"
+        )
+    if state["external_retrieval_cutoff_date"] is not None:
+        raise ExternalRetrievalWaveError(
+            "arXiv rate-limit recovery cannot alter a closed external retrieval wave"
+        )
+    if source_state.get("execution_episodes"):
+        raise ExternalRetrievalWaveError(
+            "arXiv rate-limit recovery requires the original failed lineage"
+        )
+
+    checkpoint_reference = source_state.get("checkpoint_dataset")
+    if not checkpoint_reference:
+        raise ExternalRetrievalWaveError("failed arXiv state lacks a checkpoint binding")
+    failed_checkpoint = _safe_output_path(
+        root_path, str(checkpoint_reference["path"])
+    )
+    _verify_file_reference(failed_checkpoint, checkpoint_reference, root_path)
+    failed_checkpoint_bytes = failed_checkpoint.read_bytes()
+    failed_payload = json.loads(failed_checkpoint_bytes)
+    dataset = load_review_dataset(failed_checkpoint)
+    recovery = _validate_failed_arxiv_rate_limit_checkpoint(
+        dataset=dataset,
+        checkpoint_dir=failed_checkpoint.parent,
+        root=root_path,
+        wave=wave,
+    )
+    if source_state.get("failure_reason") != "; ".join(
+        dataset.retrieval_runs[0].errors
+    ):
+        raise ExternalRetrievalWaveError("arXiv source/checkpoint failure reason changed")
+    other_sources_before = {
+        key: json.loads(json.dumps(value, sort_keys=True))
+        for key, value in state["sources"].items()
+        if key != "arXiv"
+    }
+    recovered_at = timestamp()
+
+    episode_1 = {
+        "episode_number": 1,
+        "episode_id": "arXiv-episode-001",
+        "run_id": dataset.retrieval_runs[0].run_id,
+        "status": "FAILED",
+        "failure_classification": "TRANSPORT_TIMEOUT_AND_PROVIDER_RATE_LIMIT",
+        "checkpoint_path": failed_checkpoint.parent.relative_to(root_path).as_posix(),
+        "checkpoint_dataset": dict(checkpoint_reference),
+        "attempt_count": ARXIV_RATE_LIMIT_EXPECTED_ATTEMPTS,
+        "transport_timeout_count": 8,
+        "http_429_count": ARXIV_RATE_LIMIT_EXPECTED_RESPONSES,
+        "successful_http_response_count": 0,
+        "occurrence_count": 0,
+        "source_attempt_manifest_hash": _hash_payload(
+            {"retrieval_attempts": failed_payload.get("retrieval_attempts", [])}
+        ),
+        "raw_responses": recovery["raw_response_bindings"],
+        "query_attempt_signatures": recovery["query_attempt_signatures"],
+        "started_at_utc": source_state.get("last_session_started_at_utc"),
+        "completed_at_utc": source_state.get("last_session_completed_at_utc"),
+        "failure_reason": source_state.get("failure_reason"),
+        "immutable": True,
+    }
+
+    recovery_checkpoint_relative = (
+        f"{EXECUTION_ROOT}/arXiv/episodes/episode-002/checkpoint"
+    )
+    recovery_checkpoint_dir = _safe_output_path(
+        root_path, recovery_checkpoint_relative
+    )
+    if recovery_checkpoint_dir.exists():
+        raise ExternalRetrievalWaveError(
+            "arXiv episode-2 checkpoint exists without valid state lineage"
+        )
+
+    run = dataset.retrieval_runs[0]
+    dataset.retrieval_pages = []
+    dataset.retrieval_attempts = []
+    dataset.occurrences = []
+    dataset.canonical_records = []
+    dataset.duplicate_decisions = []
+    run.retrieval_started_at = recovered_at
+    run.retrieval_completed_at = recovered_at
+    run.retrieval_cutoff_date = None
+    run.status = ProcessingStatus.PARTIAL
+    run.completion_status = RetrievalCompletionStatus.RUNNING
+    run.errors = [
+        "offline arXiv rate-limit recovery complete; live resume pending"
+    ]
+    run.metadata.pop("pause_state", None)
+    run.metadata.pop("pause_reason", None)
+    run.metadata.pop("pause_metadata", None)
+    run.metadata["offline_arxiv_rate_limit_recovery"] = {
+        "recovery_episode_number": 2,
+        "source_episode_number": 1,
+        "source_checkpoint": dict(checkpoint_reference),
+        "source_attempt_count": ARXIV_RATE_LIMIT_EXPECTED_ATTEMPTS,
+        "source_raw_response_count": ARXIV_RATE_LIMIT_EXPECTED_RESPONSES,
+        "source_raw_response_manifest_hash": _hash_payload(
+            {"responses": recovery["raw_response_bindings"]}
+        ),
+        "restart_states": recovery["restart_states"],
+        "network_used": False,
+    }
+    for query, restart in zip(
+        dataset.source_queries, recovery["restart_states"], strict=True
+    ):
+        query.retrieval_started_at = recovered_at
+        query.retrieval_ended_at = recovered_at
+        query.status = ProcessingStatus.PARTIAL
+        query.completion_status = RetrievalCompletionStatus.PLANNED
+        query.page = None
+        query.cursor = None
+        query.result_count = 0
+        query.errors = []
+        query.page_ids = []
+        query.source_reported_total = None
+        query.total_is_exact = False
+        query.completion_proof = None
+        query.metadata.pop("pause_state", None)
+        query.metadata.pop("pause_reason", None)
+        query.metadata.pop("pause_metadata", None)
+        query.metadata["offline_arxiv_rate_limit_recovery"] = {
+            "source_episode_number": 1,
+            "restart_state": dict(restart["request_state"]),
+            "request_hash": restart["request_hash"],
+        }
+    dataset.validate()
+
+    recovery_store = CheckpointStore(recovery_checkpoint_dir)
+    checkpoint_hash = recovery_store.save_dataset(dataset)
+    recovery_checkpoint_reference = _file_reference(
+        recovery_store.dataset_path, root_path
+    )
+    if checkpoint_hash != recovery_checkpoint_reference["raw_sha256"]:
+        raise ExternalRetrievalWaveError("arXiv recovery checkpoint hash disagreement")
+    if failed_checkpoint.read_bytes() != failed_checkpoint_bytes:
+        raise ExternalRetrievalWaveError(
+            "arXiv episode-1 checkpoint changed during recovery"
+        )
+    _verify_arxiv_raw_response_bindings(
+        root_path, recovery["raw_response_bindings"]
+    )
+
+    episode_2 = {
+        "episode_number": 2,
+        "episode_id": "arXiv-episode-002",
+        "run_id": run.run_id,
+        "status": ARXIV_RATE_LIMIT_RECOVERY_STATUS,
+        "recovery_of_episode_number": 1,
+        "authorization_reason": "OFFLINE_ARXIV_TIMEOUT_AND_RATE_LIMIT_RECOVERY",
+        "authorized_at_utc": recovered_at,
+        "checkpoint_path": recovery_checkpoint_relative,
+        "checkpoint_dataset": recovery_checkpoint_reference,
+        "frozen_wave_manifest_hash": wave.manifest_hash(),
+        "frozen_query_plan_hash": wave.query_plan_hash,
+        "source_episode_checkpoint": dict(checkpoint_reference),
+        "source_attempt_manifest_hash": episode_1["source_attempt_manifest_hash"],
+        "source_attempt_count": ARXIV_RATE_LIMIT_EXPECTED_ATTEMPTS,
+        "source_raw_responses": recovery["raw_response_bindings"],
+        "restart_states": recovery["restart_states"],
+        "network_used": False,
+        "immutable": False,
+    }
+    source_state["execution_episodes"] = [episode_1, episode_2]
+    source_state.update(
+        {
+            "status": ARXIV_RATE_LIMIT_RECOVERY_STATUS,
+            "active_episode_number": 2,
+            "active_run_id": run.run_id,
+            "active_checkpoint_path": recovery_checkpoint_relative,
+            "checkpoint_path": recovery_checkpoint_relative,
+            "checkpoint_dataset": recovery_checkpoint_reference,
+            "completed_query_count": 0,
+            "total_query_count": 5,
+            "occurrence_count": 0,
+            "attempt_count": 0,
+            "preserved_source_attempt_count": ARXIV_RATE_LIMIT_EXPECTED_ATTEMPTS,
+            "preserved_source_raw_response_count": (
+                ARXIV_RATE_LIMIT_EXPECTED_RESPONSES
+            ),
+            "requests_this_session": 0,
+            "pause_reason": (
+                "OFFLINE_RATE_LIMIT_RECOVERY_COMPLETE; LIVE_RESUME_REQUIRED"
+            ),
+            "failure_reason": None,
+            "last_session_started_at_utc": recovered_at,
+            "last_session_completed_at_utc": recovered_at,
+        }
+    )
+    if {
+        key: value for key, value in state["sources"].items() if key != "arXiv"
+    } != other_sources_before:
+        raise ExternalRetrievalWaveError(
+            "arXiv rate-limit recovery changed another source component"
+        )
+    state["status"] = "RUNNING"
+    state["external_retrieval_completed_at_utc"] = None
+    state["external_retrieval_cutoff_date"] = None
+    _save_execution_state(state_path, state)
+    return state
 
 
 def authorize_pubmed_transport_retry(
@@ -1690,6 +1932,7 @@ def execute_external_source_session(
             "failure_reason": None,
         }
     )
+    source_state.pop("pause_metadata", None)
     _sync_active_retry_episode(source_state)
     _save_execution_state(state_path, state)
     if source == "ACMDigitalLibrary":
@@ -1782,7 +2025,11 @@ def execute_external_source_session(
         rate_limiter=rate_limiter,
         retry_sleep=retry_sleep,
         request_budget=request_budget,
-        pause_status_codes=frozenset({429}) if source == "IEEEXplore" else frozenset(),
+        pause_status_codes=(
+            frozenset({429})
+            if source in {"arXiv", "IEEEXplore"}
+            else frozenset()
+        ),
     )
     after_attempts = len(dataset.retrieval_attempts)
     requests_this_session = after_attempts - before_attempts
@@ -1809,6 +2056,10 @@ def execute_external_source_session(
         status = "PAUSED_PROVIDER_QUOTA"
         failure_reason = None
         pause_reason = run.metadata.get("pause_reason")
+    elif pause_state == "PROVIDER_RATE_LIMIT":
+        status = "PAUSED_PROVIDER_RATE_LIMIT"
+        failure_reason = None
+        pause_reason = run.metadata.get("pause_reason")
     else:
         status = "FAILED"
         failure_reason = "; ".join(run.errors)
@@ -1833,6 +2084,10 @@ def execute_external_source_session(
             "last_session_completed_at_utc": timestamp(),
         }
     )
+    if run.metadata.get("pause_metadata") is not None:
+        source_state["pause_metadata"] = dict(run.metadata["pause_metadata"])
+    else:
+        source_state.pop("pause_metadata", None)
     if quota is not None:
         source_state["ieee_quota"] = {
             **quota,
@@ -3947,6 +4202,374 @@ def _validate_response_free_pubmed_transport_failure(
             )
 
 
+def _validate_failed_arxiv_rate_limit_checkpoint(
+    *,
+    dataset: Any,
+    checkpoint_dir: Path,
+    root: Path,
+    wave: ProductionRetrievalWave,
+) -> dict[str, Any]:
+    if (
+        dataset.occurrences
+        or any(
+            page.status is RetrievalCompletionStatus.COMPLETE
+            or page.returned_item_count
+            or page.occurrence_ids
+            or page.native_identifiers
+            for page in dataset.retrieval_pages
+        )
+        or any(
+            attempt.status is RetrievalAttemptStatus.SUCCEEDED
+            or (
+                attempt.response_status is not None
+                and 200 <= attempt.response_status < 300
+            )
+            for attempt in dataset.retrieval_attempts
+        )
+    ):
+        raise ExternalRetrievalWaveError(
+            "arXiv recovery refused because a successful page or occurrence exists"
+        )
+    try:
+        dataset.validate()
+    except ValueError as exc:
+        raise ExternalRetrievalWaveError(
+            f"arXiv failed checkpoint validation failed: {exc}"
+        ) from exc
+    specs = _source_query_specs(wave, "arXiv", ieee_credential="")
+    if len(dataset.retrieval_runs) != 1:
+        raise ExternalRetrievalWaveError(
+            "arXiv rate-limit recovery requires exactly one retrieval run"
+        )
+    run = dataset.retrieval_runs[0]
+    if (
+        run.completion_status is not RetrievalCompletionStatus.FAILED
+        or run.retrieval_cutoff_date is not None
+        or run.query_plan_hash != _query_plan_hash(specs)
+        or run.planned_query_ids != [query.query_id for query in dataset.source_queries]
+        or run.source_query_ids != run.planned_query_ids
+        or len(dataset.source_queries) != 5
+        or len(dataset.retrieval_pages) != 5
+        or len(dataset.retrieval_attempts) != ARXIV_RATE_LIMIT_EXPECTED_ATTEMPTS
+    ):
+        raise ExternalRetrievalWaveError(
+            "arXiv checkpoint is not the known timeout/rate-limit failure"
+        )
+    if (
+        dataset.canonical_records
+        or dataset.duplicate_decisions
+    ):
+        raise ExternalRetrievalWaveError(
+            "arXiv recovery refused because a successful page or occurrence exists"
+        )
+
+    adapter = PAGINATED_SOURCE_ADAPTERS["arXiv"]
+    response_store = CheckpointStore(checkpoint_dir)
+    raw_response_bindings = []
+    query_attempt_signatures = []
+    restart_states = []
+    seen_response_paths: set[str] = set()
+    expected_run_errors = []
+
+    for query, spec, expected_kinds in zip(
+        dataset.source_queries,
+        specs,
+        ARXIV_RATE_LIMIT_EXPECTED_ATTEMPT_KINDS,
+        strict=True,
+    ):
+        if (
+            query.source_database != "arXiv"
+            or query.query_text != spec.query_text
+            or query.query_version != spec.query_version
+            or query.metadata.get("production_query_id")
+            != spec.metadata["production_query_id"]
+            or query.metadata.get("frozen_request_specification_hash")
+            != spec.metadata["frozen_request_specification_hash"]
+            or query.completion_status is not RetrievalCompletionStatus.FAILED
+            or query.status is not ProcessingStatus.FAILED
+            or query.result_count != 0
+            or len(query.errors) != 1
+        ):
+            raise ExternalRetrievalWaveError(
+                "arXiv recovery refused changed frozen query/failure provenance"
+            )
+        pages = [
+            page
+            for page in dataset.retrieval_pages
+            if page.source_query_id == query.query_id
+        ]
+        if (
+            len(pages) != 1
+            or query.page_ids != [pages[0].page_id]
+            or pages[0].ordinal != 0
+            or pages[0].request_state != {"start": 0}
+            or pages[0].status is not RetrievalCompletionStatus.FAILED
+            or pages[0].next_state is not None
+            or pages[0].source_reported_total is not None
+            or pages[0].terminal
+            or pages[0].truncated
+            or pages[0].metadata.get("completion_error") != query.errors[0]
+        ):
+            raise ExternalRetrievalWaveError(
+                "arXiv recovery refused changed initial-page failure lineage"
+            )
+        page = pages[0]
+        request = adapter.build_request(spec, page.request_state)
+        attempts = [
+            attempt
+            for attempt_id in page.attempt_ids
+            for attempt in dataset.retrieval_attempts
+            if attempt.attempt_id == attempt_id
+        ]
+        if len(attempts) != 3 or [item.attempt_number for item in attempts] != [1, 2, 3]:
+            raise ExternalRetrievalWaveError(
+                "arXiv recovery requires exactly three ordered attempts per family"
+            )
+        observed_kinds = []
+        for index, attempt in enumerate(attempts):
+            if (
+                attempt.page_id != page.page_id
+                or attempt.status is not RetrievalAttemptStatus.FAILED
+                or attempt.request_method != request.method
+                or attempt.request_url != request.url
+                or attempt.request_params != request.sanitized_params()
+                or attempt.request_headers != request.sanitized_headers()
+                or attempt.request_hash != request.request_hash()
+                or attempt.retry_of_attempt_id
+                != (attempts[index - 1].attempt_id if index else None)
+            ):
+                raise ExternalRetrievalWaveError(
+                    "arXiv recovery refused changed request hash/method/lineage"
+                )
+            if attempt.response_status is None:
+                failure_type = str(attempt.error or "").partition(":")[0]
+                if (
+                    failure_type != "ReadTimeout"
+                    or attempt.raw_response_path is not None
+                    or attempt.raw_response_hash is not None
+                    or attempt.response_headers
+                    or attempt.response_url is not None
+                ):
+                    raise ExternalRetrievalWaveError(
+                        "arXiv recovery encountered non-signature transport failure"
+                    )
+                observed_kinds.append(failure_type)
+                continue
+            if (
+                attempt.response_status != 429
+                or not str(attempt.error or "").startswith("HTTP 429 from ")
+                or not attempt.raw_response_path
+                or not attempt.raw_response_hash
+                or attempt.raw_response_path in seen_response_paths
+            ):
+                raise ExternalRetrievalWaveError(
+                    "arXiv recovery encountered non-signature HTTP failure"
+                )
+            try:
+                response = response_store.load_response(
+                    attempt.raw_response_path, attempt.raw_response_hash
+                )
+            except (OSError, ValueError) as exc:
+                raise ExternalRetrievalWaveError(
+                    f"arXiv raw response hash/read failure: {exc}"
+                ) from exc
+            if (
+                response.status_code != 429
+                or response.headers != attempt.response_headers
+            ):
+                raise ExternalRetrievalWaveError(
+                    "arXiv persisted response metadata changed"
+                )
+            response_path = checkpoint_dir / attempt.raw_response_path
+            raw = response_path.read_bytes()
+            retry_after = next(
+                (
+                    str(value)
+                    for key, value in response.headers.items()
+                    if str(key).lower() == "retry-after"
+                ),
+                None,
+            )
+            seen_response_paths.add(attempt.raw_response_path)
+            raw_response_bindings.append(
+                {
+                    "episode_1_path": response_path.relative_to(root).as_posix(),
+                    "attempt_id": attempt.attempt_id,
+                    "byte_size": len(raw),
+                    "raw_sha256": attempt.raw_response_hash,
+                    "http_status": 429,
+                    "retry_after_header_present": retry_after is not None,
+                    "retry_after": retry_after,
+                }
+            )
+            observed_kinds.append("HTTP_429")
+        if tuple(observed_kinds) != expected_kinds:
+            raise ExternalRetrievalWaveError(
+                "arXiv timeout/429 attempt signature changed"
+            )
+        if expected_kinds[-1] == "ReadTimeout":
+            if query.errors != ["retrieval attempts exhausted before a response"]:
+                raise ExternalRetrievalWaveError(
+                    "arXiv transport exhaustion failure signature changed"
+                )
+        elif not query.errors[0].startswith("HTTP 429 from "):
+            raise ExternalRetrievalWaveError(
+                "arXiv HTTP 429 failure signature changed"
+            )
+        expected_run_errors.append(f"{query.query_id}: {query.errors[0]}")
+        query_attempt_signatures.append(
+            {
+                "production_query_id": spec.metadata["production_query_id"],
+                "query_id": query.query_id,
+                "attempt_kinds": observed_kinds,
+                "request_hash": request.request_hash(),
+            }
+        )
+        restart_states.append(
+            {
+                "production_query_id": spec.metadata["production_query_id"],
+                "query_id": query.query_id,
+                "request_state": adapter.initial_state(spec),
+                "max_results": spec.limit,
+                "request_hash": request.request_hash(),
+            }
+        )
+
+    if run.errors != expected_run_errors:
+        raise ExternalRetrievalWaveError("arXiv run failure manifest changed")
+    response_files = {
+        path.relative_to(checkpoint_dir).as_posix()
+        for path in response_store.responses.iterdir()
+        if path.is_file()
+    }
+    if (
+        len(raw_response_bindings) != ARXIV_RATE_LIMIT_EXPECTED_RESPONSES
+        or response_files != seen_response_paths
+    ):
+        raise ExternalRetrievalWaveError(
+            "arXiv raw-response artifact manifest is missing or has unbound files"
+        )
+    return {
+        "raw_response_bindings": raw_response_bindings,
+        "query_attempt_signatures": query_attempt_signatures,
+        "restart_states": restart_states,
+    }
+
+
+def _verify_arxiv_raw_response_bindings(
+    root: Path, bindings: list[dict[str, Any]]
+) -> None:
+    if len(bindings) != ARXIV_RATE_LIMIT_EXPECTED_RESPONSES:
+        raise ExternalRetrievalWaveError("arXiv recovery raw-response manifest changed")
+    for binding in bindings:
+        path = _safe_output_path(root, str(binding.get("episode_1_path", "")))
+        raw = path.read_bytes()
+        if (
+            not path.is_file()
+            or len(raw) != binding.get("byte_size")
+            or _sha256(raw) != binding.get("raw_sha256")
+            or binding.get("http_status") != 429
+        ):
+            raise ExternalRetrievalWaveError(
+                "arXiv episode-1 raw response changed during recovery"
+            )
+
+
+def _validate_authorized_arxiv_rate_limit_recovery(
+    source_state: dict[str, Any], root: Path, wave: ProductionRetrievalWave
+) -> None:
+    episodes = source_state.get("execution_episodes", [])
+    if len(episodes) != 2:
+        raise ExternalRetrievalWaveError("arXiv episode-2 recovery lineage changed")
+    failed, recovered = episodes
+    if (
+        failed.get("episode_number") != 1
+        or failed.get("status") != "FAILED"
+        or not failed.get("immutable")
+        or failed.get("attempt_count") != ARXIV_RATE_LIMIT_EXPECTED_ATTEMPTS
+        or failed.get("http_429_count") != ARXIV_RATE_LIMIT_EXPECTED_RESPONSES
+        or recovered.get("episode_number") != 2
+        or recovered.get("status") != ARXIV_RATE_LIMIT_RECOVERY_STATUS
+        or recovered.get("recovery_of_episode_number") != 1
+        or recovered.get("network_used") is not False
+        or recovered.get("immutable") is not False
+        or source_state.get("active_episode_number") != 2
+        or source_state.get("active_checkpoint_path")
+        != recovered.get("checkpoint_path")
+        or source_state.get("checkpoint_dataset")
+        != recovered.get("checkpoint_dataset")
+        or source_state.get("completed_query_count") != 0
+        or source_state.get("total_query_count") != 5
+        or source_state.get("occurrence_count") != 0
+        or source_state.get("attempt_count") != 0
+        or source_state.get("requests_this_session") != 0
+        or source_state.get("preserved_source_attempt_count")
+        != ARXIV_RATE_LIMIT_EXPECTED_ATTEMPTS
+        or source_state.get("preserved_source_raw_response_count")
+        != ARXIV_RATE_LIMIT_EXPECTED_RESPONSES
+        or recovered.get("source_episode_checkpoint")
+        != failed.get("checkpoint_dataset")
+    ):
+        raise ExternalRetrievalWaveError("arXiv episode-2 recovery lineage changed")
+    failed_checkpoint = _safe_output_path(
+        root, failed["checkpoint_dataset"]["path"]
+    )
+    _verify_file_reference(failed_checkpoint, failed["checkpoint_dataset"], root)
+    failed_payload = _load_json(failed_checkpoint)
+    if failed.get("source_attempt_manifest_hash") != _hash_payload(
+        {"retrieval_attempts": failed_payload.get("retrieval_attempts", [])}
+    ):
+        raise ExternalRetrievalWaveError("arXiv episode-1 attempt manifest changed")
+    failed_dataset = load_review_dataset(failed_checkpoint)
+    validated = _validate_failed_arxiv_rate_limit_checkpoint(
+        dataset=failed_dataset,
+        checkpoint_dir=failed_checkpoint.parent,
+        root=root,
+        wave=wave,
+    )
+    if (
+        recovered.get("source_raw_responses")
+        != validated["raw_response_bindings"]
+        or recovered.get("restart_states") != validated["restart_states"]
+        or failed.get("query_attempt_signatures")
+        != validated["query_attempt_signatures"]
+    ):
+        raise ExternalRetrievalWaveError("arXiv recovery evidence manifest changed")
+    _verify_arxiv_raw_response_bindings(root, recovered["source_raw_responses"])
+
+    recovery_checkpoint = _safe_output_path(
+        root, recovered["checkpoint_dataset"]["path"]
+    )
+    _verify_file_reference(
+        recovery_checkpoint, recovered["checkpoint_dataset"], root
+    )
+    dataset = load_review_dataset(recovery_checkpoint)
+    specs = _source_query_specs(wave, "arXiv", ieee_credential="")
+    if (
+        len(dataset.retrieval_runs) != 1
+        or dataset.retrieval_runs[0].completion_status
+        is not RetrievalCompletionStatus.RUNNING
+        or dataset.retrieval_runs[0].query_plan_hash != _query_plan_hash(specs)
+        or dataset.retrieval_pages
+        or dataset.retrieval_attempts
+        or dataset.occurrences
+        or dataset.canonical_records
+        or dataset.duplicate_decisions
+        or [query.query_id for query in dataset.source_queries]
+        != [item["query_id"] for item in recovered["restart_states"]]
+        or any(
+            query.completion_status is not RetrievalCompletionStatus.PLANNED
+            or query.status is not ProcessingStatus.PARTIAL
+            or query.result_count != 0
+            or query.page_ids
+            or query.errors
+            for query in dataset.source_queries
+        )
+    ):
+        raise ExternalRetrievalWaveError("arXiv episode-2 restart checkpoint changed")
+    dataset.validate()
+
+
 def _validate_authorized_pubmed_retry(
     source_state: dict[str, Any], root: Path
 ) -> None:
@@ -4118,7 +4741,54 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--authorize-ieee-repeated-window-recovery", action="store_true"
     )
+    parser.add_argument(
+        "--authorize-arxiv-rate-limit-recovery", action="store_true"
+    )
     args = parser.parse_args(argv)
+    if args.authorize_arxiv_rate_limit_recovery:
+        if args.source != "arXiv":
+            parser.error(
+                "rate-limit recovery is supported only for --source arXiv"
+            )
+        if (
+            args.authorize_live_external_retrieval
+            or args.authorize_transport_retry_reset
+            or args.authorize_pubmed_parser_recovery
+            or args.authorize_europe_pmc_terminal_recovery
+            or args.authorize_ieee_total_drift_recovery
+            or args.authorize_ieee_repeated_window_recovery
+            or args.resume
+        ):
+            parser.error(
+                "arXiv rate-limit recovery is a separate offline authorization boundary"
+            )
+        state = authorize_arxiv_rate_limit_recovery(root=args.root)
+        source_state = state["sources"]["arXiv"]
+        active = source_state["execution_episodes"][1]
+        print(
+            json.dumps(
+                {
+                    "execution_status": state["status"],
+                    "source": "arXiv",
+                    "source_status": source_state["status"],
+                    "active_episode_number": source_state[
+                        "active_episode_number"
+                    ],
+                    "restart_states": active["restart_states"],
+                    "preserved_attempt_count": active["source_attempt_count"],
+                    "preserved_raw_response_count": len(
+                        active["source_raw_responses"]
+                    ),
+                    "external_retrieval_cutoff_date": state[
+                        "external_retrieval_cutoff_date"
+                    ],
+                    "network_used": False,
+                },
+                sort_keys=True,
+                indent=2,
+            )
+        )
+        return 0
     if args.authorize_ieee_repeated_window_recovery:
         if args.source != "IEEEXplore":
             parser.error(
@@ -4130,6 +4800,7 @@ def main(argv: list[str] | None = None) -> int:
             or args.authorize_pubmed_parser_recovery
             or args.authorize_europe_pmc_terminal_recovery
             or args.authorize_ieee_total_drift_recovery
+            or args.authorize_arxiv_rate_limit_recovery
             or args.resume
         ):
             parser.error(
@@ -4175,6 +4846,7 @@ def main(argv: list[str] | None = None) -> int:
             or args.authorize_pubmed_parser_recovery
             or args.authorize_europe_pmc_terminal_recovery
             or args.authorize_ieee_repeated_window_recovery
+            or args.authorize_arxiv_rate_limit_recovery
             or args.resume
         ):
             parser.error(
@@ -4217,6 +4889,7 @@ def main(argv: list[str] | None = None) -> int:
             or args.authorize_pubmed_parser_recovery
             or args.authorize_ieee_total_drift_recovery
             or args.authorize_ieee_repeated_window_recovery
+            or args.authorize_arxiv_rate_limit_recovery
             or args.resume
         ):
             parser.error(
@@ -4257,6 +4930,7 @@ def main(argv: list[str] | None = None) -> int:
             or args.authorize_europe_pmc_terminal_recovery
             or args.authorize_ieee_total_drift_recovery
             or args.authorize_ieee_repeated_window_recovery
+            or args.authorize_arxiv_rate_limit_recovery
             or args.resume
         ):
             parser.error("parser recovery is a separate offline authorization boundary")
@@ -4300,6 +4974,7 @@ def main(argv: list[str] | None = None) -> int:
             or args.authorize_europe_pmc_terminal_recovery
             or args.authorize_ieee_total_drift_recovery
             or args.authorize_ieee_repeated_window_recovery
+            or args.authorize_arxiv_rate_limit_recovery
             or args.resume
         ):
             parser.error(
@@ -4364,7 +5039,12 @@ def main(argv: list[str] | None = None) -> int:
         return (
             0
             if source_state["status"]
-            in {"COMPLETE", "PAUSED_DAILY_QUOTA", "PAUSED_PROVIDER_QUOTA"}
+            in {
+                "COMPLETE",
+                "PAUSED_DAILY_QUOTA",
+                "PAUSED_PROVIDER_QUOTA",
+                "PAUSED_PROVIDER_RATE_LIMIT",
+            }
             else 2
         )
     result = save_external_retrieval_preflight(root=args.root)

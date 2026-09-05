@@ -272,6 +272,131 @@ def test_arxiv_uses_response_confirmed_offsets_and_stable_snapshot(tmp_path):
 
 
 @pytest.mark.parametrize(
+    ("headers", "present", "value"),
+    [({}, False, None), ({"Retry-After": "120"}, True, "120")],
+)
+def test_arxiv_429_pauses_once_and_records_retry_after_evidence(
+    tmp_path, headers, present, value
+):
+    http = FakeHttp(
+        [FakeResponse(status_code=429, headers=headers, content=b"Rate exceeded.")]
+    )
+    dataset = execute_paginated_retrieval_run(
+        run_id=f"run:arxiv-rate-limit:{present}",
+        queries=[RetrievalQuerySpec("arXiv", "cells", "arxiv-v2", limit=2)],
+        http_clients={"arXiv": http},
+        checkpoint_dir=tmp_path / f"arxiv-rate-limit-{present}",
+        timestamp=Clock(),
+        retry_policy=RetryPolicy(max_attempts=3),
+        retry_sleep=lambda _: pytest.fail("arXiv 429 must pause without retrying"),
+        pause_status_codes=frozenset({429}),
+    )
+
+    assert len(http.calls) == 1
+    run = dataset.retrieval_runs[0]
+    query = dataset.source_queries[0]
+    attempt = dataset.retrieval_attempts[0]
+    expected = {
+        "source_database": "arXiv",
+        "http_status": 429,
+        "retry_after_header_present": present,
+        "retry_after": value,
+    }
+    assert run.completion_status is RetrievalCompletionStatus.RUNNING
+    assert run.metadata["pause_state"] == "PROVIDER_RATE_LIMIT"
+    assert run.metadata["pause_metadata"] == expected
+    assert query.metadata["pause_metadata"] == expected
+    assert attempt.metadata["provider_pause"] == expected
+    assert attempt.error == "PROVIDER_RATE_LIMIT_PAUSED_HTTP_429"
+    assert attempt.raw_response_path and attempt.raw_response_hash
+
+
+def test_arxiv_rate_limit_pause_resumes_same_frozen_initial_request(tmp_path):
+    checkpoint = tmp_path / "arxiv-rate-limit-resume"
+    spec = RetrievalQuerySpec("arXiv", "cells", "arxiv-v2", limit=2)
+    execute_paginated_retrieval_run(
+        run_id="run:arxiv-rate-limit-resume",
+        queries=[spec],
+        http_clients={"arXiv": FakeHttp([FakeResponse(status_code=429)])},
+        checkpoint_dir=checkpoint,
+        timestamp=Clock(),
+        retry_policy=RetryPolicy(max_attempts=1),
+        pause_status_codes=frozenset({429}),
+    )
+    resumed_http = FakeHttp(
+        [FakeResponse(content=_arxiv_feed("a1", total=1, start=0))]
+    )
+    completed = execute_paginated_retrieval_run(
+        run_id="run:arxiv-rate-limit-resume",
+        queries=[spec],
+        http_clients={"arXiv": resumed_http},
+        checkpoint_dir=checkpoint,
+        resume=True,
+        timestamp=Clock(),
+        retry_policy=RetryPolicy(max_attempts=1),
+        pause_status_codes=frozenset({429}),
+    )
+
+    assert resumed_http.calls[0]["params"]["start"] == 0
+    assert [item.attempt_number for item in completed.retrieval_attempts] == [1, 2]
+    assert completed.retrieval_runs[0].completion_status is (
+        RetrievalCompletionStatus.COMPLETE
+    )
+
+
+def test_arxiv_successful_response_validation_remains_fail_closed(tmp_path):
+    malformed = execute_paginated_retrieval_run(
+        run_id="run:arxiv-malformed-after-rate-limit-change",
+        queries=[RetrievalQuerySpec("arXiv", "cells", "arxiv-v2", limit=2)],
+        http_clients={"arXiv": FakeHttp([FakeResponse(content=b"not XML")])},
+        checkpoint_dir=tmp_path / "arxiv-malformed-after-rate-limit-change",
+        timestamp=Clock(),
+        retry_policy=RetryPolicy(max_attempts=1),
+        pause_status_codes=frozenset({429}),
+    )
+
+    assert malformed.retrieval_runs[0].completion_status is (
+        RetrievalCompletionStatus.FAILED
+    )
+    assert malformed.source_queries[0].completion_status is (
+        RetrievalCompletionStatus.FAILED
+    )
+    assert "ParseError" in malformed.retrieval_attempts[0].error
+
+
+@pytest.mark.parametrize("failure_kind", ["cross_page_duplicate", "pagination_mismatch"])
+def test_arxiv_identity_and_pagination_validation_remain_fail_closed(
+    tmp_path, failure_kind
+):
+    if failure_kind == "cross_page_duplicate":
+        responses = [
+            FakeResponse(content=_arxiv_feed("a1", "a2", total=3, start=0)),
+            FakeResponse(content=_arxiv_feed("a2", total=3, start=2)),
+        ]
+    else:
+        responses = [FakeResponse(content=_arxiv_feed("a1", total=1, start=1))]
+    dataset = execute_paginated_retrieval_run(
+        run_id=f"run:arxiv-validation:{failure_kind}",
+        queries=[RetrievalQuerySpec("arXiv", "cells", "arxiv-v2", limit=2)],
+        http_clients={"arXiv": FakeHttp(responses)},
+        checkpoint_dir=tmp_path / f"arxiv-validation-{failure_kind}",
+        timestamp=Clock(),
+        retry_policy=RetryPolicy(max_attempts=1),
+        pause_status_codes=frozenset({429}),
+    )
+
+    assert dataset.retrieval_runs[0].completion_status is (
+        RetrievalCompletionStatus.FAILED
+    )
+    errors = dataset.source_queries[0].errors
+    assert errors
+    if failure_kind == "cross_page_duplicate":
+        assert "repeated native identifiers across pages" in errors[0]
+    else:
+        assert "startIndex does not match" in errors[0]
+
+
+@pytest.mark.parametrize(
     ("source", "response", "spec"),
     [
         (

@@ -491,6 +491,7 @@ def execute_paginated_retrieval_run(
     run = dataset.retrieval_runs[0]
     run.metadata.pop("pause_state", None)
     run.metadata.pop("pause_reason", None)
+    run.metadata.pop("pause_metadata", None)
     run.metadata.pop("session_request_count", None)
     requests_made = 0
     limiter = rate_limiter
@@ -513,6 +514,7 @@ def execute_paginated_retrieval_run(
         query.completion_status = RetrievalCompletionStatus.RUNNING
         query.metadata.pop("pause_state", None)
         query.metadata.pop("pause_reason", None)
+        query.metadata.pop("pause_metadata", None)
         adapter = adapters[spec.source_database]
         existing_query_pages = [
             item for item in dataset.retrieval_pages if item.source_query_id == query_id
@@ -674,18 +676,34 @@ def execute_paginated_retrieval_run(
 
             attempt = existing_attempts[-1]
             if response.status_code in pause_status_codes:
+                retry_after = _header(response.headers, "retry-after")
+                arxiv_rate_limit = spec.source_database == "arXiv"
                 attempt.status = RetrievalAttemptStatus.FAILED
                 attempt.ended_at = timestamp()
                 attempt.error = (
-                    f"PROVIDER_QUOTA_EXHAUSTED_HTTP_{response.status_code}"
+                    f"PROVIDER_RATE_LIMIT_PAUSED_HTTP_{response.status_code}"
+                    if arxiv_rate_limit
+                    else f"PROVIDER_QUOTA_EXHAUSTED_HTTP_{response.status_code}"
                 )
+                pause_metadata = {
+                    "source_database": spec.source_database,
+                    "http_status": response.status_code,
+                    "retry_after_header_present": retry_after is not None,
+                    "retry_after": retry_after,
+                }
+                attempt.metadata["provider_pause"] = dict(pause_metadata)
                 _touch(dataset, query, attempt.ended_at)
                 return _pause_retrieval(
                     store,
                     dataset,
                     query,
-                    pause_state="PROVIDER_QUOTA_EXHAUSTED",
+                    pause_state=(
+                        "PROVIDER_RATE_LIMIT"
+                        if arxiv_rate_limit
+                        else "PROVIDER_QUOTA_EXHAUSTED"
+                    ),
                     reason=attempt.error,
+                    pause_metadata=pause_metadata,
                     requests_made=requests_made,
                     timestamp=timestamp,
                     protocol_version=protocol_version,
@@ -846,7 +864,9 @@ def execute_paginated_retrieval_run(
 
 def _ordinary_attempt_count(attempts: list[RetrievalAttempt]) -> int:
     return sum(
-        not str(item.error or "").startswith("PROVIDER_QUOTA_EXHAUSTED_HTTP_")
+        not str(item.error or "").startswith(
+            ("PROVIDER_QUOTA_EXHAUSTED_HTTP_", "PROVIDER_RATE_LIMIT_PAUSED_HTTP_")
+        )
         for item in attempts
     )
 
@@ -858,6 +878,7 @@ def _pause_retrieval(
     *,
     pause_state: str,
     reason: str,
+    pause_metadata: Mapping[str, Any] | None = None,
     requests_made: int,
     timestamp: TimestampFactory,
     protocol_version: str,
@@ -870,6 +891,8 @@ def _pause_retrieval(
     query.retrieval_ended_at = paused_at
     query.metadata["pause_state"] = pause_state
     query.metadata["pause_reason"] = reason
+    if pause_metadata is not None:
+        query.metadata["pause_metadata"] = dict(pause_metadata)
     run = dataset.retrieval_runs[0]
     run.status = ProcessingStatus.PARTIAL
     run.completion_status = RetrievalCompletionStatus.RUNNING
@@ -878,6 +901,8 @@ def _pause_retrieval(
     run.errors = [reason]
     run.metadata["pause_state"] = pause_state
     run.metadata["pause_reason"] = reason
+    if pause_metadata is not None:
+        run.metadata["pause_metadata"] = dict(pause_metadata)
     run.metadata["session_request_count"] = requests_made
     _save_checkpoint(
         store, dataset, protocol_version, rubric_version, software_version
