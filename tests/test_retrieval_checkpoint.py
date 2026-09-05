@@ -243,6 +243,237 @@ def test_semantic_scholar_bulk_uses_returned_tokens_without_switching_modes(tmp_
     assert dataset.source_queries[0].total_is_exact is False
 
 
+def _semantic_bulk_spec() -> RetrievalQuerySpec:
+    return RetrievalQuerySpec(
+        "SemanticScholar",
+        "cells",
+        "s2-bulk-v1",
+        limit=2,
+        pagination_mode="bulk",
+    )
+
+
+@pytest.mark.parametrize(
+    ("headers", "present", "value"),
+    [({}, False, None), ({"Retry-After": "90"}, True, "90")],
+)
+def test_semantic_scholar_candidate_429_pauses_and_resumes(
+    tmp_path, headers, present, value
+):
+    checkpoint = tmp_path / f"s2-rate-limit-{present}"
+    spec = _semantic_bulk_spec()
+    clock = Clock()
+    first_http = FakeHttp(
+        [FakeResponse(status_code=429, headers=headers, content=b"Rate limited")]
+    )
+    paused = execute_paginated_retrieval_run(
+        run_id=f"run:s2-rate-limit:{present}",
+        queries=[spec],
+        http_clients={"SemanticScholar": first_http},
+        checkpoint_dir=checkpoint,
+        timestamp=clock,
+        retry_policy=RetryPolicy(max_attempts=3),
+        retry_sleep=lambda _: pytest.fail("Semantic Scholar 429 must pause immediately"),
+        pause_status_codes=frozenset({429}),
+        resumable_transport_exhaustion_sources=frozenset({"SemanticScholar"}),
+    )
+
+    expected = {
+        "source_database": "SemanticScholar",
+        "http_status": 429,
+        "retry_after_header_present": present,
+        "retry_after": value,
+    }
+    assert len(first_http.calls) == 1
+    assert paused.retrieval_runs[0].metadata["pause_state"] == "PROVIDER_RATE_LIMIT"
+    assert paused.retrieval_runs[0].metadata["pause_metadata"] == expected
+    assert paused.retrieval_attempts[0].metadata["provider_pause"] == expected
+    assert paused.retrieval_attempts[0].raw_response_hash
+
+    resumed_http = FakeHttp(
+        [
+            FakeResponse(
+                payload={"total": 1, "data": [{"paperId": "S1", "title": "One"}]}
+            )
+        ]
+    )
+    completed = execute_paginated_retrieval_run(
+        run_id=f"run:s2-rate-limit:{present}",
+        queries=[spec],
+        http_clients={"SemanticScholar": resumed_http},
+        checkpoint_dir=checkpoint,
+        resume=True,
+        timestamp=clock,
+        retry_policy=RetryPolicy(max_attempts=3),
+        retry_sleep=lambda _: None,
+        pause_status_codes=frozenset({429}),
+        resumable_transport_exhaustion_sources=frozenset({"SemanticScholar"}),
+    )
+
+    assert len(resumed_http.calls) == 1
+    assert completed.retrieval_runs[0].completion_status is RetrievalCompletionStatus.COMPLETE
+    assert [item.attempt_number for item in completed.retrieval_attempts] == [1, 2]
+
+
+def test_semantic_scholar_transport_pause_has_fresh_bounded_resume_budget(tmp_path):
+    checkpoint = tmp_path / "s2-transport"
+    spec = _semantic_bulk_spec()
+    clock = Clock()
+    first_http = FakeHttp([ReadTimeout("first") for _ in range(2)])
+    first = execute_paginated_retrieval_run(
+        run_id="run:s2-transport",
+        queries=[spec],
+        http_clients={"SemanticScholar": first_http},
+        checkpoint_dir=checkpoint,
+        timestamp=clock,
+        retry_policy=RetryPolicy(max_attempts=2, base_delay_seconds=0),
+        retry_sleep=lambda _: None,
+        resumable_transport_exhaustion_sources=frozenset({"SemanticScholar"}),
+    )
+    assert len(first_http.calls) == 2
+    assert first.retrieval_runs[0].metadata["pause_state"] == (
+        "TRANSIENT_TRANSPORT_EXHAUSTED"
+    )
+
+    second_http = FakeHttp([ReadTimeout("second") for _ in range(2)])
+    second = execute_paginated_retrieval_run(
+        run_id="run:s2-transport",
+        queries=[spec],
+        http_clients={"SemanticScholar": second_http},
+        checkpoint_dir=checkpoint,
+        resume=True,
+        timestamp=clock,
+        retry_policy=RetryPolicy(max_attempts=2, base_delay_seconds=0),
+        retry_sleep=lambda _: None,
+        resumable_transport_exhaustion_sources=frozenset({"SemanticScholar"}),
+    )
+    assert len(second_http.calls) == 2
+    assert second.retrieval_runs[0].metadata["session_request_count"] == 2
+    assert [item.attempt_number for item in second.retrieval_attempts] == [1, 2, 3, 4]
+
+
+def test_semantic_scholar_resume_reuses_page_and_continues_token(tmp_path):
+    checkpoint = tmp_path / "s2-page-reuse"
+    spec = _semantic_bulk_spec()
+    clock = Clock()
+    first_http = FakeHttp(
+        [
+            FakeResponse(
+                payload={
+                    "total": 2,
+                    "token": "next-token",
+                    "data": [{"paperId": "S1", "title": "One"}],
+                }
+            ),
+            FakeResponse(status_code=429, content=b"Rate limited"),
+        ]
+    )
+    paused = execute_paginated_retrieval_run(
+        run_id="run:s2-page-reuse",
+        queries=[spec],
+        http_clients={"SemanticScholar": first_http},
+        checkpoint_dir=checkpoint,
+        timestamp=clock,
+        retry_policy=RetryPolicy(max_attempts=1),
+        pause_status_codes=frozenset({429}),
+        resumable_transport_exhaustion_sources=frozenset({"SemanticScholar"}),
+    )
+    first_hash = paused.retrieval_attempts[0].raw_response_hash
+
+    resumed_http = FakeHttp(
+        [
+            FakeResponse(
+                payload={"total": 2, "data": [{"paperId": "S2", "title": "Two"}]}
+            )
+        ]
+    )
+    completed = execute_paginated_retrieval_run(
+        run_id="run:s2-page-reuse",
+        queries=[spec],
+        http_clients={"SemanticScholar": resumed_http},
+        checkpoint_dir=checkpoint,
+        resume=True,
+        timestamp=clock,
+        retry_policy=RetryPolicy(max_attempts=1),
+        pause_status_codes=frozenset({429}),
+        resumable_transport_exhaustion_sources=frozenset({"SemanticScholar"}),
+    )
+
+    assert resumed_http.calls[0]["params"]["token"] == "next-token"
+    assert len(resumed_http.calls) == 1
+    assert completed.retrieval_attempts[0].raw_response_hash == first_hash
+    assert len(completed.occurrences) == 2
+
+
+@pytest.mark.parametrize(
+    ("name", "responses", "error"),
+    [
+        ("http-400", [FakeResponse(status_code=400)], "HTTP 400"),
+        (
+            "malformed",
+            [FakeResponse(payload={"total": 1, "data": "not-a-list"})],
+            "data must be a list",
+        ),
+        (
+            "repeated-token",
+            [
+                FakeResponse(
+                    payload={
+                        "total": 2,
+                        "token": "same-token",
+                        "data": [{"paperId": "S1", "title": "One"}],
+                    }
+                ),
+                FakeResponse(
+                    payload={
+                        "total": 2,
+                        "token": "same-token",
+                        "data": [{"paperId": "S2", "title": "Two"}],
+                    }
+                ),
+            ],
+            "repeated a bulk token",
+        ),
+        (
+            "cross-page-identity",
+            [
+                FakeResponse(
+                    payload={
+                        "total": 2,
+                        "token": "next-token",
+                        "data": [{"paperId": "S1", "title": "One"}],
+                    }
+                ),
+                FakeResponse(
+                    payload={
+                        "total": 2,
+                        "data": [{"paperId": "S1", "title": "One repeated"}],
+                    }
+                ),
+            ],
+            "repeated native identifiers across pages",
+        ),
+    ],
+)
+def test_semantic_scholar_permanent_and_integrity_failures_remain_terminal(
+    tmp_path, name, responses, error
+):
+    dataset = execute_paginated_retrieval_run(
+        run_id=f"run:s2-terminal:{name}",
+        queries=[_semantic_bulk_spec()],
+        http_clients={"SemanticScholar": FakeHttp(responses)},
+        checkpoint_dir=tmp_path / name,
+        timestamp=Clock(),
+        retry_policy=RetryPolicy(max_attempts=1),
+        pause_status_codes=frozenset({429}),
+        resumable_transport_exhaustion_sources=frozenset({"SemanticScholar"}),
+    )
+
+    assert dataset.retrieval_runs[0].completion_status is RetrievalCompletionStatus.FAILED
+    assert "pause_state" not in dataset.retrieval_runs[0].metadata
+    assert error in " ".join(dataset.source_queries[0].errors)
+
+
 def _arxiv_feed(*ids: str, total: int, start: int) -> bytes:
     entries = "".join(
         f"<entry><id>http://arxiv.org/abs/{identifier}</id><title>{identifier}</title>"

@@ -762,12 +762,15 @@ def execute_paginated_retrieval_run(
             attempt = existing_attempts[-1]
             if response.status_code in pause_status_codes:
                 retry_after = _header(response.headers, "retry-after")
-                arxiv_rate_limit = spec.source_database == "arXiv"
+                provider_rate_limit = spec.source_database in {
+                    "arXiv",
+                    "SemanticScholar",
+                }
                 attempt.status = RetrievalAttemptStatus.FAILED
                 attempt.ended_at = timestamp()
                 attempt.error = (
                     f"PROVIDER_RATE_LIMIT_PAUSED_HTTP_{response.status_code}"
-                    if arxiv_rate_limit
+                    if provider_rate_limit
                     else f"PROVIDER_QUOTA_EXHAUSTED_HTTP_{response.status_code}"
                 )
                 pause_metadata = {
@@ -784,7 +787,7 @@ def execute_paginated_retrieval_run(
                     query,
                     pause_state=(
                         "PROVIDER_RATE_LIMIT"
-                        if arxiv_rate_limit
+                        if provider_rate_limit
                         else "PROVIDER_QUOTA_EXHAUSTED"
                     ),
                     reason=attempt.error,

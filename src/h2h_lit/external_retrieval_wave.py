@@ -2279,6 +2279,22 @@ def execute_external_source_session(
             "manifest_path": SEMANTIC_CONTROL_GATE_PATH,
             "manifest_hash": gate["manifest_hash"],
         }
+        if gate["status"] in {
+            "PAUSED_PROVIDER_RATE_LIMIT",
+            "PAUSED_TRANSIENT_TRANSPORT",
+        }:
+            source_state["status"] = gate["status"]
+            source_state["failure_reason"] = None
+            source_state["pause_reason"] = gate.get("pause_reason")
+            if gate.get("pause_metadata") is not None:
+                source_state["pause_metadata"] = dict(gate["pause_metadata"])
+            source_state["candidate_request_count"] = 0
+            source_state["control_requests_this_session"] = gate.get(
+                "requests_this_session", 0
+            )
+            source_state["last_session_completed_at_utc"] = timestamp()
+            _save_execution_state(state_path, state)
+            return state
         if gate["status"] != "PASSED":
             source_state["status"] = "BLOCKED_SEMANTIC_CONTROL_GATE"
             source_state["failure_reason"] = (
@@ -2300,10 +2316,9 @@ def execute_external_source_session(
         raise ExternalRetrievalWaveError(
             f"{source} checkpoint exists; pass --resume to continue"
         )
-    if resume and not checkpoint_exists:
-        raise ExternalRetrievalWaveError(
-            f"{source} has no checkpoint to resume"
-        )
+    if resume and not checkpoint_exists and source != "SemanticScholar":
+        raise ExternalRetrievalWaveError(f"{source} has no checkpoint to resume")
+    retrieval_resume = resume and checkpoint_exists
     ieee_mutable_total_mode = (
         source == "IEEEXplore"
         and _ieee_total_drift_recovery_active(source_state)
@@ -2333,7 +2348,7 @@ def execute_external_source_session(
         queries=specs,
         http_clients={source: http},
         checkpoint_dir=checkpoint_dir,
-        resume=resume,
+        resume=retrieval_resume,
         timestamp=timestamp,
         software_version=WAVE_VERSION,
         query_plan_version=wave.query_plan_hash,
@@ -2343,11 +2358,13 @@ def execute_external_source_session(
         request_budget=request_budget,
         pause_status_codes=(
             frozenset({429})
-            if source in {"arXiv", "IEEEXplore"}
+            if source in {"arXiv", "IEEEXplore", "SemanticScholar"}
             else frozenset()
         ),
         resumable_transport_exhaustion_sources=(
-            frozenset({"arXiv"}) if source == "arXiv" else frozenset()
+            frozenset({source})
+            if source in {"arXiv", "SemanticScholar"}
+            else frozenset()
         ),
     )
     after_attempts = len(dataset.retrieval_attempts)
@@ -2572,7 +2589,7 @@ def _execute_semantic_control_gate(
             control_path.read_bytes()
         ):
             raise ExternalRetrievalWaveError("Semantic control binding changed")
-        if manifest["status"] in {"PASSED", "FAILED"}:
+        if manifest["status"] in {"PASSED", "FAILED", "UNRESOLVED"}:
             return manifest
         if not resume:
             raise ExternalRetrievalWaveError(
@@ -2584,7 +2601,7 @@ def _execute_semantic_control_gate(
                 "Semantic Scholar control gate has no checkpoint to resume"
             )
         manifest = {
-            "schema_version": "1.0.0",
+            "schema_version": "1.1.0",
             "gate": "bulk_boolean_semantics",
             "status": "RUNNING",
             "control_set": {
@@ -2596,9 +2613,14 @@ def _execute_semantic_control_gate(
             "candidate_queries_executed": False,
             "manifest_hash": None,
         }
+    manifest.pop("pause_state", None)
+    manifest.pop("pause_reason", None)
+    manifest.pop("pause_metadata", None)
+    manifest["requests_this_session"] = 0
     store = CheckpointStore(path.parent)
     limiter = rate_limiter or RateLimiter()
     observations = {item["probe_id"]: item for item in manifest["controls"]}
+    terminal_unresolved = False
     for probe in controls.probes:
         observation = observations.get(probe.probe_id)
         if observation and observation["status"] == "SUCCEEDED":
@@ -2638,8 +2660,25 @@ def _execute_semantic_control_gate(
             params=dict(observation["request"]["params"]),
             state={"probe_id": probe.probe_id},
         )
-        while len(observation["attempts"]) < retry_policy.max_attempts:
+        if (
+            observation["expression"] != probe.expression
+            or observation["expression_sha256"]
+            != _sha256(probe.expression.encode("utf-8"))
+            or observation["request_hash"] != request.request_hash()
+        ):
+            raise ExternalRetrievalWaveError(
+                "Semantic control frozen query/request binding changed"
+            )
+        observation["status"] = "RUNNING"
+        attempts_before_invocation = len(observation["attempts"])
+        while (
+            len(observation["attempts"]) - attempts_before_invocation
+            < retry_policy.max_attempts
+        ):
             attempt_number = len(observation["attempts"]) + 1
+            invocation_attempt_number = (
+                len(observation["attempts"]) - attempts_before_invocation + 1
+            )
             attempt = {
                 "attempt_number": attempt_number,
                 "started_at_utc": timestamp(),
@@ -2652,11 +2691,61 @@ def _execute_semantic_control_gate(
             _save_hashed_json(path, manifest, "manifest_hash")
             try:
                 delay = limiter.wait("SemanticScholar")
+                manifest["requests_this_session"] += 1
                 response = http.get(
                     request.url,
                     params=request.params,
                     timeout=request.timeout,
                 )
+            except Exception as exc:  # noqa: BLE001 - persist every control failure
+                attempt["status"] = "FAILED"
+                attempt["completed_at_utc"] = timestamp()
+                attempt["error"] = f"{type(exc).__name__}: {exc}"
+                transient_transport = (
+                    type(exc).__name__ in TRANSPORT_ENVIRONMENT_FAILURE_TYPES
+                )
+                if (
+                    transient_transport
+                    and invocation_attempt_number < retry_policy.max_attempts
+                ):
+                    delay = retry_policy.delay(invocation_attempt_number)
+                    attempt["retry_delay_seconds"] = delay
+                    _save_hashed_json(path, manifest, "manifest_hash")
+                    retry_sleep(delay)
+                    continue
+                if transient_transport:
+                    pause_metadata = {
+                        "source_database": "SemanticScholar",
+                        "probe_id": probe.probe_id,
+                        "response_received": False,
+                        "attempts_this_invocation": (
+                            len(observation["attempts"])
+                            - attempts_before_invocation
+                        ),
+                        "maximum_attempts_per_invocation": retry_policy.max_attempts,
+                        "failure_types": [
+                            str(item.get("error") or "").partition(":")[0]
+                            for item in observation["attempts"][
+                                attempts_before_invocation:
+                            ]
+                        ],
+                    }
+                    observation["status"] = "PAUSED_TRANSIENT_TRANSPORT"
+                    manifest["status"] = "PAUSED_TRANSIENT_TRANSPORT"
+                    manifest["pause_state"] = "TRANSIENT_TRANSPORT_EXHAUSTED"
+                    manifest["pause_reason"] = (
+                        "TRANSIENT_TRANSPORT_EXHAUSTED_NO_RESPONSE"
+                    )
+                    manifest["pause_metadata"] = pause_metadata
+                    manifest["candidate_queries_executed"] = False
+                    _save_hashed_json(path, manifest, "manifest_hash")
+                    return manifest
+                observation["status"] = "UNRESOLVED"
+                terminal_unresolved = True
+                _save_hashed_json(path, manifest, "manifest_hash")
+                break
+
+            try:
                 attempt_id = (
                     f"semantic-control-{probe.probe_id}-attempt-{attempt_number:03d}"
                 )
@@ -2668,32 +2757,83 @@ def _execute_semantic_control_gate(
                     "byte_size": (path.parent / response_path).stat().st_size,
                 }
                 attempt["rate_limit_delay_seconds"] = delay
+                retry_after = next(
+                    (
+                        str(value)
+                        for key, value in (response.headers or {}).items()
+                        if str(key).lower() == "retry-after"
+                    ),
+                    None,
+                )
+                attempt["response"]["retry_after_header_present"] = (
+                    retry_after is not None
+                )
+                attempt["response"]["retry_after"] = retry_after
+                if response.status_code == 429:
+                    pause_metadata = {
+                        "source_database": "SemanticScholar",
+                        "probe_id": probe.probe_id,
+                        "http_status": 429,
+                        "retry_after_header_present": retry_after is not None,
+                        "retry_after": retry_after,
+                    }
+                    attempt["status"] = "FAILED"
+                    attempt["completed_at_utc"] = timestamp()
+                    attempt["error"] = "PROVIDER_RATE_LIMIT_PAUSED_HTTP_429"
+                    attempt["provider_pause"] = dict(pause_metadata)
+                    observation["status"] = "PAUSED_PROVIDER_RATE_LIMIT"
+                    manifest["status"] = "PAUSED_PROVIDER_RATE_LIMIT"
+                    manifest["pause_state"] = "PROVIDER_RATE_LIMIT"
+                    manifest["pause_reason"] = attempt["error"]
+                    manifest["pause_metadata"] = pause_metadata
+                    manifest["candidate_queries_executed"] = False
+                    _save_hashed_json(path, manifest, "manifest_hash")
+                    return manifest
                 if not 200 <= response.status_code < 300:
-                    raise ValueError(f"HTTP {response.status_code}")
+                    attempt["status"] = "FAILED"
+                    attempt["completed_at_utc"] = timestamp()
+                    attempt["error"] = f"HTTP {response.status_code}"
+                    if (
+                        response.status_code in retry_policy.retry_statuses
+                        and invocation_attempt_number < retry_policy.max_attempts
+                    ):
+                        delay = retry_policy.delay(
+                            invocation_attempt_number, retry_after
+                        )
+                        attempt["retry_delay_seconds"] = delay
+                        _save_hashed_json(path, manifest, "manifest_hash")
+                        retry_sleep(delay)
+                        continue
+                    observation["status"] = "UNRESOLVED"
+                    terminal_unresolved = True
+                    _save_hashed_json(path, manifest, "manifest_hash")
+                    break
                 payload = response.json()
                 if not isinstance(payload, dict) or "total" not in payload:
-                    raise ValueError("Semantic control response omitted total")
+                    raise ExternalRetrievalWaveError(
+                        "Semantic control response omitted total"
+                    )
                 count = int(payload["total"])
                 if count < 0 or payload.get("error") or payload.get("errors"):
-                    raise ValueError("Semantic control response is invalid")
+                    raise ExternalRetrievalWaveError(
+                        "Semantic control response is invalid"
+                    )
                 observation["reported_count"] = count
                 observation["status"] = "SUCCEEDED"
                 attempt["status"] = "SUCCEEDED"
                 attempt["completed_at_utc"] = timestamp()
                 _save_hashed_json(path, manifest, "manifest_hash")
                 break
-            except Exception as exc:  # noqa: BLE001 - persist every control failure
+            except Exception as exc:  # noqa: BLE001 - persist invalid response evidence
                 attempt["status"] = "FAILED"
                 attempt["completed_at_utc"] = timestamp()
                 attempt["error"] = f"{type(exc).__name__}: {exc}"
-                if attempt_number < retry_policy.max_attempts:
-                    delay = retry_policy.delay(attempt_number)
-                    attempt["retry_delay_seconds"] = delay
-                    _save_hashed_json(path, manifest, "manifest_hash")
-                    retry_sleep(delay)
-                else:
-                    observation["status"] = "UNRESOLVED"
-                    _save_hashed_json(path, manifest, "manifest_hash")
+                observation["status"] = "UNRESOLVED"
+                terminal_unresolved = True
+                _save_hashed_json(path, manifest, "manifest_hash")
+                break
+        if terminal_unresolved:
+            break
 
     unresolved = [
         item["probe_id"]

@@ -163,7 +163,7 @@ class SemanticScholarPaginator:
             next_state = {"mode": mode, "offset": int(next_value)} if not terminal else None
             proof = "semantic_scholar_relevance_next_exhausted"
         else:
-            if next_value == state.get("token"):
+            if not terminal and next_value == state.get("token"):
                 raise PaginationError("Semantic Scholar repeated a bulk token")
             next_state = {"mode": mode, "token": next_value} if not terminal else None
             proof = "semantic_scholar_bulk_token_exhausted"

@@ -21,6 +21,7 @@ from h2h_lit.external_retrieval_wave import (
     PUBMED_EPISODE_2_OMITTED_BOOK_PMIDS,
     PUBMED_PARSER_RECOVERY_STATUS,
     READY_STATUS,
+    SEMANTIC_CONTROL_GATE_PATH,
     WAVE_PATH,
     ExternalRetrievalWaveError,
     _safe_output_path,
@@ -2095,7 +2096,7 @@ def test_source_execution_is_idempotent_after_complete(
     assert no_calls.calls == []
 
 
-def test_semantic_control_failure_executes_zero_candidate_queries(
+def _install_semantic_runtime(
     tmp_path, monkeypatch, external_wave, external_preflight
 ) -> None:
     _install_isolated_runtime(
@@ -2103,7 +2104,242 @@ def test_semantic_control_failure_executes_zero_candidate_queries(
     )
     control_target = tmp_path / "config/star_query_semantic_controls_v0_3.json"
     control_target.parent.mkdir(parents=True, exist_ok=True)
-    control_target.write_bytes((ROOT / "config/star_query_semantic_controls_v0_3.json").read_bytes())
+    control_target.write_bytes(
+        (ROOT / "config/star_query_semantic_controls_v0_3.json").read_bytes()
+    )
+
+
+def _passing_semantic_controls() -> list[FakeResponse]:
+    return [
+        FakeResponse(payload={"total": count})
+        for count in [100, 80, 20, 160, 30, 30]
+    ]
+
+
+def _semantic_candidate_responses() -> list[FakeResponse]:
+    return [
+        FakeResponse(
+            payload={
+                "total": 1,
+                "data": [{"paperId": f"S{index}", "title": f"Paper {index}"}],
+            }
+        )
+        for index in range(1, 6)
+    ]
+
+
+@pytest.mark.parametrize(
+    ("headers", "present", "value"),
+    [({}, False, None), ({"Retry-After": "120"}, True, "120")],
+)
+def test_semantic_control_429_pauses_with_retry_after_and_resumes(
+    tmp_path,
+    monkeypatch,
+    external_wave,
+    external_preflight,
+    headers,
+    present,
+    value,
+) -> None:
+    _install_semantic_runtime(
+        tmp_path, monkeypatch, external_wave, external_preflight
+    )
+    first_http = FakeHttp(
+        [FakeResponse(status_code=429, headers=headers, content=b"Rate limited")]
+    )
+    clock = Clock()
+    paused = execute_external_source_session(
+        root=tmp_path,
+        source="SemanticScholar",
+        http=first_http,
+        resume=False,
+        timestamp=clock,
+        retry_policy=RetryPolicy(max_attempts=3),
+        rate_limiter=RateLimiter({}),
+        retry_sleep=lambda _: pytest.fail("control 429 must pause immediately"),
+    )
+
+    source = paused["sources"]["SemanticScholar"]
+    expected = {
+        "source_database": "SemanticScholar",
+        "probe_id": "atomic-a",
+        "http_status": 429,
+        "retry_after_header_present": present,
+        "retry_after": value,
+    }
+    assert len(first_http.calls) == 1
+    assert source["status"] == "PAUSED_PROVIDER_RATE_LIMIT"
+    assert source["pause_metadata"] == expected
+    gate_path = tmp_path / source["semantic_control_gate"]["manifest_path"]
+    gate = json.loads(gate_path.read_text())
+    assert gate["pause_metadata"] == expected
+    attempt = gate["controls"][0]["attempts"][0]
+    assert attempt["response"]["retry_after_header_present"] is present
+    assert attempt["response"]["retry_after"] == value
+    assert (gate_path.parent / attempt["response"]["path"]).is_file()
+
+    resumed_http = FakeHttp(
+        [*_passing_semantic_controls(), *_semantic_candidate_responses()]
+    )
+    completed = execute_external_source_session(
+        root=tmp_path,
+        source="SemanticScholar",
+        http=resumed_http,
+        resume=True,
+        timestamp=clock,
+        retry_policy=RetryPolicy(max_attempts=3),
+        rate_limiter=RateLimiter({}),
+        retry_sleep=lambda _: None,
+    )
+
+    assert completed["sources"]["SemanticScholar"]["status"] == "COMPLETE"
+    assert len(resumed_http.calls) == 11
+    resumed_gate = json.loads(gate_path.read_text())
+    assert resumed_gate["status"] == "PASSED"
+    assert len(resumed_gate["controls"][0]["attempts"]) == 2
+
+
+def test_semantic_control_transport_exhaustion_gets_fresh_resume_budget(
+    tmp_path, monkeypatch, external_wave, external_preflight
+) -> None:
+    _install_semantic_runtime(
+        tmp_path, monkeypatch, external_wave, external_preflight
+    )
+    first_http = FakeHttp([ReadTimeout("timed out") for _ in range(2)])
+    clock = Clock()
+    paused = execute_external_source_session(
+        root=tmp_path,
+        source="SemanticScholar",
+        http=first_http,
+        resume=False,
+        timestamp=clock,
+        retry_policy=RetryPolicy(max_attempts=2, base_delay_seconds=0),
+        rate_limiter=RateLimiter({}),
+        retry_sleep=lambda _: None,
+    )
+    source = paused["sources"]["SemanticScholar"]
+    assert len(first_http.calls) == 2
+    assert source["status"] == "PAUSED_TRANSIENT_TRANSPORT"
+    assert source["pause_metadata"]["attempts_this_invocation"] == 2
+
+    second_http = FakeHttp([ReadTimeout("timed out again") for _ in range(2)])
+    paused_again = execute_external_source_session(
+        root=tmp_path,
+        source="SemanticScholar",
+        http=second_http,
+        resume=True,
+        timestamp=clock,
+        retry_policy=RetryPolicy(max_attempts=2, base_delay_seconds=0),
+        rate_limiter=RateLimiter({}),
+        retry_sleep=lambda _: None,
+    )
+    assert len(second_http.calls) == 2
+    assert paused_again["sources"]["SemanticScholar"]["status"] == (
+        "PAUSED_TRANSIENT_TRANSPORT"
+    )
+    gate_path = (
+        tmp_path
+        / paused_again["sources"]["SemanticScholar"]["semantic_control_gate"][
+            "manifest_path"
+        ]
+    )
+    gate = json.loads(gate_path.read_text())
+    assert [item["attempt_number"] for item in gate["controls"][0]["attempts"]] == [
+        1,
+        2,
+        3,
+        4,
+    ]
+
+
+def test_semantic_resume_skips_successful_controls_and_candidate_pages(
+    tmp_path, monkeypatch, external_wave, external_preflight
+) -> None:
+    _install_semantic_runtime(
+        tmp_path, monkeypatch, external_wave, external_preflight
+    )
+    first_http = FakeHttp(
+        [
+            _passing_semantic_controls()[0],
+            FakeResponse(status_code=429, content=b"Rate limited"),
+        ]
+    )
+    clock = Clock()
+    paused_control = execute_external_source_session(
+        root=tmp_path,
+        source="SemanticScholar",
+        http=first_http,
+        resume=False,
+        timestamp=clock,
+        retry_policy=RetryPolicy(max_attempts=1),
+        rate_limiter=RateLimiter({}),
+    )
+    assert paused_control["sources"]["SemanticScholar"]["status"] == (
+        "PAUSED_PROVIDER_RATE_LIMIT"
+    )
+
+    remaining_controls = _passing_semantic_controls()[1:]
+    candidate_http = FakeHttp(
+        [
+            *remaining_controls,
+            FakeResponse(
+                payload={
+                    "total": 2,
+                    "token": "qf01-next",
+                    "data": [{"paperId": "S1", "title": "Paper 1"}],
+                }
+            ),
+            FakeResponse(status_code=429, content=b"Rate limited"),
+        ]
+    )
+    paused_candidate = execute_external_source_session(
+        root=tmp_path,
+        source="SemanticScholar",
+        http=candidate_http,
+        resume=True,
+        timestamp=clock,
+        retry_policy=RetryPolicy(max_attempts=1),
+        rate_limiter=RateLimiter({}),
+    )
+    assert paused_candidate["sources"]["SemanticScholar"]["status"] == (
+        "PAUSED_PROVIDER_RATE_LIMIT"
+    )
+    assert len(candidate_http.calls) == 7
+
+    final_http = FakeHttp(
+        [
+            FakeResponse(
+                payload={
+                    "total": 2,
+                    "data": [{"paperId": "S2", "title": "Paper 2"}],
+                }
+            ),
+            *_semantic_candidate_responses()[1:],
+        ]
+    )
+    completed = execute_external_source_session(
+        root=tmp_path,
+        source="SemanticScholar",
+        http=final_http,
+        resume=True,
+        timestamp=clock,
+        retry_policy=RetryPolicy(max_attempts=1),
+        rate_limiter=RateLimiter({}),
+    )
+    assert completed["sources"]["SemanticScholar"]["status"] == "COMPLETE"
+    assert len(final_http.calls) == 5
+    assert final_http.calls[0]["params"]["token"] == "qf01-next"
+    gate_path = tmp_path / SEMANTIC_CONTROL_GATE_PATH
+    gate = json.loads(gate_path.read_text())
+    assert len(gate["controls"][0]["attempts"]) == 1
+
+
+def test_semantic_control_failure_executes_zero_candidate_queries(
+    tmp_path, monkeypatch, external_wave, external_preflight
+) -> None:
+    _install_semantic_runtime(
+        tmp_path, monkeypatch, external_wave, external_preflight
+    )
     counts = [100, 100, 50, 150, 70, 60]
     http = FakeHttp([FakeResponse(payload={"total": count}) for count in counts])
     state = execute_external_source_session(
@@ -2126,6 +2362,45 @@ def test_semantic_control_failure_executes_zero_candidate_queries(
         / "outputs/production/star-external-retrieval-wave-001/execution/"
         "SemanticScholar/checkpoint/review_dataset.json"
     ).exists()
+
+
+@pytest.mark.parametrize(
+    ("response", "error"),
+    [
+        (FakeResponse(status_code=400, content=b"Invalid query"), "HTTP 400"),
+        (FakeResponse(payload={"data": []}), "response omitted total"),
+    ],
+)
+def test_semantic_control_permanent_response_failures_remain_unresolved(
+    tmp_path,
+    monkeypatch,
+    external_wave,
+    external_preflight,
+    response,
+    error,
+) -> None:
+    _install_semantic_runtime(
+        tmp_path, monkeypatch, external_wave, external_preflight
+    )
+    http = FakeHttp([response])
+    state = execute_external_source_session(
+        root=tmp_path,
+        source="SemanticScholar",
+        http=http,
+        resume=False,
+        timestamp=Clock(),
+        retry_policy=RetryPolicy(max_attempts=3),
+        rate_limiter=RateLimiter({}),
+        retry_sleep=lambda _: pytest.fail("permanent control failures must not retry"),
+    )
+
+    source = state["sources"]["SemanticScholar"]
+    assert source["status"] == "BLOCKED_SEMANTIC_CONTROL_GATE"
+    assert source["semantic_control_gate"]["status"] == "UNRESOLVED"
+    assert len(http.calls) == 1
+    gate = json.loads((tmp_path / SEMANTIC_CONTROL_GATE_PATH).read_text())
+    assert error in gate["controls"][0]["attempts"][0]["error"]
+    assert gate["controls"][0]["attempts"][0]["response"]["sha256"]
 
 
 def test_ieee_daily_quota_stops_and_resumes_without_repeating_pages(
