@@ -142,6 +142,48 @@ SEMANTIC_CONTROL_5XX_EXPECTED_SIGNATURE = (
     ("a-and-b", (200,), "SUCCEEDED", 14246),
     ("a-or-b", (500, 500, 500), "UNRESOLVED", None),
 )
+SEMANTIC_CANDIDATE_5XX_RECOVERY_STATUS = (
+    "CANDIDATE_5XX_RECOVERY_READY_TO_RESUME"
+)
+SEMANTIC_CANDIDATE_5XX_EXPECTED_CHECKPOINT_SHA256 = (
+    "d146529f8ec1c9ec221f7d18b48e3d8d3b51927e8b76f9c56102ca1f47228dc0"
+)
+SEMANTIC_CANDIDATE_5XX_EXPECTED_STALE_STATE_SHA256 = (
+    "bb67003b7f474969de4d640b024d4998fe169ae4311fe1aa3f19cacbd94185da"
+)
+SEMANTIC_CANDIDATE_5XX_EXPECTED_CONTROL_SHA256 = (
+    "bab4c59d366d6b1062e5c8004774d5dbba1e7aa8157366e9ae4c4b10a63694c4"
+)
+SEMANTIC_CANDIDATE_5XX_EXPECTED_CONTROL_LOGICAL_HASH = (
+    "0978748cce5a721363fc8f16bee8227e82b7fc0801a2aa07d14e2888ad26cd7d"
+)
+SEMANTIC_CANDIDATE_5XX_EXPECTED_COUNTS = (
+    ("COMPLETE", 17, 16869),
+    ("FAILED", 6, 5000),
+    ("FAILED", 2, 1000),
+    ("COMPLETE", 3, 2954),
+    ("COMPLETE", 9, 8905),
+)
+SEMANTIC_CANDIDATE_5XX_CONTINUATION_TOKENS = (
+    None,
+    (
+        "PCOA3RZ3B2ACAEAFYCVZAV23YAVCAXWFKDWM7RWEILWYY56X5HTIDMHOPYMJMAF7"
+        "GACPA5X37F3ULTNEYWC2ZTKJXC4RDR6IKY2I3LESU5ONKGYRUG7R6AG3CS2Q"
+    ),
+    (
+        "PCOA3RZ5BZAEAEAG2CVWZPS2GGDN3YBKUKMN6RVCIAT65TXL3YBRLW7DOAWAK4NB"
+        "FOILZY74XOBAMM3KJJKKHWWMFTNMNFE6RETWE44PZSSPBQHWP326UFIG"
+    ),
+    None,
+    None,
+)
+SEMANTIC_CANDIDATE_5XX_EXPECTED_ATTEMPTS = 59
+SEMANTIC_CANDIDATE_5XX_EXPECTED_RESPONSES = 59
+SEMANTIC_CANDIDATE_5XX_EXPECTED_SUCCESSFUL_PAGES = 35
+SEMANTIC_CANDIDATE_5XX_EXPECTED_TOTAL_PAGES = 37
+SEMANTIC_CANDIDATE_5XX_EXPECTED_HTTP_STATUSES = {200: 35, 500: 22, 429: 2}
+SEMANTIC_CANDIDATE_5XX_EXPECTED_OCCURRENCES = 34728
+SEMANTIC_CANDIDATE_5XX_EXPECTED_CANONICAL_RECORDS = 31532
 PUBMED_TRANSPORT_RETRY_STATUS = "TRANSPORT_RETRY_AUTHORIZED_NOT_STARTED"
 PUBMED_PARSER_RECOVERY_STATUS = "PARSER_RECOVERY_COMPLETE_READY_TO_RESUME"
 ARXIV_RATE_LIMIT_RECOVERY_STATUS = "RATE_LIMIT_RECOVERY_READY_TO_RESUME"
@@ -1191,6 +1233,705 @@ def authorize_semantic_scholar_control_5xx_recovery(
             raise ExternalRetrievalWaveError(
                 "Semantic Scholar immutable control evidence changed during recovery"
             )
+    return state
+
+
+def _validate_passed_semantic_control_gate(
+    *, root: Path, source_state: Mapping[str, Any]
+) -> dict[str, Any]:
+    reference = source_state.get("semantic_control_gate", {})
+    if (
+        reference.get("status") != "PASSED"
+        or reference.get("manifest_path") != SEMANTIC_CONTROL_RECOVERY_GATE_PATH
+        or reference.get("manifest_hash")
+        != SEMANTIC_CANDIDATE_5XX_EXPECTED_CONTROL_LOGICAL_HASH
+    ):
+        raise ExternalRetrievalWaveError(
+            "Semantic Scholar passing control-gate binding changed"
+        )
+    path = _safe_output_path(root, SEMANTIC_CONTROL_RECOVERY_GATE_PATH)
+    raw = path.read_bytes()
+    if _sha256(raw) != SEMANTIC_CANDIDATE_5XX_EXPECTED_CONTROL_SHA256:
+        raise ExternalRetrievalWaveError(
+            "Semantic Scholar passing control-gate artifact changed"
+        )
+    manifest = json.loads(raw)
+    _validate_embedded_hash(manifest, "manifest_hash")
+    controls = manifest.get("controls", [])
+    if (
+        manifest.get("status") != "PASSED"
+        or manifest.get("manifest_hash") != reference["manifest_hash"]
+        or len(controls) != 6
+        or any(item.get("status") != "SUCCEEDED" for item in controls)
+        or manifest.get("failed_assertion_ids") != []
+        or manifest.get("unresolved_control_ids") != []
+        or not manifest.get("assertion_results")
+        or any(
+            result.get("passed") is not True
+            for result in manifest["assertion_results"]
+        )
+    ):
+        raise ExternalRetrievalWaveError(
+            "Semantic Scholar control gate is not the frozen passing gate"
+        )
+    response_paths: set[str] = set()
+    store = CheckpointStore(path.parent)
+    for control in controls:
+        for attempt in control.get("attempts", []):
+            response = attempt.get("response")
+            if not isinstance(response, dict):
+                raise ExternalRetrievalWaveError(
+                    "Semantic Scholar passing control attempt lacks a response"
+                )
+            relative_path = response.get("path")
+            expected_hash = response.get("sha256")
+            if (
+                not isinstance(relative_path, str)
+                or not isinstance(expected_hash, str)
+                or relative_path in response_paths
+            ):
+                raise ExternalRetrievalWaveError(
+                    "Semantic Scholar passing control response binding changed"
+                )
+            stored = store.load_response(relative_path, expected_hash)
+            response_path = path.parent / relative_path
+            if (
+                response_path.stat().st_size != response.get("byte_size")
+                or stored.status_code != response.get("status")
+            ):
+                raise ExternalRetrievalWaveError(
+                    "Semantic Scholar passing control response metadata changed"
+                )
+            response_paths.add(relative_path)
+    persisted_paths = {
+        item.relative_to(path.parent).as_posix()
+        for item in (path.parent / "responses").iterdir()
+        if item.is_file()
+    }
+    if response_paths != persisted_paths:
+        raise ExternalRetrievalWaveError(
+            "Semantic Scholar passing control response inventory changed"
+        )
+    return {
+        "manifest": _file_reference(path, root),
+        "manifest_logical_hash": manifest["manifest_hash"],
+        "response_count": len(response_paths),
+        "response_manifest_hash": _hash_payload(
+            {"responses": sorted(response_paths)}
+        ),
+    }
+
+
+def _validate_semantic_candidate_5xx_checkpoint(
+    *,
+    dataset: Any,
+    checkpoint_dir: Path,
+    root: Path,
+    wave: ProductionRetrievalWave,
+) -> dict[str, Any]:
+    if len(dataset.retrieval_runs) != 1 or len(dataset.source_queries) != 5:
+        raise ExternalRetrievalWaveError(
+            "Semantic Scholar candidate checkpoint shape changed"
+        )
+    run = dataset.retrieval_runs[0]
+    specs = _source_query_specs(wave, "SemanticScholar", ieee_credential="")
+    if (
+        run.run_id != f"{WAVE_ID}:SemanticScholar"
+        or run.query_plan_hash != _query_plan_hash(specs)
+        or run.query_plan_version != wave.query_plan_hash
+        or run.planned_query_ids
+        != [query.query_id for query in dataset.source_queries]
+        or run.source_query_ids != run.planned_query_ids
+        or run.completion_status is not RetrievalCompletionStatus.FAILED
+        or run.retrieval_cutoff_date is not None
+    ):
+        raise ExternalRetrievalWaveError(
+            "Semantic Scholar frozen run/query-plan binding changed"
+        )
+    if (
+        len(dataset.retrieval_attempts)
+        != SEMANTIC_CANDIDATE_5XX_EXPECTED_ATTEMPTS
+        or len(dataset.occurrences)
+        != SEMANTIC_CANDIDATE_5XX_EXPECTED_OCCURRENCES
+        or len(dataset.canonical_records)
+        != SEMANTIC_CANDIDATE_5XX_EXPECTED_CANONICAL_RECORDS
+        or len(dataset.retrieval_pages)
+        != SEMANTIC_CANDIDATE_5XX_EXPECTED_TOTAL_PAGES
+    ):
+        raise ExternalRetrievalWaveError(
+            "Semantic Scholar terminal candidate counts changed"
+        )
+
+    adapter = PAGINATED_SOURCE_ADAPTERS["SemanticScholar"]
+    attempts_by_id = {
+        attempt.attempt_id: attempt for attempt in dataset.retrieval_attempts
+    }
+    response_references: list[tuple[str, str]] = []
+    response_bindings: list[dict[str, Any]] = []
+    status_counts: dict[int, int] = {}
+    failed_query_indexes: list[int] = []
+    for index, (query, spec, expected) in enumerate(
+        zip(
+            dataset.source_queries,
+            specs,
+            SEMANTIC_CANDIDATE_5XX_EXPECTED_COUNTS,
+            strict=True,
+        )
+    ):
+        expected_status, expected_page_count, expected_occurrences = expected
+        expected_completion = RetrievalCompletionStatus(expected_status.lower())
+        pages = sorted(
+            (
+                page
+                for page in dataset.retrieval_pages
+                if page.source_query_id == query.query_id
+            ),
+            key=lambda item: item.ordinal,
+        )
+        occurrences = [
+            item
+            for item in dataset.occurrences
+            if item.source_query_id == query.query_id
+        ]
+        if (
+            query.query_text != spec.query_text
+            or query.query_version != spec.query_version
+            or query.endpoint != spec.endpoint
+            or query.fields != spec.fields
+            or query.metadata.get("frozen_request_specification_hash")
+            != spec.metadata["frozen_request_specification_hash"]
+            or query.metadata.get("production_query_id")
+            != spec.metadata["production_query_id"]
+            or query.metadata.get("pagination_mode") != "bulk"
+            or query.completion_status is not expected_completion
+            or query.result_count != expected_occurrences
+            or len(pages) != expected_page_count
+            or len(occurrences) != expected_occurrences
+            or query.page_ids != [page.page_id for page in pages]
+            or [page.ordinal for page in pages] != list(range(len(pages)))
+        ):
+            raise ExternalRetrievalWaveError(
+                f"Semantic Scholar QF{index + 1:02d} frozen evidence changed"
+            )
+        identifiers: set[str] = set()
+        for page in pages:
+            if page.adapter_version != adapter.version or page.strategy != adapter.strategy:
+                raise ExternalRetrievalWaveError(
+                    "Semantic Scholar candidate adapter lineage changed"
+                )
+            expected_request = adapter.build_request(spec, page.request_state)
+            page_attempts = [attempts_by_id[item] for item in page.attempt_ids]
+            if not page_attempts or any(
+                attempt.page_id != page.page_id
+                or attempt.request_hash != expected_request.request_hash()
+                or attempt.request_method != expected_request.method
+                or attempt.request_url != expected_request.url
+                or attempt.request_params != expected_request.sanitized_params()
+                or attempt.request_headers != expected_request.sanitized_headers()
+                for attempt in page_attempts
+            ):
+                raise ExternalRetrievalWaveError(
+                    "Semantic Scholar candidate request/hash binding changed"
+                )
+            for attempt in page_attempts:
+                if (
+                    attempt.raw_response_path is None
+                    or attempt.raw_response_hash is None
+                    or attempt.response_status is None
+                ):
+                    raise ExternalRetrievalWaveError(
+                        "Semantic Scholar candidate attempt lacks response evidence"
+                    )
+                try:
+                    stored = CheckpointStore(checkpoint_dir).load_response(
+                        attempt.raw_response_path, attempt.raw_response_hash
+                    )
+                except (OSError, ValueError) as exc:
+                    raise ExternalRetrievalWaveError(
+                        "Semantic Scholar candidate response hash/read failure"
+                    ) from exc
+                if stored.status_code != attempt.response_status:
+                    raise ExternalRetrievalWaveError(
+                        "Semantic Scholar candidate response status changed"
+                    )
+                if (
+                    stored.status_code == 200
+                    and attempt.status is not RetrievalAttemptStatus.SUCCEEDED
+                ) or (
+                    stored.status_code == 500
+                    and (
+                        attempt.status is not RetrievalAttemptStatus.FAILED
+                        or not str(attempt.error or "").startswith("HTTP 500 ")
+                    )
+                ) or (
+                    stored.status_code == 429
+                    and (
+                        attempt.status is not RetrievalAttemptStatus.FAILED
+                        or not str(attempt.error or "").startswith(
+                            "PROVIDER_RATE_LIMIT_PAUSED_HTTP_429"
+                        )
+                    )
+                ):
+                    raise ExternalRetrievalWaveError(
+                        "Semantic Scholar candidate attempt classification changed"
+                    )
+                status_counts[stored.status_code] = (
+                    status_counts.get(stored.status_code, 0) + 1
+                )
+                response_references.append(
+                    (attempt.raw_response_path, attempt.raw_response_hash)
+                )
+                response_path = checkpoint_dir / attempt.raw_response_path
+                response_bindings.append(
+                    {
+                        "attempt_id": attempt.attempt_id,
+                        "page_id": page.page_id,
+                        "path": response_path.relative_to(root).as_posix(),
+                        "byte_size": response_path.stat().st_size,
+                        "raw_sha256": attempt.raw_response_hash,
+                        "http_status": stored.status_code,
+                    }
+                )
+            if page.status is RetrievalCompletionStatus.COMPLETE:
+                if page.metadata.get("completion_error") is not None:
+                    raise ExternalRetrievalWaveError(
+                        "Semantic Scholar retained page has integrity-failure evidence"
+                    )
+                overlap = identifiers.intersection(page.native_identifiers)
+                if overlap or len(page.native_identifiers) != len(
+                    set(page.native_identifiers)
+                ):
+                    raise ExternalRetrievalWaveError(
+                        "Semantic Scholar retained candidate identity overlap changed"
+                    )
+                identifiers.update(page.native_identifiers)
+        if any(
+            occurrence.metadata.get("source_identifier_missing")
+            or occurrence.metadata.get("parser_incomplete")
+            for occurrence in occurrences
+        ):
+            raise ExternalRetrievalWaveError(
+                "Semantic Scholar retained candidate record is malformed"
+            )
+
+        if expected_status == "FAILED":
+            failed_query_indexes.append(index)
+            failed_page = pages[-1]
+            failed_attempts = [attempts_by_id[item] for item in failed_page.attempt_ids]
+            token = SEMANTIC_CANDIDATE_5XX_CONTINUATION_TOKENS[index]
+            if (
+                query.status is not ProcessingStatus.FAILED
+                or len(query.errors) != 1
+                or query.errors[0]
+                != failed_page.metadata.get("completion_error")
+                or failed_page.status is not RetrievalCompletionStatus.FAILED
+                or failed_page.request_state != {"mode": "bulk", "token": token}
+                or failed_page.returned_item_count != 0
+                or failed_page.occurrence_ids
+                or len(failed_attempts) != 3
+                or any(
+                    attempt.status is not RetrievalAttemptStatus.FAILED
+                    or attempt.response_status != 500
+                    or not str(attempt.error or "").startswith("HTTP 500 ")
+                    for attempt in failed_attempts
+                )
+            ):
+                raise ExternalRetrievalWaveError(
+                    "Semantic Scholar failed candidate page is not exact 5xx exhaustion"
+                )
+            for attempt in failed_attempts:
+                try:
+                    response = CheckpointStore(checkpoint_dir).load_response(
+                        attempt.raw_response_path, attempt.raw_response_hash
+                    )
+                except (OSError, ValueError) as exc:
+                    raise ExternalRetrievalWaveError(
+                        "Semantic Scholar failed response hash/read failure"
+                    ) from exc
+                if (
+                    response.json() != {"message": "Internal Server Error"}
+                    or any(
+                        str(key).lower() == "retry-after"
+                        for key in response.headers
+                    )
+                ):
+                    raise ExternalRetrievalWaveError(
+                        "Semantic Scholar failed candidate response signature changed"
+                    )
+        elif (
+            query.status is not ProcessingStatus.OK
+            or query.errors
+            or any(
+                page.status is not RetrievalCompletionStatus.COMPLETE
+                for page in pages
+            )
+        ):
+            raise ExternalRetrievalWaveError(
+                "Semantic Scholar completed-family evidence changed"
+            )
+
+    response_paths = [item[0] for item in response_references]
+    persisted_paths = {
+        item.relative_to(checkpoint_dir).as_posix()
+        for item in (checkpoint_dir / "responses").iterdir()
+        if item.is_file()
+    }
+    if (
+        failed_query_indexes != [1, 2]
+        or run.errors
+        != [
+            f"{dataset.source_queries[index].query_id}: "
+            f"{dataset.source_queries[index].errors[0]}"
+            for index in failed_query_indexes
+        ]
+        or len(response_references)
+        != SEMANTIC_CANDIDATE_5XX_EXPECTED_RESPONSES
+        or len(set(response_paths)) != len(response_paths)
+        or set(response_paths) != persisted_paths
+        or status_counts != SEMANTIC_CANDIDATE_5XX_EXPECTED_HTTP_STATUSES
+        or sum(
+            page.status is RetrievalCompletionStatus.COMPLETE
+            for page in dataset.retrieval_pages
+        )
+        != SEMANTIC_CANDIDATE_5XX_EXPECTED_SUCCESSFUL_PAGES
+    ):
+        raise ExternalRetrievalWaveError(
+            "Semantic Scholar candidate response/page inventory changed"
+        )
+    dataset.validate()
+    return {
+        "raw_response_references": response_references,
+        "raw_response_bindings": response_bindings,
+        "failed_query_indexes": failed_query_indexes,
+        "attempt_manifest_hash": _hash_payload(
+            {
+                "attempts": [
+                    {
+                        "attempt_id": attempt.attempt_id,
+                        "request_hash": attempt.request_hash,
+                        "response_status": attempt.response_status,
+                        "raw_response_hash": attempt.raw_response_hash,
+                    }
+                    for attempt in dataset.retrieval_attempts
+                ]
+            }
+        ),
+    }
+
+
+def _validate_authorized_semantic_candidate_5xx_recovery(
+    *, root: Path, source_state: Mapping[str, Any], wave: ProductionRetrievalWave
+) -> None:
+    episodes = source_state.get("execution_episodes", [])
+    if len(episodes) != 2:
+        raise ExternalRetrievalWaveError(
+            "Semantic Scholar candidate recovery episode lineage changed"
+        )
+    failed, recovered = episodes
+    if (
+        failed.get("episode_number") != 1
+        or failed.get("status") != "FAILED"
+        or failed.get("immutable") is not True
+        or recovered.get("episode_number") != 2
+        or recovered.get("status") != SEMANTIC_CANDIDATE_5XX_RECOVERY_STATUS
+        or recovered.get("recovery_of_episode_number") != 1
+        or recovered.get("network_used") is not False
+        or recovered.get("immutable") is not False
+        or source_state.get("status") != SEMANTIC_CANDIDATE_5XX_RECOVERY_STATUS
+        or source_state.get("active_episode_number") != 2
+        or source_state.get("active_checkpoint_path")
+        != recovered.get("checkpoint_path")
+        or source_state.get("checkpoint_dataset")
+        != recovered.get("checkpoint_dataset")
+    ):
+        raise ExternalRetrievalWaveError(
+            "Semantic Scholar authorized candidate recovery lineage changed"
+        )
+    source_checkpoint = _safe_output_path(
+        root, failed["checkpoint_dataset"]["path"]
+    )
+    active_checkpoint = _safe_output_path(
+        root, recovered["checkpoint_dataset"]["path"]
+    )
+    _verify_file_reference(source_checkpoint, failed["checkpoint_dataset"], root)
+    _verify_file_reference(active_checkpoint, recovered["checkpoint_dataset"], root)
+    if len(recovered.get("source_raw_responses", [])) != (
+        SEMANTIC_CANDIDATE_5XX_EXPECTED_RESPONSES
+    ):
+        raise ExternalRetrievalWaveError(
+            "Semantic Scholar candidate recovery response manifest changed"
+        )
+    _verify_recovery_raw_bindings(
+        root, recovered.get("source_raw_responses", []), "episode_1_path"
+    )
+    control = _validate_passed_semantic_control_gate(
+        root=root, source_state=source_state
+    )
+    dataset = load_review_dataset(active_checkpoint)
+    if (
+        len(dataset.retrieval_attempts)
+        != SEMANTIC_CANDIDATE_5XX_EXPECTED_ATTEMPTS
+        or len(dataset.occurrences)
+        != SEMANTIC_CANDIDATE_5XX_EXPECTED_OCCURRENCES
+        or [
+            query.completion_status.value for query in dataset.source_queries
+        ]
+        != ["complete", "running", "running", "complete", "complete"]
+        or [
+            page.request_state
+            for page in dataset.retrieval_pages
+            if page.status is RetrievalCompletionStatus.RUNNING
+        ]
+        != [
+            {"mode": "bulk", "token": token}
+            for token in SEMANTIC_CANDIDATE_5XX_CONTINUATION_TOKENS[1:3]
+        ]
+        or recovered.get("frozen_wave_manifest_hash") != wave.manifest_hash()
+        or recovered.get("frozen_query_plan_hash") != wave.query_plan_hash
+        or recovered.get("control_gate") != control
+    ):
+        raise ExternalRetrievalWaveError(
+            "Semantic Scholar active candidate recovery checkpoint changed"
+        )
+
+
+def authorize_semantic_scholar_candidate_5xx_recovery(
+    *, root: str | Path, timestamp: Callable[[], str] = utc_now
+) -> dict[str, Any]:
+    """Reopen only the two exact retryable-5xx-exhausted candidate pages."""
+
+    root_path = Path(root).resolve()
+    wave, preflight = validate_persisted_external_preflight(root=root_path)
+    state_path = _safe_output_path(root_path, EXECUTION_STATE_PATH)
+    if not state_path.is_file():
+        raise ExternalRetrievalWaveError("external execution state does not exist")
+    state_bytes = state_path.read_bytes()
+    state = _load_execution_state(state_path, root_path, wave, preflight)
+    source_state = state["sources"]["SemanticScholar"]
+    if source_state.get("status") == SEMANTIC_CANDIDATE_5XX_RECOVERY_STATUS:
+        _validate_authorized_semantic_candidate_5xx_recovery(
+            root=root_path, source_state=source_state, wave=wave
+        )
+        return state
+    if _sha256(state_bytes) != SEMANTIC_CANDIDATE_5XX_EXPECTED_STALE_STATE_SHA256:
+        raise ExternalRetrievalWaveError(
+            "Semantic Scholar candidate recovery requires the exact stale global state"
+        )
+    if state.get("external_retrieval_cutoff_date") is not None:
+        raise ExternalRetrievalWaveError(
+            "Semantic Scholar candidate recovery cannot alter a closed retrieval wave"
+        )
+
+    checkpoint_relative = f"{EXECUTION_ROOT}/SemanticScholar/checkpoint"
+    checkpoint_path = _safe_output_path(
+        root_path, f"{checkpoint_relative}/review_dataset.json"
+    )
+    checkpoint_raw = checkpoint_path.read_bytes()
+    if _sha256(checkpoint_raw) != SEMANTIC_CANDIDATE_5XX_EXPECTED_CHECKPOINT_SHA256:
+        raise ExternalRetrievalWaveError(
+            "Semantic Scholar terminal candidate checkpoint digest changed"
+        )
+    try:
+        dataset = load_review_dataset(checkpoint_path)
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        raise ExternalRetrievalWaveError(
+            "Semantic Scholar terminal candidate checkpoint is invalid"
+        ) from exc
+    validated = _validate_semantic_candidate_5xx_checkpoint(
+        dataset=dataset,
+        checkpoint_dir=checkpoint_path.parent,
+        root=root_path,
+        wave=wave,
+    )
+    control = _validate_passed_semantic_control_gate(
+        root=root_path, source_state=source_state
+    )
+    other_sources_before = {
+        key: json.loads(json.dumps(value, sort_keys=True))
+        for key, value in state["sources"].items()
+        if key != "SemanticScholar"
+    }
+    source_state_before = json.loads(json.dumps(source_state, sort_keys=True))
+    recovered_at = timestamp()
+    recovery_checkpoint_relative = (
+        f"{EXECUTION_ROOT}/SemanticScholar/episodes/episode-002/checkpoint"
+    )
+    recovery_checkpoint_dir = _safe_output_path(
+        root_path, recovery_checkpoint_relative
+    )
+    if recovery_checkpoint_dir.exists():
+        raise ExternalRetrievalWaveError(
+            "Semantic Scholar candidate recovery checkpoint exists without lineage"
+        )
+    response_bindings = _copy_recovery_raw_responses(
+        root=root_path,
+        source_checkpoint_dir=checkpoint_path.parent,
+        recovery_checkpoint_dir=recovery_checkpoint_dir,
+        raw_response_references=validated["raw_response_references"],
+        source_path_key="episode_1_path",
+        error_prefix="Semantic Scholar candidate-5xx",
+    )
+
+    run = dataset.retrieval_runs[0]
+    run.status = ProcessingStatus.PARTIAL
+    run.completion_status = RetrievalCompletionStatus.RUNNING
+    run.retrieval_completed_at = recovered_at
+    run.retrieval_cutoff_date = None
+    run.errors = [
+        "offline Semantic Scholar candidate-5xx recovery complete; live resume pending"
+    ]
+    run.metadata.pop("pause_state", None)
+    run.metadata.pop("pause_reason", None)
+    run.metadata.pop("pause_metadata", None)
+    run.metadata.pop("session_request_count", None)
+    continuation_states = []
+    for index in validated["failed_query_indexes"]:
+        query = dataset.source_queries[index]
+        page = next(
+            item
+            for item in dataset.retrieval_pages
+            if item.page_id == query.page_ids[-1]
+        )
+        page.status = RetrievalCompletionStatus.RUNNING
+        page.metadata.pop("completion_error", None)
+        query.status = ProcessingStatus.PARTIAL
+        query.completion_status = RetrievalCompletionStatus.RUNNING
+        query.errors = []
+        query.retrieval_ended_at = recovered_at
+        query.metadata.pop("pause_state", None)
+        query.metadata.pop("pause_reason", None)
+        query.metadata.pop("pause_metadata", None)
+        continuation_states.append(
+            {
+                "query_id": query.query_id,
+                "production_query_id": query.metadata["production_query_id"],
+                "page_id": page.page_id,
+                "request_state": dict(page.request_state),
+                "request_hash": dataset.retrieval_attempts[
+                    next(
+                        position
+                        for position, attempt in enumerate(dataset.retrieval_attempts)
+                        if attempt.attempt_id == page.attempt_ids[-1]
+                    )
+                ].request_hash,
+            }
+        )
+    run.metadata["offline_semantic_candidate_5xx_recovery"] = {
+        "recovery_episode_number": 2,
+        "source_episode_number": 1,
+        "source_checkpoint": _file_reference(checkpoint_path, root_path),
+        "source_attempt_manifest_hash": validated["attempt_manifest_hash"],
+        "source_response_count": len(response_bindings),
+        "source_response_manifest_hash": _hash_payload(
+            {"responses": response_bindings}
+        ),
+        "successful_page_count": SEMANTIC_CANDIDATE_5XX_EXPECTED_SUCCESSFUL_PAGES,
+        "continuation_states": continuation_states,
+        "control_gate": control,
+        "network_used": False,
+    }
+    dataset.validate()
+    store = CheckpointStore(recovery_checkpoint_dir)
+    checkpoint_hash = store.save_dataset(dataset)
+    recovered_checkpoint_reference = _file_reference(store.dataset_path, root_path)
+    if checkpoint_hash != recovered_checkpoint_reference["raw_sha256"]:
+        raise ExternalRetrievalWaveError(
+            "Semantic Scholar candidate recovery checkpoint hash disagreement"
+        )
+    if (
+        checkpoint_path.stat().st_size != len(checkpoint_raw)
+        or _sha256(checkpoint_path.read_bytes())
+        != SEMANTIC_CANDIDATE_5XX_EXPECTED_CHECKPOINT_SHA256
+    ):
+        raise ExternalRetrievalWaveError(
+            "Semantic Scholar terminal candidate checkpoint changed during recovery"
+        )
+    _verify_recovery_raw_bindings(root_path, response_bindings, "episode_1_path")
+
+    source_checkpoint_reference = _file_reference(checkpoint_path, root_path)
+    episode_1 = {
+        "episode_number": 1,
+        "episode_id": "SemanticScholar-episode-001",
+        "run_id": run.run_id,
+        "status": "FAILED",
+        "checkpoint_path": checkpoint_relative,
+        "checkpoint_dataset": source_checkpoint_reference,
+        "frozen_wave_manifest_hash": wave.manifest_hash(),
+        "frozen_query_plan_hash": wave.query_plan_hash,
+        "attempt_count": SEMANTIC_CANDIDATE_5XX_EXPECTED_ATTEMPTS,
+        "response_count": SEMANTIC_CANDIDATE_5XX_EXPECTED_RESPONSES,
+        "successful_page_count": SEMANTIC_CANDIDATE_5XX_EXPECTED_SUCCESSFUL_PAGES,
+        "occurrence_count": SEMANTIC_CANDIDATE_5XX_EXPECTED_OCCURRENCES,
+        "completed_query_count": 3,
+        "failure_classification": "RETRYABLE_PROVIDER_5XX_EXHAUSTION",
+        "source_state_snapshot": source_state_before,
+        "immutable": True,
+    }
+    episode_2 = {
+        "episode_number": 2,
+        "episode_id": "SemanticScholar-episode-002",
+        "run_id": run.run_id,
+        "status": SEMANTIC_CANDIDATE_5XX_RECOVERY_STATUS,
+        "recovery_of_episode_number": 1,
+        "authorization_reason": (
+            "OFFLINE_SEMANTIC_SCHOLAR_CANDIDATE_5XX_EXHAUSTION_RECOVERY"
+        ),
+        "authorized_at_utc": recovered_at,
+        "checkpoint_path": recovery_checkpoint_relative,
+        "checkpoint_dataset": recovered_checkpoint_reference,
+        "frozen_wave_manifest_hash": wave.manifest_hash(),
+        "frozen_query_plan_hash": wave.query_plan_hash,
+        "source_episode_checkpoint": source_checkpoint_reference,
+        "source_attempt_manifest_hash": validated["attempt_manifest_hash"],
+        "source_raw_responses": response_bindings,
+        "retained_successful_page_count": (
+            SEMANTIC_CANDIDATE_5XX_EXPECTED_SUCCESSFUL_PAGES
+        ),
+        "continuation_states": continuation_states,
+        "control_gate": control,
+        "network_used": False,
+        "immutable": False,
+    }
+    source_state.update(
+        {
+            "status": SEMANTIC_CANDIDATE_5XX_RECOVERY_STATUS,
+            "execution_episodes": [episode_1, episode_2],
+            "active_episode_number": 2,
+            "active_run_id": run.run_id,
+            "active_checkpoint_path": recovery_checkpoint_relative,
+            "checkpoint_path": recovery_checkpoint_relative,
+            "checkpoint_dataset": recovered_checkpoint_reference,
+            "completed_query_count": 3,
+            "total_query_count": 5,
+            "occurrence_count": len(dataset.occurrences),
+            "attempt_count": len(dataset.retrieval_attempts),
+            "preserved_source_attempt_count": (
+                SEMANTIC_CANDIDATE_5XX_EXPECTED_ATTEMPTS
+            ),
+            "preserved_source_response_count": len(response_bindings),
+            "requests_this_session": 0,
+            "candidate_request_count": 0,
+            "pause_reason": (
+                "OFFLINE_CANDIDATE_5XX_RECOVERY_COMPLETE; LIVE_RESUME_REQUIRED"
+            ),
+            "failure_reason": None,
+            "last_session_started_at_utc": recovered_at,
+            "last_session_completed_at_utc": recovered_at,
+        }
+    )
+    source_state.pop("pause_metadata", None)
+    if {
+        key: value
+        for key, value in state["sources"].items()
+        if key != "SemanticScholar"
+    } != other_sources_before:
+        raise ExternalRetrievalWaveError(
+            "Semantic Scholar candidate recovery changed another source"
+        )
+    state["status"] = "RUNNING"
+    state["external_retrieval_completed_at_utc"] = None
+    state["external_retrieval_cutoff_date"] = None
+    _save_execution_state(state_path, state)
     return state
 
 
@@ -2812,6 +3553,11 @@ def execute_external_source_session(
             if source in {"arXiv", "SemanticScholar"}
             else frozenset()
         ),
+        resumable_provider_5xx_exhaustion_sources=(
+            frozenset({"SemanticScholar"})
+            if source == "SemanticScholar"
+            else frozenset()
+        ),
     )
     after_attempts = len(dataset.retrieval_attempts)
     requests_this_session = after_attempts - before_attempts
@@ -2844,6 +3590,10 @@ def execute_external_source_session(
         pause_reason = run.metadata.get("pause_reason")
     elif pause_state == "TRANSIENT_TRANSPORT_EXHAUSTED":
         status = "PAUSED_TRANSIENT_TRANSPORT"
+        failure_reason = None
+        pause_reason = run.metadata.get("pause_reason")
+    elif pause_state == "TRANSIENT_PROVIDER_5XX_EXHAUSTED":
+        status = "PAUSED_TRANSIENT_PROVIDER"
         failure_reason = None
         pause_reason = run.metadata.get("pause_reason")
     else:
@@ -6240,7 +6990,65 @@ def main(argv: list[str] | None = None) -> int:
         "--authorize-semantic-scholar-control-5xx-recovery",
         action="store_true",
     )
+    parser.add_argument(
+        "--authorize-semantic-scholar-candidate-5xx-recovery",
+        action="store_true",
+    )
     args = parser.parse_args(argv)
+    if args.authorize_semantic_scholar_candidate_5xx_recovery:
+        if args.source != "SemanticScholar":
+            parser.error(
+                "candidate-5xx recovery is supported only for --source "
+                "SemanticScholar"
+            )
+        if (
+            args.authorize_live_external_retrieval
+            or args.authorize_transport_retry_reset
+            or args.authorize_pubmed_parser_recovery
+            or args.authorize_europe_pmc_terminal_recovery
+            or args.authorize_ieee_total_drift_recovery
+            or args.authorize_ieee_repeated_window_recovery
+            or args.authorize_arxiv_rate_limit_recovery
+            or args.authorize_arxiv_mixed_state_recovery
+            or args.authorize_semantic_scholar_control_5xx_recovery
+            or args.resume
+        ):
+            parser.error(
+                "Semantic Scholar candidate-5xx recovery is a separate offline "
+                "authorization boundary"
+            )
+        state = authorize_semantic_scholar_candidate_5xx_recovery(root=args.root)
+        source_state = state["sources"]["SemanticScholar"]
+        active = source_state["execution_episodes"][1]
+        print(
+            json.dumps(
+                {
+                    "execution_status": state["status"],
+                    "source": "SemanticScholar",
+                    "source_status": source_state["status"],
+                    "active_episode_number": source_state[
+                        "active_episode_number"
+                    ],
+                    "completed_query_count": source_state[
+                        "completed_query_count"
+                    ],
+                    "retained_successful_page_count": active[
+                        "retained_successful_page_count"
+                    ],
+                    "preserved_candidate_response_count": len(
+                        active["source_raw_responses"]
+                    ),
+                    "continuation_states": active["continuation_states"],
+                    "external_retrieval_cutoff_date": state[
+                        "external_retrieval_cutoff_date"
+                    ],
+                    "network_used": False,
+                },
+                sort_keys=True,
+                indent=2,
+            )
+        )
+        return 0
     if args.authorize_semantic_scholar_control_5xx_recovery:
         if args.source != "SemanticScholar":
             parser.error(

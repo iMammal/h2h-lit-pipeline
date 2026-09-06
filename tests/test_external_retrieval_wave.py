@@ -21,6 +21,7 @@ from h2h_lit.external_retrieval_wave import (
     PUBMED_EPISODE_2_OMITTED_BOOK_PMIDS,
     PUBMED_PARSER_RECOVERY_STATUS,
     READY_STATUS,
+    SEMANTIC_CANDIDATE_5XX_RECOVERY_STATUS,
     SEMANTIC_CONTROL_5XX_RECOVERY_STATUS,
     SEMANTIC_CONTROL_GATE_PATH,
     SEMANTIC_CONTROL_RECOVERY_GATE_PATH,
@@ -34,6 +35,7 @@ from h2h_lit.external_retrieval_wave import (
     authorize_ieee_total_drift_recovery,
     authorize_pubmed_parser_recovery,
     authorize_pubmed_transport_retry,
+    authorize_semantic_scholar_candidate_5xx_recovery,
     authorize_semantic_scholar_control_5xx_recovery,
     build_external_retrieval_wave,
     execute_external_source_session,
@@ -2211,6 +2213,178 @@ def _blocked_semantic_control_5xx_gate(
     return state, clock
 
 
+def _failed_semantic_candidate_5xx_checkpoint(
+    tmp_path, monkeypatch, external_wave, external_preflight
+):
+    _install_semantic_runtime(
+        tmp_path, monkeypatch, external_wave, external_preflight
+    )
+    monkeypatch.setattr(
+        external_module,
+        "SEMANTIC_CONTROL_RECOVERY_GATE_PATH",
+        SEMANTIC_CONTROL_GATE_PATH,
+    )
+    original_executor = external_module.execute_paginated_retrieval_run
+
+    def terminal_5xx_executor(**kwargs):
+        kwargs["resumable_provider_5xx_exhaustion_sources"] = frozenset()
+        return original_executor(**kwargs)
+
+    monkeypatch.setattr(
+        external_module,
+        "execute_paginated_retrieval_run",
+        terminal_5xx_executor,
+    )
+    candidate_responses = [
+        FakeResponse(
+            payload={
+                "total": 1,
+                "data": [{"paperId": "S1", "title": "QF01"}],
+            }
+        ),
+        FakeResponse(
+            payload={
+                "total": 2,
+                "token": "token-qf02",
+                "data": [{"paperId": "S2", "title": "QF02 first"}],
+            }
+        ),
+        _semantic_500(),
+        _semantic_500(),
+        _semantic_500(),
+        FakeResponse(
+            payload={
+                "total": 2,
+                "token": "token-qf03",
+                "data": [{"paperId": "S3", "title": "QF03 first"}],
+            }
+        ),
+        _semantic_500(),
+        _semantic_500(),
+        _semantic_500(),
+        FakeResponse(
+            payload={
+                "total": 1,
+                "data": [{"paperId": "S4", "title": "QF04"}],
+            }
+        ),
+        FakeResponse(
+            payload={
+                "total": 1,
+                "data": [{"paperId": "S5", "title": "QF05"}],
+            }
+        ),
+    ]
+    clock = Clock()
+    failed = execute_external_source_session(
+        root=tmp_path,
+        source="SemanticScholar",
+        http=FakeHttp([*_passing_semantic_controls(), *candidate_responses]),
+        resume=False,
+        timestamp=clock,
+        retry_policy=RetryPolicy(max_attempts=3, base_delay_seconds=0),
+        rate_limiter=RateLimiter({}),
+        retry_sleep=lambda _: None,
+    )
+    assert failed["sources"]["SemanticScholar"]["status"] == "FAILED"
+    monkeypatch.setattr(
+        external_module,
+        "execute_paginated_retrieval_run",
+        original_executor,
+    )
+
+    checkpoint = (
+        tmp_path
+        / external_module.EXECUTION_ROOT
+        / "SemanticScholar/checkpoint/review_dataset.json"
+    )
+    control = tmp_path / SEMANTIC_CONTROL_GATE_PATH
+    monkeypatch.setattr(
+        external_module,
+        "SEMANTIC_CANDIDATE_5XX_EXPECTED_CHECKPOINT_SHA256",
+        hashlib.sha256(checkpoint.read_bytes()).hexdigest(),
+    )
+    monkeypatch.setattr(
+        external_module,
+        "SEMANTIC_CANDIDATE_5XX_EXPECTED_CONTROL_SHA256",
+        hashlib.sha256(control.read_bytes()).hexdigest(),
+    )
+    monkeypatch.setattr(
+        external_module,
+        "SEMANTIC_CANDIDATE_5XX_EXPECTED_CONTROL_LOGICAL_HASH",
+        json.loads(control.read_text())["manifest_hash"],
+    )
+    monkeypatch.setattr(
+        external_module,
+        "SEMANTIC_CANDIDATE_5XX_EXPECTED_COUNTS",
+        (
+            ("COMPLETE", 1, 1),
+            ("FAILED", 2, 1),
+            ("FAILED", 2, 1),
+            ("COMPLETE", 1, 1),
+            ("COMPLETE", 1, 1),
+        ),
+    )
+    monkeypatch.setattr(
+        external_module,
+        "SEMANTIC_CANDIDATE_5XX_CONTINUATION_TOKENS",
+        (None, "token-qf02", "token-qf03", None, None),
+    )
+    monkeypatch.setattr(
+        external_module, "SEMANTIC_CANDIDATE_5XX_EXPECTED_ATTEMPTS", 11
+    )
+    monkeypatch.setattr(
+        external_module, "SEMANTIC_CANDIDATE_5XX_EXPECTED_RESPONSES", 11
+    )
+    monkeypatch.setattr(
+        external_module,
+        "SEMANTIC_CANDIDATE_5XX_EXPECTED_SUCCESSFUL_PAGES",
+        5,
+    )
+    monkeypatch.setattr(
+        external_module, "SEMANTIC_CANDIDATE_5XX_EXPECTED_TOTAL_PAGES", 7
+    )
+    monkeypatch.setattr(
+        external_module,
+        "SEMANTIC_CANDIDATE_5XX_EXPECTED_HTTP_STATUSES",
+        {200: 5, 500: 6},
+    )
+    monkeypatch.setattr(
+        external_module, "SEMANTIC_CANDIDATE_5XX_EXPECTED_OCCURRENCES", 5
+    )
+    monkeypatch.setattr(
+        external_module,
+        "SEMANTIC_CANDIDATE_5XX_EXPECTED_CANONICAL_RECORDS",
+        5,
+    )
+
+    state_path = tmp_path / external_module.EXECUTION_STATE_PATH
+    state = json.loads(state_path.read_text())
+    source = state["sources"]["SemanticScholar"]
+    source.update(
+        {
+            "status": "RUNNING",
+            "completed_query_count": 2,
+            "attempt_count": 8,
+            "occurrence_count": 4,
+            "checkpoint_dataset": {
+                "path": checkpoint.relative_to(tmp_path).as_posix(),
+                "byte_size": 1,
+                "raw_sha256": "stale-pointer",
+            },
+            "last_session_completed_at_utc": None,
+        }
+    )
+    source["failure_reason"] = None
+    external_module._save_execution_state(state_path, state)
+    monkeypatch.setattr(
+        external_module,
+        "SEMANTIC_CANDIDATE_5XX_EXPECTED_STALE_STATE_SHA256",
+        hashlib.sha256(state_path.read_bytes()).hexdigest(),
+    )
+    return state, clock, checkpoint
+
+
 def test_semantic_control_5xx_exhaustion_pauses_with_fresh_resume_budget(
     tmp_path, monkeypatch, external_wave, external_preflight
 ) -> None:
@@ -2269,6 +2443,49 @@ def test_semantic_control_5xx_exhaustion_pauses_with_fresh_resume_budget(
         attempt["response"]["sha256"]
         for attempt in gate["controls"][0]["attempts"]
     )
+
+
+def test_semantic_candidate_5xx_exhaustion_maps_to_resumable_source_pause(
+    tmp_path, monkeypatch, external_wave, external_preflight
+) -> None:
+    _install_semantic_runtime(
+        tmp_path, monkeypatch, external_wave, external_preflight
+    )
+    clock = Clock()
+    first_http = FakeHttp(
+        [*_passing_semantic_controls(), *[_semantic_500() for _ in range(3)]]
+    )
+    paused = execute_external_source_session(
+        root=tmp_path,
+        source="SemanticScholar",
+        http=first_http,
+        resume=False,
+        timestamp=clock,
+        retry_policy=RetryPolicy(max_attempts=3, base_delay_seconds=0),
+        rate_limiter=RateLimiter({}),
+        retry_sleep=lambda _: None,
+    )
+
+    source = paused["sources"]["SemanticScholar"]
+    assert source["status"] == "PAUSED_TRANSIENT_PROVIDER"
+    assert source["completed_query_count"] == 0
+    assert source["requests_this_session"] == 3
+    assert source["pause_reason"] == "RETRYABLE_PROVIDER_5XX_EXHAUSTED"
+    assert source["pause_metadata"]["http_statuses"] == [500, 500, 500]
+
+    resumed_http = FakeHttp(_semantic_candidate_responses())
+    completed = execute_external_source_session(
+        root=tmp_path,
+        source="SemanticScholar",
+        http=resumed_http,
+        resume=True,
+        timestamp=clock,
+        retry_policy=RetryPolicy(max_attempts=3, base_delay_seconds=0),
+        rate_limiter=RateLimiter({}),
+        retry_sleep=lambda _: None,
+    )
+    assert completed["sources"]["SemanticScholar"]["status"] == "COMPLETE"
+    assert len(resumed_http.calls) == 5
 
 
 def test_semantic_control_5xx_recovery_preserves_evidence_and_resumes_in_order(
@@ -2390,6 +2607,161 @@ def test_semantic_control_5xx_recovery_preserves_evidence_and_resumes_in_order(
     assert gate_path.read_bytes() == gate_bytes
     for name, content in response_bytes.items():
         assert (gate_path.parent / "responses" / name).read_bytes() == content
+
+
+def test_semantic_candidate_5xx_recovery_preserves_and_resumes_only_failed_qfs(
+    tmp_path, monkeypatch, external_wave, external_preflight
+) -> None:
+    before, clock, checkpoint = _failed_semantic_candidate_5xx_checkpoint(
+        tmp_path, monkeypatch, external_wave, external_preflight
+    )
+    checkpoint_bytes = checkpoint.read_bytes()
+    response_bytes = {
+        path.name: path.read_bytes()
+        for path in sorted((checkpoint.parent / "responses").iterdir())
+    }
+    other_sources = {
+        key: json.loads(json.dumps(value, sort_keys=True))
+        for key, value in before["sources"].items()
+        if key != "SemanticScholar"
+    }
+
+    recovered = authorize_semantic_scholar_candidate_5xx_recovery(
+        root=tmp_path, timestamp=clock
+    )
+    source = recovered["sources"]["SemanticScholar"]
+    assert source["status"] == SEMANTIC_CANDIDATE_5XX_RECOVERY_STATUS
+    assert source["active_episode_number"] == 2
+    assert source["completed_query_count"] == 3
+    assert source["requests_this_session"] == 0
+    assert source["checkpoint_dataset"] != before["sources"][
+        "SemanticScholar"
+    ]["checkpoint_dataset"]
+    assert source["checkpoint_dataset"] == source["execution_episodes"][1][
+        "checkpoint_dataset"
+    ]
+    assert source["execution_episodes"][0]["immutable"] is True
+    assert source["execution_episodes"][1]["immutable"] is False
+    assert checkpoint.read_bytes() == checkpoint_bytes
+    assert {
+        name: (checkpoint.parent / "responses" / name).read_bytes()
+        for name in response_bytes
+    } == response_bytes
+    assert {
+        key: value
+        for key, value in recovered["sources"].items()
+        if key != "SemanticScholar"
+    } == other_sources
+    assert recovered["external_retrieval_cutoff_date"] is None
+
+    active_checkpoint = tmp_path / source["checkpoint_dataset"]["path"]
+    active = external_module.load_review_dataset(active_checkpoint)
+    assert [query.completion_status.value for query in active.source_queries] == [
+        "complete",
+        "running",
+        "running",
+        "complete",
+        "complete",
+    ]
+    assert [
+        page.request_state
+        for page in active.retrieval_pages
+        if page.status.value == "running"
+    ] == [
+        {"mode": "bulk", "token": "token-qf02"},
+        {"mode": "bulk", "token": "token-qf03"},
+    ]
+    assert len(active.retrieval_attempts) == 11
+    assert len(active.occurrences) == 5
+    assert len(source["execution_episodes"][1]["source_raw_responses"]) == 11
+    assert all(
+        (tmp_path / binding["recovery_copy_path"]).read_bytes()
+        == (tmp_path / binding["episode_1_path"]).read_bytes()
+        for binding in source["execution_episodes"][1]["source_raw_responses"]
+    )
+    assert (
+        authorize_semantic_scholar_candidate_5xx_recovery(
+            root=tmp_path, timestamp=clock
+        )
+        == recovered
+    )
+
+    http = FakeHttp(
+        [
+            FakeResponse(
+                payload={
+                    "total": 2,
+                    "data": [{"paperId": "S2b", "title": "QF02 second"}],
+                }
+            ),
+            FakeResponse(
+                payload={
+                    "total": 2,
+                    "data": [{"paperId": "S3b", "title": "QF03 second"}],
+                }
+            ),
+        ]
+    )
+    completed = execute_external_source_session(
+        root=tmp_path,
+        source="SemanticScholar",
+        http=http,
+        resume=True,
+        timestamp=clock,
+        retry_policy=RetryPolicy(max_attempts=3, base_delay_seconds=0),
+        rate_limiter=RateLimiter({}),
+        retry_sleep=lambda _: None,
+    )
+    assert completed["sources"]["SemanticScholar"]["status"] == "COMPLETE"
+    assert len(http.calls) == 2
+    assert http.calls[0]["params"]["token"] == "token-qf02"
+    assert http.calls[1]["params"]["token"] == "token-qf03"
+
+
+@pytest.mark.parametrize(
+    "drift",
+    ["response", "query", "request", "token", "completed-family"],
+)
+def test_semantic_candidate_5xx_recovery_refuses_corruption_and_drift(
+    tmp_path, monkeypatch, external_wave, external_preflight, drift
+) -> None:
+    _, clock, checkpoint = _failed_semantic_candidate_5xx_checkpoint(
+        tmp_path, monkeypatch, external_wave, external_preflight
+    )
+    if drift == "response":
+        response = next((checkpoint.parent / "responses").iterdir())
+        response.write_bytes(response.read_bytes() + b"corrupt")
+    else:
+        payload = json.loads(checkpoint.read_text())
+        if drift == "query":
+            payload["source_queries"][0]["query_text"] += " changed"
+        elif drift == "request":
+            payload["retrieval_attempts"][0]["request_hash"] = "changed"
+        elif drift == "token":
+            failed_page = next(
+                page
+                for page in payload["retrieval_pages"]
+                if page["source_query_id"]
+                == payload["source_queries"][1]["query_id"]
+                and page["status"] == "failed"
+            )
+            failed_page["request_state"]["token"] = "changed"
+        else:
+            payload["source_queries"][0]["result_count"] = 2
+        external_module.atomic_write(
+            checkpoint,
+            (json.dumps(payload, indent=2, sort_keys=True) + "\n").encode(),
+        )
+        monkeypatch.setattr(
+            external_module,
+            "SEMANTIC_CANDIDATE_5XX_EXPECTED_CHECKPOINT_SHA256",
+            hashlib.sha256(checkpoint.read_bytes()).hexdigest(),
+        )
+
+    with pytest.raises(ExternalRetrievalWaveError):
+        authorize_semantic_scholar_candidate_5xx_recovery(
+            root=tmp_path, timestamp=clock
+        )
 
 
 @pytest.mark.parametrize("corruption", ["response", "query", "candidate"])

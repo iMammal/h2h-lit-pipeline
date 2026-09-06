@@ -373,6 +373,7 @@ def execute_paginated_retrieval_run(
     request_budget: int | None = None,
     pause_status_codes: frozenset[int] = frozenset(),
     resumable_transport_exhaustion_sources: frozenset[str] = frozenset(),
+    resumable_provider_5xx_exhaustion_sources: frozenset[str] = frozenset(),
 ) -> ReviewDataset:
     """Execute a complete, checkpointed retrieval wave without scientific filtering."""
 
@@ -608,6 +609,8 @@ def execute_paginated_retrieval_run(
                 per_invocation=(
                     spec.source_database
                     in resumable_transport_exhaustion_sources
+                    or spec.source_database
+                    in resumable_provider_5xx_exhaustion_sources
                 ),
             ):
                 if request_budget is not None and requests_made >= request_budget:
@@ -695,6 +698,8 @@ def execute_paginated_retrieval_run(
                         per_invocation=(
                             spec.source_database
                             in resumable_transport_exhaustion_sources
+                            or spec.source_database
+                            in resumable_provider_5xx_exhaustion_sources
                         ),
                     ):
                         invocation_attempt_number = (
@@ -803,9 +808,35 @@ def execute_paginated_retrieval_run(
                 attempt.ended_at = timestamp()
                 attempt.error = f"HTTP {response.status_code} from {response.url}"
                 retryable = response.status_code in retry_policy.retry_statuses
-                if retryable and len(existing_attempts) < retry_policy.max_attempts:
-                    retry_after = _header(response.headers, "retry-after")
-                    delay = retry_policy.delay(attempt.attempt_number, retry_after)
+                retry_after = _header(response.headers, "retry-after")
+                resumable_provider_5xx = (
+                    spec.source_database
+                    in resumable_provider_5xx_exhaustion_sources
+                    and 500 <= response.status_code < 600
+                    and retryable
+                )
+                if resumable_provider_5xx:
+                    attempt.metadata["provider_retry"] = {
+                        "http_status": response.status_code,
+                        "retry_after_header_present": retry_after is not None,
+                        "retry_after": retry_after,
+                    }
+                if retryable and _attempt_budget_remaining(
+                    existing_attempts,
+                    ordinary_attempts_before_invocation,
+                    retry_policy.max_attempts,
+                    per_invocation=resumable_provider_5xx,
+                ):
+                    invocation_attempt_number = (
+                        _ordinary_attempt_count(existing_attempts)
+                        - ordinary_attempts_before_invocation
+                    )
+                    delay = retry_policy.delay(
+                        invocation_attempt_number
+                        if resumable_provider_5xx
+                        else attempt.attempt_number,
+                        retry_after,
+                    )
                     attempt.retry_delay_seconds = delay
                     retry_sleep(delay)
                     response = None
@@ -814,6 +845,43 @@ def execute_paginated_retrieval_run(
                         store, dataset, protocol_version, rubric_version, software_version
                     )
                     continue
+                invocation_attempts = existing_attempts[
+                    attempt_records_before_invocation:
+                ]
+                if (
+                    resumable_provider_5xx
+                    and len(invocation_attempts) == retry_policy.max_attempts
+                    and all(
+                        _is_retryable_provider_5xx_attempt(item, retry_policy)
+                        for item in invocation_attempts
+                    )
+                ):
+                    pause_metadata = {
+                        "source_database": spec.source_database,
+                        "http_statuses": [
+                            item.response_status for item in invocation_attempts
+                        ],
+                        "retry_after_header_present": retry_after is not None,
+                        "retry_after": retry_after,
+                        "attempts_this_invocation": len(invocation_attempts),
+                        "maximum_attempts_per_invocation": (
+                            retry_policy.max_attempts
+                        ),
+                    }
+                    _touch(dataset, query, attempt.ended_at)
+                    return _pause_retrieval(
+                        store,
+                        dataset,
+                        query,
+                        pause_state="TRANSIENT_PROVIDER_5XX_EXHAUSTED",
+                        reason="RETRYABLE_PROVIDER_5XX_EXHAUSTED",
+                        pause_metadata=pause_metadata,
+                        requests_made=requests_made,
+                        timestamp=timestamp,
+                        protocol_version=protocol_version,
+                        rubric_version=rubric_version,
+                        software_version=software_version,
+                    )
                 _fail_page(page, query, attempt.error)
                 break
 
@@ -996,6 +1064,20 @@ def _is_provider_rate_limit_pause_attempt(attempt: RetrievalAttempt) -> bool:
         )
         and attempt.raw_response_path is not None
         and attempt.raw_response_hash is not None
+    )
+
+
+def _is_retryable_provider_5xx_attempt(
+    attempt: RetrievalAttempt, retry_policy: RetryPolicy
+) -> bool:
+    return (
+        attempt.status is RetrievalAttemptStatus.FAILED
+        and attempt.response_status is not None
+        and 500 <= attempt.response_status < 600
+        and attempt.response_status in retry_policy.retry_statuses
+        and attempt.raw_response_path is not None
+        and attempt.raw_response_hash is not None
+        and str(attempt.error or "").startswith("HTTP ")
     )
 
 
