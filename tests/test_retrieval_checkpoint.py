@@ -711,7 +711,15 @@ def test_arxiv_rate_limit_pause_resumes_same_frozen_initial_request(tmp_path):
 def test_arxiv_successful_response_validation_remains_fail_closed(tmp_path):
     malformed = execute_paginated_retrieval_run(
         run_id="run:arxiv-malformed-after-rate-limit-change",
-        queries=[RetrievalQuerySpec("arXiv", "cells", "arxiv-v2", limit=2)],
+        queries=[
+            RetrievalQuerySpec(
+                "arXiv",
+                "cells",
+                "arxiv-v2",
+                limit=2,
+                metadata={"request_timeout_seconds": 120.0},
+            )
+        ],
         http_clients={"arXiv": FakeHttp([FakeResponse(content=b"not XML")])},
         checkpoint_dir=tmp_path / "arxiv-malformed-after-rate-limit-change",
         timestamp=Clock(),
@@ -742,7 +750,15 @@ def test_arxiv_identity_and_pagination_validation_remain_fail_closed(
         responses = [FakeResponse(content=_arxiv_feed("a1", total=1, start=1))]
     dataset = execute_paginated_retrieval_run(
         run_id=f"run:arxiv-validation:{failure_kind}",
-        queries=[RetrievalQuerySpec("arXiv", "cells", "arxiv-v2", limit=2)],
+        queries=[
+            RetrievalQuerySpec(
+                "arXiv",
+                "cells",
+                "arxiv-v2",
+                limit=2,
+                metadata={"request_timeout_seconds": 120.0},
+            )
+        ],
         http_clients={"arXiv": FakeHttp(responses)},
         checkpoint_dir=tmp_path / f"arxiv-validation-{failure_kind}",
         timestamp=Clock(),
@@ -760,6 +776,50 @@ def test_arxiv_identity_and_pagination_validation_remain_fail_closed(
         assert "repeated native identifiers across pages" in errors[0]
     else:
         assert "startIndex does not match" in errors[0]
+
+
+def test_arxiv_timeout_policy_cannot_change_in_place_on_resume(tmp_path):
+    checkpoint = tmp_path / "arxiv-timeout-policy-in-place"
+    legacy_spec = RetrievalQuerySpec(
+        "arXiv",
+        "cells",
+        "arxiv-v2",
+        limit=2,
+    )
+    execute_paginated_retrieval_run(
+        run_id="run:arxiv-timeout-policy-in-place",
+        queries=[legacy_spec],
+        http_clients={"arXiv": FakeHttp([ReadTimeout("timed out")])},
+        checkpoint_dir=checkpoint,
+        timestamp=Clock(),
+        retry_policy=RetryPolicy(max_attempts=1, base_delay_seconds=0),
+        retry_sleep=lambda _: None,
+        resumable_transport_exhaustion_sources=frozenset({"arXiv"}),
+    )
+    changed_spec = RetrievalQuerySpec(
+        "arXiv",
+        "cells",
+        "arxiv-v2",
+        limit=2,
+        metadata={"request_timeout_seconds": 120.0},
+    )
+    no_network = FakeHttp([])
+
+    with pytest.raises(
+        ValueError, match="checkpoint query plan/version does not match"
+    ):
+        execute_paginated_retrieval_run(
+            run_id="run:arxiv-timeout-policy-in-place",
+            queries=[changed_spec],
+            http_clients={"arXiv": no_network},
+            checkpoint_dir=checkpoint,
+            resume=True,
+            timestamp=Clock(),
+            retry_policy=RetryPolicy(max_attempts=1),
+            resumable_transport_exhaustion_sources=frozenset({"arXiv"}),
+        )
+
+    assert no_network.calls == []
 
 
 def test_arxiv_response_free_transport_exhaustion_pauses_and_is_bounded(

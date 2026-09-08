@@ -13,6 +13,7 @@ from h2h_lit.sources.common import make_record
 API_URL = "http://export.arxiv.org/api/query"
 ATOM = "{http://www.w3.org/2005/Atom}"
 OPEN_SEARCH = "{http://a9.com/-/spec/opensearch/1.1/}"
+REQUEST_TIMEOUT_METADATA_KEY = "request_timeout_seconds"
 
 
 def search_arxiv(query: str, *, limit: int = 50, http: HttpClient) -> list:
@@ -96,7 +97,13 @@ class ArxivPaginator:
             "sortBy": spec.metadata.get("sort_by", "submittedDate"),
             "sortOrder": spec.metadata.get("sort_order", "ascending"),
         })
-        return PageRequest("GET", spec.endpoint or API_URL, params=params, state=state)
+        return PageRequest(
+            "GET",
+            spec.endpoint or API_URL,
+            params=params,
+            timeout=float(spec.metadata.get(REQUEST_TIMEOUT_METADATA_KEY, 30.0)),
+            state=state,
+        )
 
     def parse_response(self, spec: Any, state: dict[str, Any], response: Any) -> ParsedPage:
         root = ET.fromstring(response.content)

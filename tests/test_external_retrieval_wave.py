@@ -3,6 +3,8 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import subprocess
+import sys
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -14,6 +16,8 @@ from h2h_lit.external_retrieval_wave import (
     ACM_RECONCILIATION_PATH,
     ARXIV_MIXED_RECOVERY_STATUS,
     ARXIV_RATE_LIMIT_RECOVERY_STATUS,
+    ARXIV_RECOVERED_READ_TIMEOUT_SECONDS,
+    ARXIV_TRANSPORT_POLICY_RECOVERY_STATUS,
     EUROPE_PMC_TERMINAL_RECOVERY_STATUS,
     IEEE_REPEATED_WINDOW_RECOVERY_STATUS,
     IEEE_TOTAL_DRIFT_RECOVERY_STATUS,
@@ -28,8 +32,10 @@ from h2h_lit.external_retrieval_wave import (
     WAVE_PATH,
     ExternalRetrievalWaveError,
     _safe_output_path,
+    authorize_arxiv_episode_3_state_reconciliation,
     authorize_arxiv_mixed_state_recovery,
     authorize_arxiv_rate_limit_recovery,
+    authorize_arxiv_transport_policy_recovery,
     authorize_europe_pmc_terminal_recovery,
     authorize_ieee_repeated_window_recovery,
     authorize_ieee_total_drift_recovery,
@@ -794,6 +800,455 @@ def test_arxiv_live_transport_pause_is_resumable_without_terminal_query_skip(
     assert len(resumed_http.calls) == 5
     assert [call["params"]["start"] for call in resumed_http.calls] == [0] * 5
     assert completed["sources"]["arXiv"]["status"] == "COMPLETE"
+
+
+def _stale_arxiv_episode_3_state(
+    tmp_path, monkeypatch, external_wave, external_preflight
+):
+    _, clock = _paused_arxiv_mixed_episode(
+        tmp_path, monkeypatch, external_wave, external_preflight
+    )
+    authorize_arxiv_mixed_state_recovery(root=tmp_path, timestamp=clock)
+    execute_external_source_session(
+        root=tmp_path,
+        source="arXiv",
+        http=FakeHttp([FakeResponse(status_code=429)]),
+        resume=True,
+        timestamp=clock,
+        retry_policy=RetryPolicy(max_attempts=3, base_delay_seconds=0),
+        rate_limiter=RateLimiter({}),
+        retry_sleep=lambda _: None,
+    )
+    state_after_four = execute_external_source_session(
+        root=tmp_path,
+        source="arXiv",
+        http=FakeHttp([ReadTimeout("timed out") for _ in range(3)]),
+        resume=True,
+        timestamp=clock,
+        retry_policy=RetryPolicy(max_attempts=3, base_delay_seconds=1),
+        rate_limiter=RateLimiter({}),
+        retry_sleep=lambda _: None,
+    )
+    stale_source = json.loads(
+        json.dumps(state_after_four["sources"]["arXiv"], sort_keys=True)
+    )
+    state_after_seven = execute_external_source_session(
+        root=tmp_path,
+        source="arXiv",
+        http=FakeHttp([ReadTimeout("timed out again") for _ in range(3)]),
+        resume=True,
+        timestamp=clock,
+        retry_policy=RetryPolicy(max_attempts=3, base_delay_seconds=1),
+        rate_limiter=RateLimiter({}),
+        retry_sleep=lambda _: None,
+    )
+    actual_reference = state_after_seven["sources"]["arXiv"][
+        "checkpoint_dataset"
+    ]
+    state_after_seven["sources"]["arXiv"] = stale_source
+    state_path = tmp_path / external_module.EXECUTION_STATE_PATH
+    external_module._save_execution_state(state_path, state_after_seven)
+    monkeypatch.setattr(
+        external_module,
+        "ARXIV_EPISODE_3_STALE_CHECKPOINT_SHA256",
+        stale_source["checkpoint_dataset"]["raw_sha256"],
+    )
+    monkeypatch.setattr(
+        external_module,
+        "ARXIV_EPISODE_3_STALE_CHECKPOINT_SIZE",
+        stale_source["checkpoint_dataset"]["byte_size"],
+    )
+    monkeypatch.setattr(
+        external_module,
+        "ARXIV_EPISODE_3_CURRENT_CHECKPOINT_SHA256",
+        actual_reference["raw_sha256"],
+    )
+    monkeypatch.setattr(
+        external_module,
+        "ARXIV_EPISODE_3_CURRENT_CHECKPOINT_SIZE",
+        actual_reference["byte_size"],
+    )
+    return state_after_seven, stale_source, actual_reference, clock
+
+
+def _reconciled_arxiv_episode_3_state(
+    tmp_path, monkeypatch, external_wave, external_preflight
+):
+    _, _, _, clock = _stale_arxiv_episode_3_state(
+        tmp_path, monkeypatch, external_wave, external_preflight
+    )
+    state = authorize_arxiv_episode_3_state_reconciliation(
+        root=tmp_path, timestamp=clock
+    )
+    return state, clock
+
+
+def test_external_source_session_lock_fails_fast_before_state_load(
+    tmp_path, monkeypatch
+) -> None:
+    state_loaded = False
+
+    def unexpected_state_load(*args, **kwargs):
+        nonlocal state_loaded
+        state_loaded = True
+        raise AssertionError("state must not load while another session holds the lock")
+
+    monkeypatch.setattr(external_module, "_load_execution_state", unexpected_state_load)
+    with external_module._exclusive_external_source_session(tmp_path), pytest.raises(
+        ExternalRetrievalWaveError,
+        match="another external-source session is already active",
+    ):
+        execute_external_source_session(
+            root=tmp_path,
+            source="arXiv",
+            http=FakeHttp([]),
+            resume=True,
+        )
+    assert state_loaded is False
+
+
+def test_external_source_session_lock_is_released_after_exception(tmp_path) -> None:
+    with pytest.raises(
+        RuntimeError, match="deliberate"
+    ), external_module._exclusive_external_source_session(tmp_path):
+        raise RuntimeError("deliberate")
+    with external_module._exclusive_external_source_session(tmp_path):
+        pass
+
+
+def test_external_source_session_lock_excludes_another_process(tmp_path) -> None:
+    script = """
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path.cwd() / "src"))
+from h2h_lit.external_retrieval_wave import (
+    ExternalRetrievalWaveError,
+    _exclusive_external_source_session,
+)
+try:
+    with _exclusive_external_source_session(Path(sys.argv[1])):
+        pass
+except ExternalRetrievalWaveError:
+    raise SystemExit(23)
+raise SystemExit(0)
+"""
+    with external_module._exclusive_external_source_session(tmp_path):
+        result = subprocess.run(
+            [sys.executable, "-c", script, str(tmp_path)],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+    assert result.returncode == 23
+
+
+def test_arxiv_episode_3_state_reconciliation_refreshes_only_stale_summary(
+    tmp_path, monkeypatch, external_wave, external_preflight
+) -> None:
+    state, stale_source, actual_reference, clock = _stale_arxiv_episode_3_state(
+        tmp_path, monkeypatch, external_wave, external_preflight
+    )
+    checkpoint_path = tmp_path / actual_reference["path"]
+    checkpoint_bytes = checkpoint_path.read_bytes()
+    response_bytes = {
+        path.name: path.read_bytes()
+        for path in sorted((checkpoint_path.parent / "responses").iterdir())
+    }
+    other_sources = {
+        key: json.loads(json.dumps(value, sort_keys=True))
+        for key, value in state["sources"].items()
+        if key != "arXiv"
+    }
+
+    reconciled = authorize_arxiv_episode_3_state_reconciliation(
+        root=tmp_path, timestamp=clock
+    )
+
+    arxiv = reconciled["sources"]["arXiv"]
+    episode = arxiv["execution_episodes"][2]
+    checkpoint = external_module.load_review_dataset(checkpoint_path)
+    assert arxiv["checkpoint_dataset"] == actual_reference
+    assert episode["checkpoint_dataset"] == actual_reference
+    assert arxiv["attempt_count"] == episode["attempt_count"] == 7
+    assert arxiv["requests_this_session"] == 3
+    assert arxiv["last_session_started_at_utc"] == (
+        checkpoint.retrieval_attempts[4].started_at
+    )
+    assert arxiv["last_session_completed_at_utc"] == (
+        checkpoint.retrieval_attempts[6].ended_at
+    )
+    evidence = arxiv["state_reconciliation"]
+    assert episode["state_reconciliation"] == evidence
+    assert evidence["classification"] == "CONCURRENT_EXECUTION_STATE_LOST_UPDATE"
+    assert evidence["prior_checkpoint_dataset"] == stale_source[
+        "checkpoint_dataset"
+    ]
+    assert evidence["reconciled_checkpoint_dataset"] == actual_reference
+    assert evidence["appended_attempt_numbers"] == [5, 6, 7]
+    assert evidence["persisted_response_hashes"] == [
+        checkpoint.retrieval_attempts[0].raw_response_hash
+    ]
+    assert evidence["network_used"] is False
+    assert evidence["checkpoint_modified"] is False
+    assert checkpoint_path.read_bytes() == checkpoint_bytes
+    assert {
+        path.name: path.read_bytes()
+        for path in sorted((checkpoint_path.parent / "responses").iterdir())
+    } == response_bytes
+    assert {
+        key: value for key, value in reconciled["sources"].items() if key != "arXiv"
+    } == other_sources
+
+    repeated = authorize_arxiv_episode_3_state_reconciliation(
+        root=tmp_path, timestamp=clock
+    )
+    assert repeated == reconciled
+
+
+@pytest.mark.parametrize(
+    "drift_kind",
+    ["state_reference", "query", "request_hash", "attempt", "response"],
+)
+def test_arxiv_episode_3_state_reconciliation_refuses_unexpected_drift(
+    tmp_path,
+    monkeypatch,
+    external_wave,
+    external_preflight,
+    drift_kind,
+) -> None:
+    state, _, actual_reference, clock = _stale_arxiv_episode_3_state(
+        tmp_path, monkeypatch, external_wave, external_preflight
+    )
+    state_path = tmp_path / external_module.EXECUTION_STATE_PATH
+    checkpoint_path = tmp_path / actual_reference["path"]
+    if drift_kind == "state_reference":
+        state["sources"]["arXiv"]["checkpoint_dataset"]["raw_sha256"] = "0" * 64
+        state["sources"]["arXiv"]["execution_episodes"][2][
+            "checkpoint_dataset"
+        ]["raw_sha256"] = "0" * 64
+        external_module._save_execution_state(state_path, state)
+    elif drift_kind == "response":
+        response = next((checkpoint_path.parent / "responses").iterdir())
+        response.write_bytes(response.read_bytes() + b"corrupt")
+    else:
+        original_load = external_module.load_review_dataset
+
+        def load_with_drift(path):
+            dataset = original_load(path)
+            if Path(path).resolve() != checkpoint_path.resolve():
+                return dataset
+            if drift_kind == "query":
+                dataset.source_queries[0].query_text += " changed"
+            elif drift_kind == "request_hash":
+                dataset.retrieval_attempts[0].request_hash = "0" * 64
+            else:
+                dataset.retrieval_attempts[-1].error = "ConnectionError: changed"
+            return dataset
+
+        monkeypatch.setattr(external_module, "load_review_dataset", load_with_drift)
+
+    with pytest.raises(
+        (ExternalRetrievalWaveError, ValueError),
+        match="arXiv|request|retries|response hash",
+    ):
+        authorize_arxiv_episode_3_state_reconciliation(
+            root=tmp_path, timestamp=clock
+        )
+
+
+def test_arxiv_transport_policy_recovery_creates_bound_episode_four(
+    tmp_path, monkeypatch, external_wave, external_preflight
+) -> None:
+    parent_state, clock = _reconciled_arxiv_episode_3_state(
+        tmp_path, monkeypatch, external_wave, external_preflight
+    )
+    arxiv_before = parent_state["sources"]["arXiv"]
+    historical_files = {
+        path.relative_to(tmp_path).as_posix(): path.read_bytes()
+        for episode in arxiv_before["execution_episodes"]
+        for path in (
+            tmp_path / episode["checkpoint_dataset"]["path"]
+        ).parent.rglob("*")
+        if path.is_file()
+    }
+    other_sources = {
+        key: json.loads(json.dumps(value, sort_keys=True))
+        for key, value in parent_state["sources"].items()
+        if key != "arXiv"
+    }
+
+    recovered = authorize_arxiv_transport_policy_recovery(
+        root=tmp_path, timestamp=clock
+    )
+
+    arxiv = recovered["sources"]["arXiv"]
+    assert arxiv["status"] == ARXIV_TRANSPORT_POLICY_RECOVERY_STATUS
+    assert arxiv["active_episode_number"] == 4
+    assert arxiv["attempt_count"] == arxiv["occurrence_count"] == 0
+    assert arxiv["completed_query_count"] == 0
+    assert arxiv["transport_policy"] == {
+        "read_timeout_seconds": ARXIV_RECOVERED_READ_TIMEOUT_SECONDS,
+        "maximum_attempts_per_invocation": 3,
+    }
+    assert len(arxiv["execution_episodes"]) == 4
+    assert [item["immutable"] for item in arxiv["execution_episodes"]] == [
+        True,
+        True,
+        True,
+        False,
+    ]
+    episode_4 = arxiv["execution_episodes"][3]
+    assert episode_4["recovery_of_episode_number"] == 3
+    assert episode_4["parent_checkpoint_dataset"] == arxiv_before[
+        "checkpoint_dataset"
+    ]
+    assert episode_4["old_transport_policy"] == {
+        "read_timeout_seconds": 30.0,
+        "maximum_attempts_per_invocation": 3,
+    }
+    assert episode_4["transport_policy"] == arxiv["transport_policy"]
+    assert len(episode_4["request_identity_changes"]) == 5
+    assert all(
+        item["request_state"] == {"start": 0}
+        and item["max_results"] == 2000
+        and item["old_timeout_seconds"] == 30.0
+        and item["new_timeout_seconds"] == 120.0
+        and item["old_request_hash"] != item["new_request_hash"]
+        for item in episode_4["request_identity_changes"]
+    )
+    assert episode_4["restart_states"] == [
+        {
+            "production_query_id": item["production_query_id"],
+            "query_id": item["query_id"],
+            "request_state": {"start": 0},
+            "max_results": 2000,
+            "request_hash": item["new_request_hash"],
+        }
+        for item in episode_4["request_identity_changes"]
+    ]
+    checkpoint = external_module.load_review_dataset(
+        tmp_path / arxiv["checkpoint_dataset"]["path"]
+    )
+    assert checkpoint.retrieval_pages == []
+    assert checkpoint.retrieval_attempts == []
+    assert checkpoint.occurrences == []
+    assert checkpoint.canonical_records == []
+    assert all(
+        query.completion_status
+        is external_module.RetrievalCompletionStatus.PLANNED
+        and query.filters == {"page_size": 2000}
+        and query.metadata["request_timeout_seconds"] == 120.0
+        for query in checkpoint.source_queries
+    )
+    assert {
+        path.relative_to(tmp_path).as_posix(): path.read_bytes()
+        for episode in arxiv["execution_episodes"][:3]
+        for path in (
+            tmp_path / episode["checkpoint_dataset"]["path"]
+        ).parent.rglob("*")
+        if path.is_file()
+    } == historical_files
+    assert {
+        key: value for key, value in recovered["sources"].items() if key != "arXiv"
+    } == other_sources
+    assert recovered["external_retrieval_cutoff_date"] is None
+
+
+def test_arxiv_transport_policy_recovery_lock_contention_fails_before_mutation(
+    tmp_path, monkeypatch, external_wave, external_preflight
+) -> None:
+    parent_state, clock = _reconciled_arxiv_episode_3_state(
+        tmp_path, monkeypatch, external_wave, external_preflight
+    )
+    state_path = tmp_path / external_module.EXECUTION_STATE_PATH
+    before = state_path.read_bytes()
+
+    with external_module._exclusive_external_source_session(tmp_path), pytest.raises(
+        ExternalRetrievalWaveError,
+        match="another external-source session is already active",
+    ):
+        authorize_arxiv_transport_policy_recovery(
+            root=tmp_path, timestamp=clock
+        )
+
+    assert state_path.read_bytes() == before
+    assert parent_state["sources"]["arXiv"]["active_episode_number"] == 3
+
+
+def test_arxiv_recovered_timeout_is_persisted_across_bounded_resumes(
+    tmp_path, monkeypatch, external_wave, external_preflight
+) -> None:
+    _, clock = _reconciled_arxiv_episode_3_state(
+        tmp_path, monkeypatch, external_wave, external_preflight
+    )
+    authorize_arxiv_transport_policy_recovery(root=tmp_path, timestamp=clock)
+    first_http = FakeHttp([ReadTimeout("timed out") for _ in range(3)])
+
+    paused = execute_external_source_session(
+        root=tmp_path,
+        source="arXiv",
+        http=first_http,
+        resume=True,
+        timestamp=clock,
+        retry_policy=RetryPolicy(max_attempts=3, base_delay_seconds=0),
+        rate_limiter=RateLimiter({}),
+        retry_sleep=lambda _: None,
+    )
+
+    assert len(first_http.calls) == 3
+    assert {call["timeout"] for call in first_http.calls} == {120.0}
+    assert paused["sources"]["arXiv"]["status"] == (
+        "PAUSED_TRANSIENT_TRANSPORT"
+    )
+    assert paused["sources"]["arXiv"]["transport_policy"][
+        "read_timeout_seconds"
+    ] == 120.0
+
+    resumed_http = FakeHttp(
+        [FakeResponse(content=_arxiv_feed(f"family-{index}")) for index in range(5)]
+    )
+    completed = execute_external_source_session(
+        root=tmp_path,
+        source="arXiv",
+        http=resumed_http,
+        resume=True,
+        timestamp=clock,
+        retry_policy=RetryPolicy(max_attempts=3, base_delay_seconds=0),
+        rate_limiter=RateLimiter({}),
+        retry_sleep=lambda _: None,
+    )
+
+    assert len(resumed_http.calls) == 5
+    assert {call["timeout"] for call in resumed_http.calls} == {120.0}
+    assert completed["sources"]["arXiv"]["status"] == "COMPLETE"
+
+
+def test_arxiv_recovered_episode_refuses_a_different_attempt_bound(
+    tmp_path, monkeypatch, external_wave, external_preflight
+) -> None:
+    _, clock = _reconciled_arxiv_episode_3_state(
+        tmp_path, monkeypatch, external_wave, external_preflight
+    )
+    recovered = authorize_arxiv_transport_policy_recovery(
+        root=tmp_path, timestamp=clock
+    )
+    state_path = tmp_path / external_module.EXECUTION_STATE_PATH
+    before = state_path.read_bytes()
+
+    with pytest.raises(
+        ExternalRetrievalWaveError,
+        match="requires exactly three attempts",
+    ):
+        execute_external_source_session(
+            root=tmp_path,
+            source="arXiv",
+            http=FakeHttp([]),
+            resume=True,
+            retry_policy=RetryPolicy(max_attempts=2),
+        )
+
+    assert state_path.read_bytes() == before
+    assert recovered["sources"]["arXiv"]["active_episode_number"] == 4
 
 
 def _ieee_page(identifier: str, *, total: int) -> dict:
