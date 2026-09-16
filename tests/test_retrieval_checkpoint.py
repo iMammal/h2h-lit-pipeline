@@ -1,13 +1,18 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 
 import pytest
 
 from h2h_lit.models import ProcessingStatus
 from h2h_lit.pagination import RetryPolicy
 from h2h_lit.prisma import reconcile_prisma
-from h2h_lit.retrieval import RetrievalQuerySpec, execute_paginated_retrieval_run
+from h2h_lit.retrieval import (
+    RetrievalQuerySpec,
+    _pagination_consistency_error,
+    execute_paginated_retrieval_run,
+)
 from h2h_lit.review import RetrievalAttemptStatus, RetrievalCompletionStatus
 from h2h_lit.sources.crossref import PAGINATOR as CROSSREF_PAGINATOR
 from tests.fake_http import FakeHttp, FakeResponse
@@ -598,6 +603,50 @@ def test_semantic_scholar_permanent_and_integrity_failures_remain_terminal(
     assert dataset.retrieval_runs[0].completion_status is RetrievalCompletionStatus.FAILED
     assert "pause_state" not in dataset.retrieval_runs[0].metadata
     assert error in " ".join(dataset.source_queries[0].errors)
+
+
+def test_semantic_scholar_third_overlap_remains_terminal_after_historical_pair():
+    query = SimpleNamespace(query_id="query:qf03")
+    historical_first = SimpleNamespace(
+        page_id="page:2",
+        source_query_id=query.query_id,
+        native_identifiers=["repeated-paper"],
+        source_reported_total=10,
+        total_is_exact=False,
+        metadata={},
+        terminal=False,
+        truncated=False,
+        returned_item_count=1,
+    )
+    historical_second = SimpleNamespace(
+        page_id="page:42",
+        source_query_id=query.query_id,
+        native_identifiers=["repeated-paper"],
+        source_reported_total=11,
+        total_is_exact=False,
+        metadata={},
+        terminal=False,
+        truncated=False,
+        returned_item_count=1,
+    )
+    new_page = SimpleNamespace(
+        page_id="page:43",
+        source_query_id=query.query_id,
+        native_identifiers=["repeated-paper"],
+        source_reported_total=12,
+        total_is_exact=False,
+        metadata={},
+        terminal=False,
+        truncated=False,
+        returned_item_count=1,
+    )
+    dataset = SimpleNamespace(
+        retrieval_pages=[historical_first, historical_second, new_page]
+    )
+
+    assert _pagination_consistency_error(dataset, query, new_page) == (
+        "source repeated native identifiers across pages: ['repeated-paper']"
+    )
 
 
 def _arxiv_feed(*ids: str, total: int, start: int) -> bytes:

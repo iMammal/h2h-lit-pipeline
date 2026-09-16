@@ -29,6 +29,7 @@ from h2h_lit.external_retrieval_wave import (
     SEMANTIC_CONTROL_5XX_RECOVERY_STATUS,
     SEMANTIC_CONTROL_GATE_PATH,
     SEMANTIC_CONTROL_RECOVERY_GATE_PATH,
+    SEMANTIC_NATIVE_ID_OVERLAP_RECOVERY_STATUS,
     WAVE_PATH,
     ExternalRetrievalWaveError,
     _safe_output_path,
@@ -43,6 +44,7 @@ from h2h_lit.external_retrieval_wave import (
     authorize_pubmed_transport_retry,
     authorize_semantic_scholar_candidate_5xx_recovery,
     authorize_semantic_scholar_control_5xx_recovery,
+    authorize_semantic_scholar_native_id_overlap_recovery,
     build_external_retrieval_wave,
     execute_external_source_session,
     preflight_external_retrieval_wave,
@@ -64,6 +66,7 @@ from h2h_lit.production_wave import (
     ProductionWaveStatus,
     compute_query_plan_hash,
 )
+from h2h_lit.review import RetrievalAttemptStatus, RetrievalCompletionStatus
 from h2h_lit.sources.europe_pmc import (
     EuropePmcPaginator,
     parse_europe_pmc_response,
@@ -2840,6 +2843,493 @@ def _failed_semantic_candidate_5xx_checkpoint(
     return state, clock, checkpoint
 
 
+def _failed_semantic_native_id_overlap_episode_2(
+    tmp_path, monkeypatch, external_wave, external_preflight
+):
+    _install_semantic_runtime(
+        tmp_path, monkeypatch, external_wave, external_preflight
+    )
+    duplicate_id = "zz-overlap-native-id"
+    duplicate_doi = "10.1000/overlap"
+    second_duplicate_id = "zzzz-second-overlap-native-id"
+
+    def duplicate_record(author_name: str) -> dict:
+        return {
+            "paperId": duplicate_id,
+            "externalIds": {"DOI": duplicate_doi},
+            "title": "Provider repeated paper",
+            "authors": [
+                {"authorId": "a1", "name": "First Author"},
+                {"authorId": "a2", "name": "Second Author"},
+                {"authorId": "a3", "name": author_name},
+            ],
+            "venue": "Test Venue",
+            "year": 2026,
+            "url": f"https://example.test/{duplicate_id}",
+            "abstract": "Same abstract",
+            "isOpenAccess": False,
+            "openAccessPdf": None,
+        }
+
+    qf03_responses = []
+    for ordinal in range(43):
+        if ordinal == 2:
+            data = [
+                duplicate_record("J. Example"),
+                {"paperId": "id-0002b", "title": "Page 2 tail"},
+            ]
+        elif ordinal == 3:
+            data = [
+                _second_semantic_overlap_record(second_duplicate_id),
+                {"paperId": "id-0003b", "title": "Page 3 tail"},
+            ]
+        elif ordinal == 42:
+            data = [
+                duplicate_record("Jennifer Example"),
+                {"paperId": "zzz-tail-0042", "title": "Page 42 tail"},
+            ]
+        else:
+            data = [
+                {
+                    "paperId": f"id-{ordinal:04d}",
+                    "title": f"QF03 page {ordinal}",
+                }
+            ]
+        qf03_responses.append(
+            FakeResponse(
+                payload={
+                    "total": 1_000 + ordinal,
+                    "token": f"token-{ordinal + 1}",
+                    "data": data,
+                }
+            )
+        )
+    candidate_responses = [
+        FakeResponse(payload={"total": 1, "data": [{"paperId": "qf01"}]}),
+        FakeResponse(payload={"total": 1, "data": [{"paperId": "qf02"}]}),
+        *qf03_responses,
+        FakeResponse(payload={"total": 1, "data": [{"paperId": "qf04"}]}),
+        FakeResponse(payload={"total": 1, "data": [{"paperId": "qf05"}]}),
+    ]
+    clock = Clock()
+    failed = execute_external_source_session(
+        root=tmp_path,
+        source="SemanticScholar",
+        http=FakeHttp([*_passing_semantic_controls(), *candidate_responses]),
+        resume=False,
+        timestamp=clock,
+        retry_policy=RetryPolicy(max_attempts=1, base_delay_seconds=0),
+        rate_limiter=RateLimiter({}),
+        retry_sleep=lambda _: None,
+    )
+    assert failed["sources"]["SemanticScholar"]["status"] == "FAILED"
+
+    source_root = (
+        tmp_path / external_module.EXECUTION_ROOT / "SemanticScholar"
+    )
+    original_checkpoint_dir = source_root / "checkpoint"
+    episode_2_checkpoint_dir = source_root / "episodes/episode-002/checkpoint"
+    episode_2_checkpoint_dir.parent.mkdir(parents=True)
+    original_checkpoint_dir.rename(episode_2_checkpoint_dir)
+    checkpoint = episode_2_checkpoint_dir / "review_dataset.json"
+    dataset = external_module.load_review_dataset(checkpoint)
+    qf03 = dataset.source_queries[2]
+    qf03_pages = sorted(
+        (
+            page
+            for page in dataset.retrieval_pages
+            if page.source_query_id == qf03.query_id
+        ),
+        key=lambda page: page.ordinal,
+    )
+    pair = sorted(
+        (
+            occurrence
+            for occurrence in dataset.occurrences
+            if occurrence.source_identifier == duplicate_id
+        ),
+        key=lambda occurrence: occurrence.page,
+    )
+    attempts = {
+        attempt.attempt_id: attempt for attempt in dataset.retrieval_attempts
+    }
+    expected_occurrences = []
+    for occurrence, author_name in zip(
+        pair, ["J. Example", "Jennifer Example"], strict=True
+    ):
+        page = next(
+            page
+            for page in qf03_pages
+            if page.page_id == occurrence.retrieval_page_id
+        )
+        attempt = next(
+            attempts[attempt_id]
+            for attempt_id in page.attempt_ids
+            if attempts[attempt_id].status is RetrievalAttemptStatus.SUCCEEDED
+        )
+        expected_occurrences.append(
+            {
+                "ordinal": page.ordinal,
+                "page_id": page.page_id,
+                "occurrence_id": occurrence.occurrence_id,
+                "raw_payload_hash": occurrence.raw_payload_hash,
+                "response_path": attempt.raw_response_path,
+                "response_sha256": attempt.raw_response_hash,
+                "provider_total": page.source_reported_total,
+                "author_name": author_name,
+            }
+        )
+    canonical = next(
+        item
+        for item in dataset.canonical_records
+        if pair[0].occurrence_id in item.occurrence_ids
+    )
+    parent_reference = external_module._file_reference(checkpoint, tmp_path)
+    error = f"source repeated native identifiers across pages: ['{duplicate_id}']"
+    monkeypatch.setattr(
+        external_module,
+        "SEMANTIC_NATIVE_ID_OVERLAP_PARENT_CHECKPOINT_SHA256",
+        parent_reference["raw_sha256"],
+    )
+    monkeypatch.setattr(
+        external_module,
+        "SEMANTIC_NATIVE_ID_OVERLAP_PARENT_CHECKPOINT_SIZE",
+        parent_reference["byte_size"],
+    )
+    monkeypatch.setattr(
+        external_module, "SEMANTIC_NATIVE_ID_OVERLAP_PAPER_ID", duplicate_id
+    )
+    monkeypatch.setattr(
+        external_module, "SEMANTIC_NATIVE_ID_OVERLAP_QUERY_ID", qf03.query_id
+    )
+    monkeypatch.setattr(
+        external_module, "SEMANTIC_NATIVE_ID_OVERLAP_ERROR", error
+    )
+    monkeypatch.setattr(
+        external_module,
+        "SEMANTIC_NATIVE_ID_OVERLAP_OCCURRENCES",
+        tuple(expected_occurrences),
+    )
+    monkeypatch.setattr(
+        external_module,
+        "SEMANTIC_NATIVE_ID_OVERLAP_CANONICAL_ID",
+        canonical.canonical_id,
+    )
+    monkeypatch.setattr(
+        external_module,
+        "SEMANTIC_NATIVE_ID_OVERLAP_DEDUPE_KEY",
+        f"doi:{duplicate_doi}",
+    )
+    qf_counts = tuple(
+        (
+            query.completion_status.value,
+            len(
+                [
+                    page
+                    for page in dataset.retrieval_pages
+                    if page.source_query_id == query.query_id
+                ]
+            ),
+            query.result_count,
+        )
+        for query in dataset.source_queries
+    )
+    monkeypatch.setattr(
+        external_module, "SEMANTIC_NATIVE_ID_OVERLAP_QF_COUNTS", qf_counts
+    )
+    monkeypatch.setattr(
+        external_module,
+        "SEMANTIC_NATIVE_ID_OVERLAP_EXPECTED_ATTEMPTS",
+        len(dataset.retrieval_attempts),
+    )
+    monkeypatch.setattr(
+        external_module,
+        "SEMANTIC_NATIVE_ID_OVERLAP_EXPECTED_PAGES",
+        len(dataset.retrieval_pages),
+    )
+    monkeypatch.setattr(
+        external_module,
+        "SEMANTIC_NATIVE_ID_OVERLAP_EXPECTED_OCCURRENCES",
+        len(dataset.occurrences),
+    )
+    monkeypatch.setattr(
+        external_module,
+        "SEMANTIC_NATIVE_ID_OVERLAP_EXPECTED_CANONICAL_RECORDS",
+        len(dataset.canonical_records),
+    )
+    monkeypatch.setattr(
+        external_module,
+        "SEMANTIC_NATIVE_ID_OVERLAP_EXPECTED_QF03_DISTINCT_IDS",
+        len({item for page in qf03_pages for item in page.native_identifiers}),
+    )
+    monkeypatch.setattr(
+        external_module,
+        "SEMANTIC_NATIVE_ID_OVERLAP_ORDERING_ANOMALIES",
+        (
+            {
+                "page_ordinal": 2,
+                "left_index": 0,
+                "left_paper_id": duplicate_id,
+                "right_paper_id": "id-0002b",
+            },
+            {
+                "page_ordinal": 3,
+                "left_index": 0,
+                "left_paper_id": second_duplicate_id,
+                "right_paper_id": "id-0003b",
+            },
+        ),
+    )
+
+    state_path = tmp_path / external_module.EXECUTION_STATE_PATH
+    state = json.loads(state_path.read_text())
+    source = state["sources"]["SemanticScholar"]
+    checkpoint_relative = episode_2_checkpoint_dir.relative_to(tmp_path).as_posix()
+    episode_1 = {
+        "episode_number": 1,
+        "episode_id": "SemanticScholar-episode-001",
+        "run_id": dataset.retrieval_runs[0].run_id,
+        "status": "FAILED",
+        "immutable": True,
+    }
+    episode_2 = {
+        "episode_number": 2,
+        "episode_id": "SemanticScholar-episode-002",
+        "run_id": dataset.retrieval_runs[0].run_id,
+        "status": "FAILED",
+        "checkpoint_path": checkpoint_relative,
+        "checkpoint_dataset": parent_reference,
+        "failure_reason": f"{qf03.query_id}: {error}",
+        "immutable": True,
+    }
+    source.update(
+        {
+            "status": "FAILED",
+            "execution_episodes": [episode_1, episode_2],
+            "active_episode_number": 2,
+            "active_run_id": dataset.retrieval_runs[0].run_id,
+            "active_checkpoint_path": checkpoint_relative,
+            "checkpoint_path": checkpoint_relative,
+            "checkpoint_dataset": parent_reference,
+            "completed_query_count": 4,
+            "total_query_count": 5,
+            "occurrence_count": len(dataset.occurrences),
+            "attempt_count": len(dataset.retrieval_attempts),
+            "failure_reason": f"{qf03.query_id}: {error}",
+        }
+    )
+    external_module._save_execution_state(state_path, state)
+    return state, clock, checkpoint, duplicate_id
+
+
+def _second_semantic_overlap_record(paper_id: str) -> dict:
+    return {
+        "paperId": paper_id,
+        "externalIds": {"DOI": "10.1000/second-overlap"},
+        "title": "Provider repeated second paper",
+        "authors": [{"authorId": "b1", "name": "Same Author"}],
+        "venue": "Test Venue",
+        "year": 2025,
+        "url": f"https://example.test/{paper_id}",
+        "abstract": "Second overlap abstract",
+        "isOpenAccess": True,
+        "openAccessPdf": {"url": "https://example.test/second.pdf"},
+    }
+
+
+def _failed_semantic_native_id_overlap_episode_3(
+    tmp_path, monkeypatch, external_wave, external_preflight
+):
+    _, clock, episode_2_checkpoint, first_duplicate_id = (
+        _failed_semantic_native_id_overlap_episode_2(
+            tmp_path, monkeypatch, external_wave, external_preflight
+        )
+    )
+    authorize_semantic_scholar_native_id_overlap_recovery(
+        root=tmp_path, timestamp=clock
+    )
+    second_duplicate_id = "zzzz-second-overlap-native-id"
+    responses = []
+    for ordinal in range(43, 55):
+        data = (
+            [_second_semantic_overlap_record(second_duplicate_id)]
+            if ordinal == 54
+            else [
+                {
+                    "paperId": f"zzza-id-{ordinal:04d}",
+                    "title": f"QF03 page {ordinal}",
+                }
+            ]
+        )
+        responses.append(
+            FakeResponse(
+                payload={
+                    "total": 1_000 + ordinal,
+                    "token": f"token-{ordinal + 1}",
+                    "data": data,
+                }
+            )
+        )
+    failed = execute_external_source_session(
+        root=tmp_path,
+        source="SemanticScholar",
+        http=FakeHttp(responses),
+        resume=True,
+        timestamp=clock,
+        retry_policy=RetryPolicy(max_attempts=1, base_delay_seconds=0),
+        rate_limiter=RateLimiter({}),
+        retry_sleep=lambda _: None,
+    )
+    source = failed["sources"]["SemanticScholar"]
+    assert source["status"] == "FAILED"
+    assert source["active_episode_number"] == 3
+    episode_3_checkpoint = tmp_path / source["checkpoint_dataset"]["path"]
+    dataset = external_module.load_review_dataset(episode_3_checkpoint)
+    qf03 = dataset.source_queries[2]
+    pages = sorted(
+        (
+            page
+            for page in dataset.retrieval_pages
+            if page.source_query_id == qf03.query_id
+        ),
+        key=lambda page: page.ordinal,
+    )
+    pair = sorted(
+        (
+            occurrence
+            for occurrence in dataset.occurrences
+            if occurrence.source_identifier == second_duplicate_id
+        ),
+        key=lambda occurrence: occurrence.page,
+    )
+    assert [occurrence.page for occurrence in pair] == [3, 54]
+    attempts = {
+        attempt.attempt_id: attempt for attempt in dataset.retrieval_attempts
+    }
+    expected_occurrences = []
+    for occurrence in pair:
+        page = next(
+            page
+            for page in pages
+            if page.page_id == occurrence.retrieval_page_id
+        )
+        attempt = next(
+            attempts[attempt_id]
+            for attempt_id in page.attempt_ids
+            if attempts[attempt_id].status is RetrievalAttemptStatus.SUCCEEDED
+        )
+        expected_occurrences.append(
+            {
+                "ordinal": page.ordinal,
+                "page_id": page.page_id,
+                "occurrence_id": occurrence.occurrence_id,
+                "raw_payload_hash": occurrence.raw_payload_hash,
+                "response_path": attempt.raw_response_path,
+                "response_sha256": attempt.raw_response_hash,
+                "provider_total": page.source_reported_total,
+            }
+        )
+    canonical = next(
+        item
+        for item in dataset.canonical_records
+        if pair[0].occurrence_id in item.occurrence_ids
+    )
+    parent_reference = external_module._file_reference(
+        episode_3_checkpoint, tmp_path
+    )
+    error = (
+        "source repeated native identifiers across pages: "
+        f"['{second_duplicate_id}']"
+    )
+    monkeypatch.setattr(
+        external_module,
+        "SEMANTIC_NATIVE_ID_OVERLAP_EPISODE_3_PARENT_CHECKPOINT_SHA256",
+        parent_reference["raw_sha256"],
+    )
+    monkeypatch.setattr(
+        external_module,
+        "SEMANTIC_NATIVE_ID_OVERLAP_EPISODE_3_PARENT_CHECKPOINT_SIZE",
+        parent_reference["byte_size"],
+    )
+    monkeypatch.setattr(
+        external_module,
+        "SEMANTIC_NATIVE_ID_OVERLAP_EPISODE_3_PAPER_ID",
+        second_duplicate_id,
+    )
+    monkeypatch.setattr(
+        external_module,
+        "SEMANTIC_NATIVE_ID_OVERLAP_EPISODE_3_ERROR",
+        error,
+    )
+    monkeypatch.setattr(
+        external_module,
+        "SEMANTIC_NATIVE_ID_OVERLAP_EPISODE_3_OCCURRENCES",
+        tuple(expected_occurrences),
+    )
+    monkeypatch.setattr(
+        external_module,
+        "SEMANTIC_NATIVE_ID_OVERLAP_EPISODE_3_CANONICAL_ID",
+        canonical.canonical_id,
+    )
+    monkeypatch.setattr(
+        external_module,
+        "SEMANTIC_NATIVE_ID_OVERLAP_EPISODE_3_DEDUPE_KEY",
+        "doi:10.1000/second-overlap",
+    )
+    qf_counts = tuple(
+        (
+            query.completion_status.value,
+            len(
+                [
+                    page
+                    for page in dataset.retrieval_pages
+                    if page.source_query_id == query.query_id
+                ]
+            ),
+            query.result_count,
+        )
+        for query in dataset.source_queries
+    )
+    monkeypatch.setattr(
+        external_module,
+        "SEMANTIC_NATIVE_ID_OVERLAP_EPISODE_3_QF_COUNTS",
+        qf_counts,
+    )
+    monkeypatch.setattr(
+        external_module,
+        "SEMANTIC_NATIVE_ID_OVERLAP_EPISODE_3_EXPECTED_ATTEMPTS",
+        len(dataset.retrieval_attempts),
+    )
+    monkeypatch.setattr(
+        external_module,
+        "SEMANTIC_NATIVE_ID_OVERLAP_EPISODE_3_EXPECTED_PAGES",
+        len(dataset.retrieval_pages),
+    )
+    monkeypatch.setattr(
+        external_module,
+        "SEMANTIC_NATIVE_ID_OVERLAP_EPISODE_3_EXPECTED_OCCURRENCES",
+        len(dataset.occurrences),
+    )
+    monkeypatch.setattr(
+        external_module,
+        "SEMANTIC_NATIVE_ID_OVERLAP_EPISODE_3_EXPECTED_CANONICAL_RECORDS",
+        len(dataset.canonical_records),
+    )
+    monkeypatch.setattr(
+        external_module,
+        "SEMANTIC_NATIVE_ID_OVERLAP_EPISODE_3_EXPECTED_QF03_DISTINCT_IDS",
+        len({native_id for page in pages for native_id in page.native_identifiers}),
+    )
+    return (
+        failed,
+        clock,
+        episode_2_checkpoint,
+        episode_3_checkpoint,
+        first_duplicate_id,
+        second_duplicate_id,
+    )
+
+
 def test_semantic_control_5xx_exhaustion_pauses_with_fresh_resume_budget(
     tmp_path, monkeypatch, external_wave, external_preflight
 ) -> None:
@@ -3171,6 +3661,644 @@ def test_semantic_candidate_5xx_recovery_preserves_and_resumes_only_failed_qfs(
     assert len(http.calls) == 2
     assert http.calls[0]["params"]["token"] == "token-qf02"
     assert http.calls[1]["params"]["token"] == "token-qf03"
+
+
+def test_semantic_native_id_overlap_recovery_preserves_parent_and_is_idempotent(
+    tmp_path, monkeypatch, external_wave, external_preflight
+) -> None:
+    before, clock, parent_checkpoint, duplicate_id = (
+        _failed_semantic_native_id_overlap_episode_2(
+            tmp_path, monkeypatch, external_wave, external_preflight
+        )
+    )
+    parent_bytes = parent_checkpoint.read_bytes()
+    response_bytes = {
+        path.name: path.read_bytes()
+        for path in sorted((parent_checkpoint.parent / "responses").iterdir())
+    }
+    parent_episodes = json.loads(
+        json.dumps(
+            before["sources"]["SemanticScholar"]["execution_episodes"],
+            sort_keys=True,
+        )
+    )
+    other_sources = {
+        key: json.loads(json.dumps(value, sort_keys=True))
+        for key, value in before["sources"].items()
+        if key != "SemanticScholar"
+    }
+
+    recovered = authorize_semantic_scholar_native_id_overlap_recovery(
+        root=tmp_path, timestamp=clock
+    )
+    source = recovered["sources"]["SemanticScholar"]
+    active = source["execution_episodes"][2]
+    assert source["status"] == SEMANTIC_NATIVE_ID_OVERLAP_RECOVERY_STATUS
+    assert source["active_episode_number"] == 3
+    assert source["completed_query_count"] == 4
+    assert source["requests_this_session"] == 0
+    assert source["execution_episodes"][:2] == parent_episodes
+    assert active["recovery_of_episode_number"] == 2
+    assert active["network_used"] is False
+    assert active["continuation_state"]["next_page_ordinal"] == 43
+    provenance = active["adjudication_provenance"]
+    assert provenance["adjudicated_native_id"] == duplicate_id
+    assert len(provenance["adjudicated_occurrences"]) == 2
+    assert provenance["provider_ordering_anomalies"] == [
+        dict(item)
+        for item in external_module.SEMANTIC_NATIVE_ID_OVERLAP_ORDERING_ANOMALIES
+    ]
+    assert provenance["provider_completeness"] == "UNPROVEN"
+    assert provenance["generic_duplicate_validation_changed"] is False
+    assert "third occurrence" in provenance["exception_scope"]
+    assert parent_checkpoint.read_bytes() == parent_bytes
+    assert {
+        name: (parent_checkpoint.parent / "responses" / name).read_bytes()
+        for name in response_bytes
+    } == response_bytes
+    assert {
+        key: value
+        for key, value in recovered["sources"].items()
+        if key != "SemanticScholar"
+    } == other_sources
+    child_checkpoint = tmp_path / source["checkpoint_dataset"]["path"]
+    child = external_module.load_review_dataset(child_checkpoint)
+    assert child.source_queries[2].completion_status is RetrievalCompletionStatus.RUNNING
+    page_42 = next(
+        page
+        for page in child.retrieval_pages
+        if page.source_query_id == child.source_queries[2].query_id
+        and page.ordinal == 42
+    )
+    assert page_42.status is RetrievalCompletionStatus.COMPLETE
+    assert "completion_error" not in page_42.metadata
+    assert len(
+        [
+            occurrence
+            for occurrence in child.occurrences
+            if occurrence.source_identifier == duplicate_id
+        ]
+    ) == 2
+    assert (
+        authorize_semantic_scholar_native_id_overlap_recovery(
+            root=tmp_path, timestamp=clock
+        )
+        == recovered
+    )
+
+
+def test_semantic_native_id_overlap_recovery_continues_and_later_resumes(
+    tmp_path, monkeypatch, external_wave, external_preflight
+) -> None:
+    _, clock, _, _ = _failed_semantic_native_id_overlap_episode_2(
+        tmp_path, monkeypatch, external_wave, external_preflight
+    )
+    authorize_semantic_scholar_native_id_overlap_recovery(
+        root=tmp_path, timestamp=clock
+    )
+    first_http = FakeHttp(
+        [
+            FakeResponse(
+                payload={
+                    "total": 1_100,
+                    "token": "token-44",
+                    "data": [{"paperId": "id-0043", "title": "Page 43"}],
+                }
+            ),
+            FakeResponse(
+                payload={
+                    "total": 1_101,
+                    "token": "token-45",
+                    "data": [{"paperId": "id-0044", "title": "Page 44"}],
+                }
+            ),
+            FakeResponse(status_code=429, content=b"Rate limited"),
+        ]
+    )
+    paused = execute_external_source_session(
+        root=tmp_path,
+        source="SemanticScholar",
+        http=first_http,
+        resume=True,
+        timestamp=clock,
+        retry_policy=RetryPolicy(max_attempts=1, base_delay_seconds=0),
+        rate_limiter=RateLimiter({}),
+        retry_sleep=lambda _: None,
+    )
+    assert paused["sources"]["SemanticScholar"]["status"] == (
+        "PAUSED_PROVIDER_RATE_LIMIT"
+    )
+    assert [call["params"]["token"] for call in first_http.calls] == [
+        "token-43",
+        "token-44",
+        "token-45",
+    ]
+    second_http = FakeHttp(
+        [
+            FakeResponse(
+                payload={
+                    "total": 1_102,
+                    "data": [{"paperId": "id-0045", "title": "Page 45"}],
+                }
+            )
+        ]
+    )
+    completed = execute_external_source_session(
+        root=tmp_path,
+        source="SemanticScholar",
+        http=second_http,
+        resume=True,
+        timestamp=clock,
+        retry_policy=RetryPolicy(max_attempts=1, base_delay_seconds=0),
+        rate_limiter=RateLimiter({}),
+        retry_sleep=lambda _: None,
+    )
+    assert completed["sources"]["SemanticScholar"]["status"] == "COMPLETE"
+    assert [call["params"]["token"] for call in second_http.calls] == [
+        "token-45"
+    ]
+    checkpoint = tmp_path / completed["sources"]["SemanticScholar"][
+        "checkpoint_dataset"
+    ]["path"]
+    dataset = external_module.load_review_dataset(checkpoint)
+    qf03_pages = [
+        page
+        for page in dataset.retrieval_pages
+        if page.source_query_id == dataset.source_queries[2].query_id
+    ]
+    assert [page.ordinal for page in qf03_pages] == list(range(46))
+
+
+def test_semantic_native_id_overlap_recovery_keeps_new_overlap_terminal(
+    tmp_path, monkeypatch, external_wave, external_preflight
+) -> None:
+    _, clock, _, duplicate_id = _failed_semantic_native_id_overlap_episode_2(
+        tmp_path, monkeypatch, external_wave, external_preflight
+    )
+    authorize_semantic_scholar_native_id_overlap_recovery(
+        root=tmp_path, timestamp=clock
+    )
+    http = FakeHttp(
+        [
+            FakeResponse(
+                payload={
+                    "total": 1_100,
+                    "data": [
+                        {"paperId": duplicate_id, "title": "Third occurrence"}
+                    ],
+                }
+            )
+        ]
+    )
+    failed = execute_external_source_session(
+        root=tmp_path,
+        source="SemanticScholar",
+        http=http,
+        resume=True,
+        timestamp=clock,
+        retry_policy=RetryPolicy(max_attempts=1, base_delay_seconds=0),
+        rate_limiter=RateLimiter({}),
+        retry_sleep=lambda _: None,
+    )
+    source = failed["sources"]["SemanticScholar"]
+    assert source["status"] == "FAILED"
+    assert duplicate_id in source["failure_reason"]
+    checkpoint = tmp_path / source["checkpoint_dataset"]["path"]
+    dataset = external_module.load_review_dataset(checkpoint)
+    assert len(
+        [
+            occurrence
+            for occurrence in dataset.occurrences
+            if occurrence.source_identifier == duplicate_id
+        ]
+    ) == 3
+
+
+@pytest.mark.parametrize(
+    ("tamper_location", "error"),
+    [
+        ("state", "adjudication provenance changed"),
+        ("checkpoint", "checkpoint provenance changed"),
+    ],
+)
+def test_semantic_native_id_overlap_recovery_rejects_tampered_provenance_before_io(
+    tmp_path,
+    monkeypatch,
+    external_wave,
+    external_preflight,
+    tamper_location,
+    error,
+) -> None:
+    _, clock, _, _ = _failed_semantic_native_id_overlap_episode_2(
+        tmp_path, monkeypatch, external_wave, external_preflight
+    )
+    recovered = authorize_semantic_scholar_native_id_overlap_recovery(
+        root=tmp_path, timestamp=clock
+    )
+    state_path = tmp_path / external_module.EXECUTION_STATE_PATH
+    source = recovered["sources"]["SemanticScholar"]
+    if tamper_location == "state":
+        source["execution_episodes"][2]["adjudication_provenance"][
+            "exception_scope"
+        ] = "all overlaps"
+    else:
+        checkpoint = tmp_path / source["checkpoint_dataset"]["path"]
+        payload = json.loads(checkpoint.read_text())
+        payload["retrieval_runs"][0]["metadata"][
+            "offline_semantic_native_id_overlap_recovery"
+        ]["exception_scope"] = "all overlaps"
+        external_module.atomic_write(
+            checkpoint,
+            (
+                json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n"
+            ).encode(),
+        )
+        reference = external_module._file_reference(checkpoint, tmp_path)
+        source["checkpoint_dataset"] = reference
+        source["execution_episodes"][2]["checkpoint_dataset"] = reference
+    external_module._save_execution_state(state_path, recovered)
+    state_bytes = state_path.read_bytes()
+    http = FakeHttp([])
+    with pytest.raises(ExternalRetrievalWaveError, match=error):
+        execute_external_source_session(
+            root=tmp_path,
+            source="SemanticScholar",
+            http=http,
+            resume=True,
+            timestamp=clock,
+        )
+    assert http.calls == []
+    assert state_path.read_bytes() == state_bytes
+
+
+def test_semantic_native_id_overlap_authorization_obeys_shared_lock(
+    tmp_path, monkeypatch
+) -> None:
+    state_loaded = False
+
+    def unexpected_state_load(*args, **kwargs):
+        nonlocal state_loaded
+        state_loaded = True
+        raise AssertionError("authorization must acquire the lock before state load")
+
+    monkeypatch.setattr(external_module, "_load_execution_state", unexpected_state_load)
+    with external_module._exclusive_external_source_session(tmp_path), pytest.raises(
+        ExternalRetrievalWaveError,
+        match="another external-source session is already active",
+    ):
+        authorize_semantic_scholar_native_id_overlap_recovery(root=tmp_path)
+    assert state_loaded is False
+
+
+def test_semantic_native_id_overlap_recovery_cli_is_offline_and_source_scoped(
+    tmp_path, monkeypatch, capsys
+) -> None:
+    calls = []
+    state = {
+        "status": "RUNNING",
+        "sources": {
+            "SemanticScholar": {
+                "status": SEMANTIC_NATIVE_ID_OVERLAP_RECOVERY_STATUS,
+                "active_episode_number": 3,
+                "completed_query_count": 4,
+                "checkpoint_dataset": {"path": "child", "raw_sha256": "child"},
+                "execution_episodes": [
+                    {},
+                    {},
+                    {
+                        "episode_number": 3,
+                        "parent_checkpoint_dataset": {
+                            "path": "parent",
+                            "raw_sha256": "parent",
+                        },
+                        "adjudication_provenance": {
+                            "adjudicated_occurrences": ["first", "second"],
+                            "provider_completeness": "UNPROVEN",
+                        },
+                        "continuation_state": {"next_page_ordinal": 43},
+                    },
+                ],
+            }
+        },
+    }
+
+    def authorize(*, root):
+        calls.append(root)
+        return state
+
+    monkeypatch.setattr(
+        external_module,
+        "authorize_semantic_scholar_native_id_overlap_recovery",
+        authorize,
+    )
+    assert external_module.main(
+        [
+            "--root",
+            str(tmp_path),
+            "--source",
+            "SemanticScholar",
+            "--authorize-semantic-scholar-native-id-overlap-recovery",
+        ]
+    ) == 0
+    output = json.loads(capsys.readouterr().out)
+    assert calls == [tmp_path]
+    assert output["active_episode_number"] == 3
+    assert output["continuation"] == {"next_page_ordinal": 43}
+    assert output["provider_completeness"] == "UNPROVEN"
+    assert output["network_used"] is False
+
+
+def test_semantic_second_native_id_overlap_recovery_preserves_parents_and_is_idempotent(
+    tmp_path, monkeypatch, external_wave, external_preflight
+) -> None:
+    before, clock, episode_2_checkpoint, episode_3_checkpoint, first_id, second_id = (
+        _failed_semantic_native_id_overlap_episode_3(
+            tmp_path, monkeypatch, external_wave, external_preflight
+        )
+    )
+    parent_episodes = json.loads(
+        json.dumps(
+            before["sources"]["SemanticScholar"]["execution_episodes"],
+            sort_keys=True,
+        )
+    )
+    historical_files = {
+        path: path.read_bytes()
+        for checkpoint in (episode_2_checkpoint, episode_3_checkpoint)
+        for path in [checkpoint, *sorted((checkpoint.parent / "responses").iterdir())]
+    }
+    other_sources = {
+        key: json.loads(json.dumps(value, sort_keys=True))
+        for key, value in before["sources"].items()
+        if key != "SemanticScholar"
+    }
+
+    recovered = authorize_semantic_scholar_native_id_overlap_recovery(
+        root=tmp_path, timestamp=clock
+    )
+    source = recovered["sources"]["SemanticScholar"]
+    active = source["execution_episodes"][3]
+    assert source["status"] == SEMANTIC_NATIVE_ID_OVERLAP_RECOVERY_STATUS
+    assert source["active_episode_number"] == 4
+    assert source["occurrence_count"] == len(
+        external_module.load_review_dataset(
+            tmp_path / source["checkpoint_dataset"]["path"]
+        ).occurrences
+    )
+    assert source["completed_query_count"] == 4
+    assert source["execution_episodes"][:3] == parent_episodes
+    assert all(episode["immutable"] for episode in source["execution_episodes"][1:3])
+    assert active["recovery_of_episode_number"] == 3
+    assert active["network_used"] is False
+    assert active["continuation_state"]["next_page_ordinal"] == 55
+    provenance = active["adjudication_provenance"]
+    assert provenance["adjudicated_native_ids"] == [first_id, second_id]
+    assert len(provenance["adjudications"]) == 2
+    assert len(provenance["adjudicated_occurrences"]) == 4
+    assert provenance["provider_completeness"] == "UNPROVEN"
+    assert provenance["generic_duplicate_validation_changed"] is False
+    assert "third occurrence of either paperId" in provenance["exception_scope"]
+    assert all(path.read_bytes() == content for path, content in historical_files.items())
+    assert {
+        key: value
+        for key, value in recovered["sources"].items()
+        if key != "SemanticScholar"
+    } == other_sources
+    child = external_module.load_review_dataset(
+        tmp_path / source["checkpoint_dataset"]["path"]
+    )
+    assert child.source_queries[2].completion_status is RetrievalCompletionStatus.RUNNING
+    page_54 = next(
+        page
+        for page in child.retrieval_pages
+        if page.source_query_id == child.source_queries[2].query_id
+        and page.ordinal == 54
+    )
+    assert "completion_error" not in page_54.metadata
+    assert {
+        native_id: len(
+            [
+                occurrence
+                for occurrence in child.occurrences
+                if occurrence.source_identifier == native_id
+            ]
+        )
+        for native_id in (first_id, second_id)
+    } == {first_id: 2, second_id: 2}
+    assert (
+        authorize_semantic_scholar_native_id_overlap_recovery(
+            root=tmp_path, timestamp=clock
+        )
+        == recovered
+    )
+
+
+def test_semantic_second_native_id_overlap_recovery_continues_and_later_resumes(
+    tmp_path, monkeypatch, external_wave, external_preflight
+) -> None:
+    _, clock, _, _, _, _ = _failed_semantic_native_id_overlap_episode_3(
+        tmp_path, monkeypatch, external_wave, external_preflight
+    )
+    authorize_semantic_scholar_native_id_overlap_recovery(
+        root=tmp_path, timestamp=clock
+    )
+    first_http = FakeHttp(
+        [
+            FakeResponse(
+                payload={
+                    "total": 1_200,
+                    "token": "token-56",
+                    "data": [{"paperId": "id-0055", "title": "Page 55"}],
+                }
+            ),
+            FakeResponse(
+                payload={
+                    "total": 1_201,
+                    "token": "token-57",
+                    "data": [{"paperId": "id-0056", "title": "Page 56"}],
+                }
+            ),
+            FakeResponse(status_code=429, content=b"Rate limited"),
+        ]
+    )
+    paused = execute_external_source_session(
+        root=tmp_path,
+        source="SemanticScholar",
+        http=first_http,
+        resume=True,
+        timestamp=clock,
+        retry_policy=RetryPolicy(max_attempts=1, base_delay_seconds=0),
+        rate_limiter=RateLimiter({}),
+        retry_sleep=lambda _: None,
+    )
+    assert paused["sources"]["SemanticScholar"]["status"] == (
+        "PAUSED_PROVIDER_RATE_LIMIT"
+    )
+    assert [call["params"]["token"] for call in first_http.calls] == [
+        "token-55",
+        "token-56",
+        "token-57",
+    ]
+    second_http = FakeHttp(
+        [
+            FakeResponse(
+                payload={
+                    "total": 1_202,
+                    "data": [{"paperId": "id-0057", "title": "Page 57"}],
+                }
+            )
+        ]
+    )
+    completed = execute_external_source_session(
+        root=tmp_path,
+        source="SemanticScholar",
+        http=second_http,
+        resume=True,
+        timestamp=clock,
+        retry_policy=RetryPolicy(max_attempts=1, base_delay_seconds=0),
+        rate_limiter=RateLimiter({}),
+        retry_sleep=lambda _: None,
+    )
+    assert completed["sources"]["SemanticScholar"]["status"] == "COMPLETE"
+    assert [call["params"]["token"] for call in second_http.calls] == ["token-57"]
+    dataset = external_module.load_review_dataset(
+        tmp_path
+        / completed["sources"]["SemanticScholar"]["checkpoint_dataset"]["path"]
+    )
+    qf03_pages = [
+        page
+        for page in dataset.retrieval_pages
+        if page.source_query_id == dataset.source_queries[2].query_id
+    ]
+    assert [page.ordinal for page in qf03_pages] == list(range(58))
+
+
+@pytest.mark.parametrize("overlap_kind", ["first", "second", "new"])
+def test_semantic_second_native_id_overlap_recovery_keeps_new_overlaps_terminal(
+    tmp_path,
+    monkeypatch,
+    external_wave,
+    external_preflight,
+    overlap_kind,
+) -> None:
+    _, clock, _, _, first_id, second_id = (
+        _failed_semantic_native_id_overlap_episode_3(
+            tmp_path, monkeypatch, external_wave, external_preflight
+        )
+    )
+    authorize_semantic_scholar_native_id_overlap_recovery(
+        root=tmp_path, timestamp=clock
+    )
+    if overlap_kind == "new":
+        native_id = "new-cross-page-overlap"
+        responses = [
+            FakeResponse(
+                payload={
+                    "total": 1_200,
+                    "token": "token-56",
+                    "data": [{"paperId": native_id, "title": "First copy"}],
+                }
+            ),
+            FakeResponse(
+                payload={
+                    "total": 1_201,
+                    "data": [{"paperId": native_id, "title": "Second copy"}],
+                }
+            ),
+        ]
+    else:
+        native_id = first_id if overlap_kind == "first" else second_id
+        responses = [
+            FakeResponse(
+                payload={
+                    "total": 1_200,
+                    "data": [{"paperId": native_id, "title": "Third copy"}],
+                }
+            )
+        ]
+    failed = execute_external_source_session(
+        root=tmp_path,
+        source="SemanticScholar",
+        http=FakeHttp(responses),
+        resume=True,
+        timestamp=clock,
+        retry_policy=RetryPolicy(max_attempts=1, base_delay_seconds=0),
+        rate_limiter=RateLimiter({}),
+        retry_sleep=lambda _: None,
+    )
+    source = failed["sources"]["SemanticScholar"]
+    assert source["status"] == "FAILED"
+    assert native_id in source["failure_reason"]
+
+
+@pytest.mark.parametrize("tamper_location", ["state", "checkpoint", "prior"])
+def test_semantic_second_native_id_overlap_recovery_rejects_tampered_provenance(
+    tmp_path,
+    monkeypatch,
+    external_wave,
+    external_preflight,
+    tamper_location,
+) -> None:
+    _, clock, _, _, _, _ = _failed_semantic_native_id_overlap_episode_3(
+        tmp_path, monkeypatch, external_wave, external_preflight
+    )
+    recovered = authorize_semantic_scholar_native_id_overlap_recovery(
+        root=tmp_path, timestamp=clock
+    )
+    source = recovered["sources"]["SemanticScholar"]
+    if tamper_location == "prior":
+        source["execution_episodes"][2]["adjudication_provenance"][
+            "exception_scope"
+        ] = "all overlaps"
+    elif tamper_location == "state":
+        source["execution_episodes"][3]["adjudication_provenance"][
+            "exception_scope"
+        ] = "all overlaps"
+    else:
+        checkpoint = tmp_path / source["checkpoint_dataset"]["path"]
+        payload = json.loads(checkpoint.read_text())
+        payload["retrieval_runs"][0]["metadata"][
+            "offline_semantic_native_id_overlap_recovery_episode_4"
+        ]["exception_scope"] = "all overlaps"
+        external_module.atomic_write(
+            checkpoint,
+            (json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n").encode(),
+        )
+        reference = external_module._file_reference(checkpoint, tmp_path)
+        source["checkpoint_dataset"] = reference
+        source["execution_episodes"][3]["checkpoint_dataset"] = reference
+    state_path = tmp_path / external_module.EXECUTION_STATE_PATH
+    external_module._save_execution_state(state_path, recovered)
+    state_bytes = state_path.read_bytes()
+    http = FakeHttp([])
+    with pytest.raises(ExternalRetrievalWaveError, match="provenance changed"):
+        execute_external_source_session(
+            root=tmp_path,
+            source="SemanticScholar",
+            http=http,
+            resume=True,
+            timestamp=clock,
+        )
+    assert http.calls == []
+    assert state_path.read_bytes() == state_bytes
+
+    with pytest.raises(SystemExit):
+        external_module.main(
+            [
+                "--source",
+                "arXiv",
+                "--authorize-semantic-scholar-native-id-overlap-recovery",
+            ]
+        )
+    with pytest.raises(SystemExit):
+        external_module.main(
+            [
+                "--source",
+                "SemanticScholar",
+                "--resume",
+                "--authorize-semantic-scholar-native-id-overlap-recovery",
+            ]
+        )
 
 
 @pytest.mark.parametrize(

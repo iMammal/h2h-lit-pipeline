@@ -9,6 +9,7 @@ import json
 import math
 import os
 import time
+from collections import Counter
 from collections.abc import Callable, Mapping
 from contextlib import contextmanager
 from datetime import UTC, datetime
@@ -189,6 +190,146 @@ SEMANTIC_CANDIDATE_5XX_EXPECTED_TOTAL_PAGES = 37
 SEMANTIC_CANDIDATE_5XX_EXPECTED_HTTP_STATUSES = {200: 35, 500: 22, 429: 2}
 SEMANTIC_CANDIDATE_5XX_EXPECTED_OCCURRENCES = 34728
 SEMANTIC_CANDIDATE_5XX_EXPECTED_CANONICAL_RECORDS = 31532
+SEMANTIC_NATIVE_ID_OVERLAP_RECOVERY_STATUS = (
+    "NATIVE_ID_OVERLAP_RECOVERY_READY_TO_RESUME"
+)
+SEMANTIC_NATIVE_ID_OVERLAP_PARENT_CHECKPOINT_SHA256 = (
+    "8044d504e7c2c7a885ad2af8dc201c1aab01f03dec2bf7e3ad3dbf06de976f86"
+)
+SEMANTIC_NATIVE_ID_OVERLAP_PARENT_CHECKPOINT_SIZE = 1_196_606_198
+SEMANTIC_NATIVE_ID_OVERLAP_PAPER_ID = (
+    "a6a42ae353dba2ac0298dd73047678c91811541f"
+)
+SEMANTIC_NATIVE_ID_OVERLAP_QUERY_ID = "query:a37bc36618a498762d3cb6a5"
+SEMANTIC_NATIVE_ID_OVERLAP_ERROR = (
+    "source repeated native identifiers across pages: "
+    "['a6a42ae353dba2ac0298dd73047678c91811541f']"
+)
+SEMANTIC_NATIVE_ID_OVERLAP_OCCURRENCES = (
+    {
+        "ordinal": 2,
+        "page_id": "page:040bf64dc683844d1e4f18b3",
+        "occurrence_id": "occurrence:e6d33b87c8510dfe5f56f8c5",
+        "raw_payload_hash": (
+            "f8ce3541dd1d4c83c3695314f88f64da0dfcf3e39668335be5440d91981b6ed4"
+        ),
+        "response_path": (
+            "responses/32ecc1f19e83a30156b3455e4809a2beb93bcb79f7a4c9e5d9b6d8e9bea3ba47.json"
+        ),
+        "response_sha256": (
+            "568b6d8783137dfc8f7b630941cc2835f1b522e45ce48abef856369dec4c3cb5"
+        ),
+        "provider_total": 64_570,
+        "author_name": "J. Southgate",
+    },
+    {
+        "ordinal": 42,
+        "page_id": "page:72a19e2a44086391e70c7707",
+        "occurrence_id": "occurrence:538849c8b485810620f05e6c",
+        "raw_payload_hash": (
+            "9af38240e722e094f65b78f2d3a30efc83776e7c3ccb846279ca34a300bd3012"
+        ),
+        "response_path": (
+            "responses/3a175522f44cd2d6ba7c0da73847fc5589bbf4ac62d87bcb2c926e906da5041a.json"
+        ),
+        "response_sha256": (
+            "10193b78d36ab9cb1cc93387f02b8f03be16b1319c43c3cffbc03d2964f7d149"
+        ),
+        "provider_total": 64_919,
+        "author_name": "Jennifer Southgate",
+    },
+)
+SEMANTIC_NATIVE_ID_OVERLAP_CANONICAL_ID = (
+    "canonical:1f288b904d039372f06bc9a0"
+)
+SEMANTIC_NATIVE_ID_OVERLAP_DEDUPE_KEY = "doi:10.1186/1752-0509-2-102"
+SEMANTIC_NATIVE_ID_OVERLAP_QF_COUNTS = (
+    ("complete", 17, 16_869),
+    ("complete", 11, 10_723),
+    ("failed", 43, 42_997),
+    ("complete", 3, 2_954),
+    ("complete", 9, 8_905),
+)
+SEMANTIC_NATIVE_ID_OVERLAP_EXPECTED_ATTEMPTS = 125
+SEMANTIC_NATIVE_ID_OVERLAP_EXPECTED_PAGES = 83
+SEMANTIC_NATIVE_ID_OVERLAP_EXPECTED_OCCURRENCES = 82_448
+SEMANTIC_NATIVE_ID_OVERLAP_EXPECTED_CANONICAL_RECORDS = 73_912
+SEMANTIC_NATIVE_ID_OVERLAP_EXPECTED_QF03_DISTINCT_IDS = 42_996
+SEMANTIC_NATIVE_ID_OVERLAP_ORDERING_ANOMALIES = (
+    {
+        "page_ordinal": 2,
+        "left_index": 660,
+        "left_paper_id": "a6a42ae353dba2ac0298dd73047678c91811541f",
+        "right_paper_id": "0a33911e2cf92508f64418592f70e8b7002e326c",
+    },
+    {
+        "page_ordinal": 3,
+        "left_index": 180,
+        "left_paper_id": "d732e9f34a6bb7ad6f4382acc0cd2661f23d7fd2",
+        "right_paper_id": "0c4548946697b1f7300a12adf4e94fa76ce5e928",
+    },
+)
+SEMANTIC_NATIVE_ID_OVERLAP_EPISODE_3_PARENT_CHECKPOINT_SHA256 = (
+    "9107ea7d8a4c03f9a1909ca07e4610f0abe48c4e73e77285eeb0bec162c58eae"
+)
+SEMANTIC_NATIVE_ID_OVERLAP_EPISODE_3_PARENT_CHECKPOINT_SIZE = 1_380_419_798
+SEMANTIC_NATIVE_ID_OVERLAP_EPISODE_3_PAPER_ID = (
+    "d732e9f34a6bb7ad6f4382acc0cd2661f23d7fd2"
+)
+SEMANTIC_NATIVE_ID_OVERLAP_EPISODE_3_ERROR = (
+    "source repeated native identifiers across pages: "
+    "['d732e9f34a6bb7ad6f4382acc0cd2661f23d7fd2']"
+)
+SEMANTIC_NATIVE_ID_OVERLAP_EPISODE_3_OCCURRENCES = (
+    {
+        "ordinal": 3,
+        "page_id": "page:f6108b0d1487951f0e87120c",
+        "occurrence_id": "occurrence:cd35f79b71bcbebed1c2fe78",
+        "raw_payload_hash": (
+            "1ba07018806a955c0b75c424e8d1c1edbf3c2db367ee0387e130b707a0d0fdfb"
+        ),
+        "response_path": (
+            "responses/7a0110fbcafddba5beef7d86edc10b135bacbeed7a75cde2d2812a8cd0e3e8a1.json"
+        ),
+        "response_sha256": (
+            "fec9075bdab6896a86ec62f7ba2f8eb88442eeb2f0b90c185ba2ea2b1e320011"
+        ),
+        "provider_total": 64_570,
+    },
+    {
+        "ordinal": 54,
+        "page_id": "page:cf6729971b4cb3ea41bfcefb",
+        "occurrence_id": "occurrence:11095283d8af9ab1285eaf0a",
+        "raw_payload_hash": (
+            "1ba07018806a955c0b75c424e8d1c1edbf3c2db367ee0387e130b707a0d0fdfb"
+        ),
+        "response_path": (
+            "responses/69e30b7d452d4d86aa7521fe825fc99cf5bc5b82e021dc2d524535f1204f03d9.json"
+        ),
+        "response_sha256": (
+            "8c891a51226ca2b1a6d204b64a730c011f5814daf301c95c1413653475ccee75"
+        ),
+        "provider_total": 65_001,
+    },
+)
+SEMANTIC_NATIVE_ID_OVERLAP_EPISODE_3_CANONICAL_ID = (
+    "canonical:0bbc19d9cd9342b69734bd66"
+)
+SEMANTIC_NATIVE_ID_OVERLAP_EPISODE_3_DEDUPE_KEY = (
+    "doi:10.1186/1471-2105-8-270"
+)
+SEMANTIC_NATIVE_ID_OVERLAP_EPISODE_3_QF_COUNTS = (
+    ("complete", 17, 16_869),
+    ("complete", 11, 10_723),
+    ("failed", 55, 54_996),
+    ("complete", 3, 2_954),
+    ("complete", 9, 8_905),
+)
+SEMANTIC_NATIVE_ID_OVERLAP_EPISODE_3_EXPECTED_ATTEMPTS = 138
+SEMANTIC_NATIVE_ID_OVERLAP_EPISODE_3_EXPECTED_PAGES = 95
+SEMANTIC_NATIVE_ID_OVERLAP_EPISODE_3_EXPECTED_OCCURRENCES = 94_447
+SEMANTIC_NATIVE_ID_OVERLAP_EPISODE_3_EXPECTED_CANONICAL_RECORDS = 85_457
+SEMANTIC_NATIVE_ID_OVERLAP_EPISODE_3_EXPECTED_QF03_DISTINCT_IDS = 54_994
 PUBMED_TRANSPORT_RETRY_STATUS = "TRANSPORT_RETRY_AUTHORIZED_NOT_STARTED"
 PUBMED_PARSER_RECOVERY_STATUS = "PARSER_RECOVERY_COMPLETE_READY_TO_RESUME"
 ARXIV_RATE_LIMIT_RECOVERY_STATUS = "RATE_LIMIT_RECOVERY_READY_TO_RESUME"
@@ -1954,6 +2095,1970 @@ def authorize_semantic_scholar_candidate_5xx_recovery(
     state["external_retrieval_completed_at_utc"] = None
     state["external_retrieval_cutoff_date"] = None
     _save_execution_state(state_path, state)
+    return state
+
+
+def _semantic_native_id_overlap_recovery_active(
+    source_state: Mapping[str, Any],
+) -> bool:
+    active_number = source_state.get("active_episode_number")
+    return any(
+        episode.get("episode_number") == active_number
+        and episode.get("authorization_reason")
+        == "OFFLINE_SEMANTIC_SCHOLAR_NATIVE_ID_OVERLAP_RECOVERY"
+        for episode in source_state.get("execution_episodes", [])
+    )
+
+
+def _semantic_native_id_overlap_provenance(
+    *,
+    checkpoint_reference: Mapping[str, Any],
+    validated: Mapping[str, Any],
+) -> dict[str, Any]:
+    provenance = {
+        "schema_version": "1.0.0",
+        "authorization_reason": (
+            "OFFLINE_SEMANTIC_SCHOLAR_NATIVE_ID_OVERLAP_RECOVERY"
+        ),
+        "parent_episode_number": 2,
+        "recovery_episode_number": 3,
+        "parent_checkpoint": dict(checkpoint_reference),
+        "adjudicated_native_id": SEMANTIC_NATIVE_ID_OVERLAP_PAPER_ID,
+        "adjudicated_occurrences": [
+            dict(item) for item in SEMANTIC_NATIVE_ID_OVERLAP_OCCURRENCES
+        ],
+        "canonical_grouping": dict(validated["canonical_grouping"]),
+        "qf03_occurrence_count": validated["qf03_occurrence_count"],
+        "qf03_distinct_native_id_count": validated[
+            "qf03_distinct_native_id_count"
+        ],
+        "within_page_duplicate_count": 0,
+        "cross_page_duplicate_native_ids": [
+            SEMANTIC_NATIVE_ID_OVERLAP_PAPER_ID
+        ],
+        "saved_token_chain_hash": validated["saved_token_chain_hash"],
+        "accepted_page_manifest_hash": validated[
+            "accepted_page_manifest_hash"
+        ],
+        "continuation": dict(validated["continuation"]),
+        "provider_ordering_policy": "paperId:asc",
+        "provider_ordering_anomalies": [
+            dict(item) for item in validated["provider_ordering_anomalies"]
+        ],
+        "cross_page_boundary_ordering_anomalies": [],
+        "provider_total_history": list(validated["provider_total_history"]),
+        "provider_totals_are_exact": False,
+        "provider_completeness": "UNPROVEN",
+        "pagination_completion_rule": (
+            "continue until the provider omits the next token; termination does not "
+            "prove stable-snapshot completeness"
+        ),
+        "raw_response_count": validated["raw_response_count"],
+        "raw_response_manifest_hash": validated[
+            "raw_response_manifest_hash"
+        ],
+        "exception_scope": (
+            "exact validated historical occurrence pair only; every new overlap, "
+            "including a third occurrence of the same paperId, remains terminal"
+        ),
+        "generic_duplicate_validation_changed": False,
+        "network_used": False,
+    }
+    provenance["provenance_hash"] = _hash_payload(provenance)
+    return provenance
+
+
+def _semantic_native_id_overlap_adjudications(
+    *, include_episode_3_pair: bool
+) -> tuple[dict[str, Any], ...]:
+    adjudications = [
+        {
+            "native_id": SEMANTIC_NATIVE_ID_OVERLAP_PAPER_ID,
+            "occurrences": SEMANTIC_NATIVE_ID_OVERLAP_OCCURRENCES,
+            "canonical_id": SEMANTIC_NATIVE_ID_OVERLAP_CANONICAL_ID,
+            "dedupe_key": SEMANTIC_NATIVE_ID_OVERLAP_DEDUPE_KEY,
+        }
+    ]
+    if include_episode_3_pair:
+        adjudications.append(
+            {
+                "native_id": SEMANTIC_NATIVE_ID_OVERLAP_EPISODE_3_PAPER_ID,
+                "occurrences": SEMANTIC_NATIVE_ID_OVERLAP_EPISODE_3_OCCURRENCES,
+                "canonical_id": SEMANTIC_NATIVE_ID_OVERLAP_EPISODE_3_CANONICAL_ID,
+                "dedupe_key": SEMANTIC_NATIVE_ID_OVERLAP_EPISODE_3_DEDUPE_KEY,
+            }
+        )
+    return tuple(adjudications)
+
+
+def _validate_semantic_native_id_pair_and_canonicalization(
+    dataset: Any,
+    *,
+    require_parent_counts: bool,
+    include_episode_3_pair: bool = False,
+) -> dict[str, Any]:
+    qf03 = next(
+        (
+            query
+            for query in dataset.source_queries
+            if query.query_id == SEMANTIC_NATIVE_ID_OVERLAP_QUERY_ID
+        ),
+        None,
+    )
+    if qf03 is None:
+        raise ExternalRetrievalWaveError(
+            "Semantic Scholar overlap recovery QF03 identity changed"
+        )
+    pages = sorted(
+        (
+            page
+            for page in dataset.retrieval_pages
+            if page.source_query_id == qf03.query_id
+        ),
+        key=lambda item: item.ordinal,
+    )
+    if not pages or [page.ordinal for page in pages] != list(range(len(pages))):
+        raise ExternalRetrievalWaveError(
+            "Semantic Scholar overlap recovery page ordinals changed"
+        )
+    occurrences = [
+        occurrence
+        for occurrence in dataset.occurrences
+        if occurrence.source_query_id == qf03.query_id
+    ]
+    occurrences_by_page = {
+        page.page_id: [
+            occurrence
+            for occurrence in occurrences
+            if occurrence.retrieval_page_id == page.page_id
+        ]
+        for page in pages
+    }
+    all_native_ids: list[str] = []
+    for page in pages:
+        page_occurrences = occurrences_by_page[page.page_id]
+        if (
+            len(page.native_identifiers) != len(set(page.native_identifiers))
+            or page.occurrence_ids
+            != [occurrence.occurrence_id for occurrence in page_occurrences]
+            or page.native_identifiers
+            != [occurrence.source_identifier for occurrence in page_occurrences]
+        ):
+            raise ExternalRetrievalWaveError(
+                "Semantic Scholar overlap recovery contains a within-page or "
+                "occurrence-order identity mismatch"
+            )
+        all_native_ids.extend(page.native_identifiers)
+    counts = Counter(all_native_ids)
+    adjudications = _semantic_native_id_overlap_adjudications(
+        include_episode_3_pair=include_episode_3_pair
+    )
+    duplicate_ids = {key: value for key, value in counts.items() if value > 1}
+    expected_duplicate_ids = {
+        adjudication["native_id"]: 2 for adjudication in adjudications
+    }
+    if duplicate_ids != expected_duplicate_ids:
+        raise ExternalRetrievalWaveError(
+            "Semantic Scholar overlap recovery contains an unadjudicated native-ID "
+            "overlap"
+        )
+    canonical_groupings = []
+    for adjudication in adjudications:
+        pair = sorted(
+            (
+                occurrence
+                for occurrence in occurrences
+                if occurrence.source_identifier == adjudication["native_id"]
+            ),
+            key=lambda item: item.page,
+        )
+        expected_pair = list(adjudication["occurrences"])
+        if len(pair) != 2 or any(
+            occurrence.page != expected["ordinal"]
+            or occurrence.retrieval_page_id != expected["page_id"]
+            or occurrence.occurrence_id != expected["occurrence_id"]
+            or occurrence.raw_payload_hash != expected["raw_payload_hash"]
+            for occurrence, expected in zip(pair, expected_pair, strict=True)
+        ):
+            raise ExternalRetrievalWaveError(
+                "Semantic Scholar overlap recovery occurrence pair changed"
+            )
+        pair_ids = [item["occurrence_id"] for item in expected_pair]
+        canonical = next(
+            (
+                item
+                for item in dataset.canonical_records
+                if all(
+                    occurrence_id in item.occurrence_ids
+                    for occurrence_id in pair_ids
+                )
+            ),
+            None,
+        )
+        if (
+            canonical is None
+            or canonical.canonical_id != adjudication["canonical_id"]
+            or canonical.survivor_occurrence_id != pair_ids[0]
+            or canonical.metadata.get("dedupe_key") != adjudication["dedupe_key"]
+            or (require_parent_counts and canonical.occurrence_ids != pair_ids)
+        ):
+            raise ExternalRetrievalWaveError(
+                "Semantic Scholar overlap recovery canonical grouping changed"
+            )
+        decisions = {
+            item.occurrence_id: item
+            for item in dataset.duplicate_decisions
+            if item.occurrence_id in pair_ids
+        }
+        if set(decisions) != set(pair_ids) or any(
+            decisions[occurrence_id].canonical_record_id != canonical.canonical_id
+            or decisions[occurrence_id].survivor_occurrence_id != pair_ids[0]
+            or decisions[occurrence_id].match_key != adjudication["dedupe_key"]
+            or decisions[occurrence_id].match_rule != "doi_first_title_fallback"
+            or decisions[occurrence_id].outcome.value
+            != ("unique" if index == 0 else "duplicate")
+            for index, occurrence_id in enumerate(pair_ids)
+        ):
+            raise ExternalRetrievalWaveError(
+                "Semantic Scholar overlap recovery duplicate decisions changed"
+            )
+        canonical_groupings.append(
+            {
+                "native_id": adjudication["native_id"],
+                "canonical_id": canonical.canonical_id,
+                "dedupe_key": canonical.metadata["dedupe_key"],
+                "survivor_occurrence_id": canonical.survivor_occurrence_id,
+                "adjudicated_occurrence_ids": pair_ids,
+            }
+        )
+    return {
+        "query": qf03,
+        "pages": pages,
+        "occurrences": occurrences,
+        "qf03_occurrence_count": len(occurrences),
+        "qf03_distinct_native_id_count": len(counts),
+        "canonical_grouping": {
+            key: value
+            for key, value in canonical_groupings[0].items()
+            if key != "native_id"
+        },
+        "canonical_groupings": canonical_groupings,
+    }
+
+
+def _validate_semantic_overlap_response_inventory(
+    *,
+    root: Path,
+    checkpoint_path: Path,
+    dataset: Any,
+    expected_attempt_count: int,
+    error_prefix: str,
+) -> dict[str, Any]:
+    attempts_by_id = {
+        attempt.attempt_id: attempt for attempt in dataset.retrieval_attempts
+    }
+    store = CheckpointStore(checkpoint_path.parent)
+    raw_response_references: list[tuple[str, str]] = []
+    raw_response_bindings: list[dict[str, Any]] = []
+    for attempt in dataset.retrieval_attempts:
+        if (
+            attempt.raw_response_path is None
+            or attempt.raw_response_hash is None
+            or attempt.response_status is None
+        ):
+            raise ExternalRetrievalWaveError(
+                f"{error_prefix} attempt lacks response evidence"
+            )
+        try:
+            stored = store.load_response(
+                attempt.raw_response_path, attempt.raw_response_hash
+            )
+        except (OSError, ValueError) as exc:
+            raise ExternalRetrievalWaveError(
+                f"{error_prefix} response hash/read failure"
+            ) from exc
+        if stored.status_code != attempt.response_status:
+            raise ExternalRetrievalWaveError(
+                f"{error_prefix} response status changed"
+            )
+        raw_response_references.append(
+            (attempt.raw_response_path, attempt.raw_response_hash)
+        )
+        response_path = checkpoint_path.parent / attempt.raw_response_path
+        raw_response_bindings.append(
+            {
+                "attempt_id": attempt.attempt_id,
+                "page_id": attempt.page_id,
+                "path": response_path.relative_to(root).as_posix(),
+                "byte_size": response_path.stat().st_size,
+                "raw_sha256": attempt.raw_response_hash,
+                "http_status": stored.status_code,
+            }
+        )
+    response_paths = [item[0] for item in raw_response_references]
+    persisted_paths = {
+        item.relative_to(checkpoint_path.parent).as_posix()
+        for item in (checkpoint_path.parent / "responses").iterdir()
+        if item.is_file()
+    }
+    if (
+        len(response_paths) != expected_attempt_count
+        or len(set(response_paths)) != len(response_paths)
+        or set(response_paths) != persisted_paths
+    ):
+        raise ExternalRetrievalWaveError(
+            f"{error_prefix} response inventory changed"
+        )
+    return {
+        "attempts_by_id": attempts_by_id,
+        "store": store,
+        "raw_response_references": raw_response_references,
+        "raw_response_bindings": raw_response_bindings,
+    }
+
+
+def _validate_semantic_qf03_page_chain(
+    *,
+    pages: list[Any],
+    spec: RetrievalQuerySpec,
+    attempts_by_id: Mapping[str, Any],
+    store: CheckpointStore,
+    expected_occurrences: tuple[Mapping[str, Any], ...],
+    expected_ordering_anomalies: tuple[Mapping[str, Any], ...],
+    error_prefix: str,
+) -> dict[str, Any]:
+    adapter = PAGINATED_SOURCE_ADAPTERS["SemanticScholar"]
+    token_chain: list[dict[str, Any]] = []
+    consumed_tokens: list[str] = []
+    returned_tokens: list[str] = []
+    provider_total_history: list[int | None] = []
+    ordering_anomalies: list[dict[str, Any]] = []
+    boundary_anomalies: list[dict[str, Any]] = []
+    provider_records: dict[tuple[str, int], dict[str, Any]] = {}
+    expected_by_ordinal: dict[int, list[Mapping[str, Any]]] = {}
+    for expected in expected_occurrences:
+        expected_by_ordinal.setdefault(int(expected["ordinal"]), []).append(expected)
+    previous_page = None
+    for page in pages:
+        if page.status is not RetrievalCompletionStatus.COMPLETE:
+            raise ExternalRetrievalWaveError(
+                f"{error_prefix} accepted-page status changed"
+            )
+        if previous_page is None:
+            if page.request_state != {"mode": "bulk"}:
+                raise ExternalRetrievalWaveError(
+                    f"{error_prefix} initial state changed"
+                )
+        elif page.request_state != previous_page.next_state:
+            raise ExternalRetrievalWaveError(
+                f"{error_prefix} token chain is discontinuous"
+            )
+        request = adapter.build_request(spec, page.request_state)
+        page_attempts = [attempts_by_id[item] for item in page.attempt_ids]
+        if not page_attempts or any(
+            attempt.page_id != page.page_id
+            or attempt.request_hash != request.request_hash()
+            or attempt.request_method != request.method
+            or attempt.request_url != request.url
+            or attempt.request_params != request.sanitized_params()
+            or attempt.request_headers != request.sanitized_headers()
+            or attempt.request_params.get("sort") != "paperId:asc"
+            for attempt in page_attempts
+        ):
+            raise ExternalRetrievalWaveError(
+                f"{error_prefix} request/token binding changed"
+            )
+        successful = [
+            attempt
+            for attempt in page_attempts
+            if attempt.status is RetrievalAttemptStatus.SUCCEEDED
+        ]
+        if len(successful) != 1 or successful[0].response_status != 200:
+            raise ExternalRetrievalWaveError(
+                f"{error_prefix} accepted response changed"
+            )
+        success = successful[0]
+        payload = store.load_response(
+            success.raw_response_path, success.raw_response_hash
+        ).json()
+        data = payload.get("data")
+        if not isinstance(data, list):
+            raise ExternalRetrievalWaveError(
+                f"{error_prefix} response data changed"
+            )
+        provider_ids = [item.get("paperId") for item in data]
+        response_token = payload.get("token")
+        expected_next_state = (
+            {"mode": "bulk", "token": response_token}
+            if response_token is not None
+            else None
+        )
+        if (
+            provider_ids != page.native_identifiers
+            or len(data) != page.returned_item_count
+            or payload.get("total") != page.source_reported_total
+            or page.total_is_exact
+            or page.next_state != expected_next_state
+        ):
+            raise ExternalRetrievalWaveError(
+                f"{error_prefix} response/page binding changed"
+            )
+        if page.request_state.get("token") is not None:
+            consumed_tokens.append(page.request_state["token"])
+        if response_token is not None:
+            returned_tokens.append(response_token)
+        provider_total_history.append(page.source_reported_total)
+        token_chain.append(
+            {
+                "ordinal": page.ordinal,
+                "page_id": page.page_id,
+                "request_state": dict(page.request_state),
+                "next_state": dict(page.next_state) if page.next_state else None,
+                "request_hash": success.request_hash,
+                "response_sha256": success.raw_response_hash,
+            }
+        )
+        for index in range(1, len(page.native_identifiers)):
+            left = page.native_identifiers[index - 1]
+            right = page.native_identifiers[index]
+            if left > right:
+                ordering_anomalies.append(
+                    {
+                        "page_ordinal": page.ordinal,
+                        "left_index": index - 1,
+                        "left_paper_id": left,
+                        "right_paper_id": right,
+                    }
+                )
+        if (
+            previous_page is not None
+            and previous_page.native_identifiers
+            and page.native_identifiers
+            and previous_page.native_identifiers[-1] > page.native_identifiers[0]
+        ):
+            boundary_anomalies.append(
+                {
+                    "left_page_ordinal": previous_page.ordinal,
+                    "right_page_ordinal": page.ordinal,
+                }
+            )
+        for expected in expected_by_ordinal.get(page.ordinal, []):
+            if (
+                success.raw_response_path != expected["response_path"]
+                or success.raw_response_hash != expected["response_sha256"]
+                or page.source_reported_total != expected["provider_total"]
+            ):
+                raise ExternalRetrievalWaveError(
+                    "Semantic Scholar overlap pair response binding changed"
+                )
+            matches = [
+                item
+                for item in data
+                if item.get("paperId") == expected["native_id"]
+            ]
+            if len(matches) != 1:
+                raise ExternalRetrievalWaveError(
+                    "Semantic Scholar overlap paper is absent from its raw response"
+                )
+            provider_records[(expected["native_id"], page.ordinal)] = matches[0]
+        previous_page = page
+    if (
+        len(consumed_tokens) != len(pages) - 1
+        or len(set(consumed_tokens)) != len(consumed_tokens)
+        or len(returned_tokens) != len(pages)
+        or len(set(returned_tokens)) != len(returned_tokens)
+        or ordering_anomalies != [dict(item) for item in expected_ordering_anomalies]
+        or boundary_anomalies
+    ):
+        raise ExternalRetrievalWaveError(
+            f"{error_prefix} continuation/order evidence changed"
+        )
+    return {
+        "provider_records": provider_records,
+        "provider_total_history": provider_total_history,
+        "provider_ordering_anomalies": ordering_anomalies,
+        "token_chain": token_chain,
+        "saved_token_chain_hash": _hash_payload({"pages": token_chain}),
+        "accepted_page_manifest_hash": _semantic_accepted_page_manifest_hash(pages),
+        "continuation": {
+            "next_page_ordinal": pages[-1].ordinal + 1,
+            "predecessor_page_id": pages[-1].page_id,
+            "request_state": dict(pages[-1].next_state),
+        },
+    }
+
+
+def _semantic_accepted_page_manifest_hash(pages: list[Any]) -> str:
+    return _hash_payload(
+        {
+            "pages": [
+                {
+                    "ordinal": page.ordinal,
+                    "page_id": page.page_id,
+                    "request_state": page.request_state,
+                    "next_state": page.next_state,
+                    "returned_item_count": page.returned_item_count,
+                    "occurrence_ids": page.occurrence_ids,
+                    "native_identifiers": page.native_identifiers,
+                    "source_reported_total": page.source_reported_total,
+                    "total_is_exact": page.total_is_exact,
+                }
+                for page in pages
+            ]
+        }
+    )
+
+
+def _validate_semantic_native_id_overlap_parent_checkpoint(
+    *,
+    root: Path,
+    wave: ProductionRetrievalWave,
+    checkpoint_reference: Mapping[str, Any],
+) -> dict[str, Any]:
+    if (
+        checkpoint_reference.get("raw_sha256")
+        != SEMANTIC_NATIVE_ID_OVERLAP_PARENT_CHECKPOINT_SHA256
+        or checkpoint_reference.get("byte_size")
+        != SEMANTIC_NATIVE_ID_OVERLAP_PARENT_CHECKPOINT_SIZE
+    ):
+        raise ExternalRetrievalWaveError(
+            "Semantic Scholar overlap recovery requires the exact episode-2 parent "
+            "checkpoint"
+        )
+    checkpoint_path = _safe_output_path(root, checkpoint_reference["path"])
+    _verify_file_reference(checkpoint_path, checkpoint_reference, root)
+    try:
+        dataset = load_review_dataset(checkpoint_path)
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        raise ExternalRetrievalWaveError(
+            "Semantic Scholar overlap parent checkpoint is invalid"
+        ) from exc
+    dataset.validate()
+    if (
+        len(dataset.retrieval_runs) != 1
+        or len(dataset.source_queries) != 5
+        or len(dataset.retrieval_attempts)
+        != SEMANTIC_NATIVE_ID_OVERLAP_EXPECTED_ATTEMPTS
+        or len(dataset.retrieval_pages) != SEMANTIC_NATIVE_ID_OVERLAP_EXPECTED_PAGES
+        or len(dataset.occurrences)
+        != SEMANTIC_NATIVE_ID_OVERLAP_EXPECTED_OCCURRENCES
+        or len(dataset.canonical_records)
+        != SEMANTIC_NATIVE_ID_OVERLAP_EXPECTED_CANONICAL_RECORDS
+    ):
+        raise ExternalRetrievalWaveError(
+            "Semantic Scholar overlap parent counts changed"
+        )
+    run = dataset.retrieval_runs[0]
+    specs = _source_query_specs(wave, "SemanticScholar", ieee_credential="")
+    if (
+        run.run_id != f"{WAVE_ID}:SemanticScholar"
+        or run.query_plan_hash != _query_plan_hash(specs)
+        or run.query_plan_version != wave.query_plan_hash
+        or run.completion_status is not RetrievalCompletionStatus.FAILED
+        or run.retrieval_cutoff_date is not None
+        or run.errors
+        != [f"{SEMANTIC_NATIVE_ID_OVERLAP_QUERY_ID}: {SEMANTIC_NATIVE_ID_OVERLAP_ERROR}"]
+    ):
+        raise ExternalRetrievalWaveError(
+            "Semantic Scholar overlap parent run binding changed"
+        )
+    for query, spec, expected in zip(
+        dataset.source_queries,
+        specs,
+        SEMANTIC_NATIVE_ID_OVERLAP_QF_COUNTS,
+        strict=True,
+    ):
+        expected_status, expected_pages, expected_occurrences = expected
+        pages = sorted(
+            (
+                page
+                for page in dataset.retrieval_pages
+                if page.source_query_id == query.query_id
+            ),
+            key=lambda item: item.ordinal,
+        )
+        occurrences = [
+            item
+            for item in dataset.occurrences
+            if item.source_query_id == query.query_id
+        ]
+        if (
+            query.query_text != spec.query_text
+            or query.query_version != spec.query_version
+            or query.endpoint != spec.endpoint
+            or query.fields != spec.fields
+            or query.completion_status.value != expected_status
+            or query.result_count != expected_occurrences
+            or len(pages) != expected_pages
+            or len(occurrences) != expected_occurrences
+            or query.page_ids != [page.page_id for page in pages]
+            or [page.ordinal for page in pages] != list(range(expected_pages))
+        ):
+            raise ExternalRetrievalWaveError(
+                "Semantic Scholar overlap parent query evidence changed"
+            )
+    pair_evidence = _validate_semantic_native_id_pair_and_canonicalization(
+        dataset, require_parent_counts=True
+    )
+    if (
+        pair_evidence["qf03_occurrence_count"]
+        != SEMANTIC_NATIVE_ID_OVERLAP_QF_COUNTS[2][2]
+        or pair_evidence["qf03_distinct_native_id_count"]
+        != SEMANTIC_NATIVE_ID_OVERLAP_EXPECTED_QF03_DISTINCT_IDS
+    ):
+        raise ExternalRetrievalWaveError(
+            "Semantic Scholar overlap parent QF03 identity counts changed"
+        )
+    qf03 = pair_evidence["query"]
+    pages = pair_evidence["pages"]
+    if (
+        qf03.status is not ProcessingStatus.FAILED
+        or qf03.errors != [SEMANTIC_NATIVE_ID_OVERLAP_ERROR]
+        or pages[-1].status is not RetrievalCompletionStatus.COMPLETE
+        or pages[-1].metadata.get("completion_error")
+        != SEMANTIC_NATIVE_ID_OVERLAP_ERROR
+        or pages[-1].ordinal != 42
+        or pages[-1].next_state is None
+    ):
+        raise ExternalRetrievalWaveError(
+            "Semantic Scholar overlap parent failure position changed"
+        )
+
+    adapter = PAGINATED_SOURCE_ADAPTERS["SemanticScholar"]
+    spec = specs[2]
+    attempts_by_id = {
+        attempt.attempt_id: attempt for attempt in dataset.retrieval_attempts
+    }
+    store = CheckpointStore(checkpoint_path.parent)
+    raw_response_references: list[tuple[str, str]] = []
+    raw_response_bindings: list[dict[str, Any]] = []
+    for attempt in dataset.retrieval_attempts:
+        if (
+            attempt.raw_response_path is None
+            or attempt.raw_response_hash is None
+            or attempt.response_status is None
+        ):
+            raise ExternalRetrievalWaveError(
+                "Semantic Scholar overlap parent attempt lacks response evidence"
+            )
+        try:
+            stored = store.load_response(
+                attempt.raw_response_path, attempt.raw_response_hash
+            )
+        except (OSError, ValueError) as exc:
+            raise ExternalRetrievalWaveError(
+                "Semantic Scholar overlap parent response hash/read failure"
+            ) from exc
+        if stored.status_code != attempt.response_status:
+            raise ExternalRetrievalWaveError(
+                "Semantic Scholar overlap parent response status changed"
+            )
+        raw_response_references.append(
+            (attempt.raw_response_path, attempt.raw_response_hash)
+        )
+        response_path = checkpoint_path.parent / attempt.raw_response_path
+        raw_response_bindings.append(
+            {
+                "attempt_id": attempt.attempt_id,
+                "page_id": attempt.page_id,
+                "path": response_path.relative_to(root).as_posix(),
+                "byte_size": response_path.stat().st_size,
+                "raw_sha256": attempt.raw_response_hash,
+                "http_status": stored.status_code,
+            }
+        )
+    response_paths = [item[0] for item in raw_response_references]
+    persisted_paths = {
+        item.relative_to(checkpoint_path.parent).as_posix()
+        for item in (checkpoint_path.parent / "responses").iterdir()
+        if item.is_file()
+    }
+    if (
+        len(response_paths) != SEMANTIC_NATIVE_ID_OVERLAP_EXPECTED_ATTEMPTS
+        or len(set(response_paths)) != len(response_paths)
+        or set(response_paths) != persisted_paths
+    ):
+        raise ExternalRetrievalWaveError(
+            "Semantic Scholar overlap parent response inventory changed"
+        )
+
+    token_chain: list[dict[str, Any]] = []
+    consumed_tokens: list[str] = []
+    returned_tokens: list[str] = []
+    provider_total_history: list[int | None] = []
+    ordering_anomalies: list[dict[str, Any]] = []
+    boundary_anomalies: list[dict[str, Any]] = []
+    provider_records: dict[int, dict[str, Any]] = {}
+    previous_page = None
+    expected_pair_by_ordinal = {
+        item["ordinal"]: item for item in SEMANTIC_NATIVE_ID_OVERLAP_OCCURRENCES
+    }
+    for page in pages:
+        if page.status is not RetrievalCompletionStatus.COMPLETE:
+            raise ExternalRetrievalWaveError(
+                "Semantic Scholar overlap parent accepted-page status changed"
+            )
+        if previous_page is None:
+            if page.request_state != {"mode": "bulk"}:
+                raise ExternalRetrievalWaveError(
+                    "Semantic Scholar overlap parent initial state changed"
+                )
+        elif page.request_state != previous_page.next_state:
+            raise ExternalRetrievalWaveError(
+                "Semantic Scholar overlap parent token chain is discontinuous"
+            )
+        request = adapter.build_request(spec, page.request_state)
+        page_attempts = [attempts_by_id[item] for item in page.attempt_ids]
+        if not page_attempts or any(
+            attempt.page_id != page.page_id
+            or attempt.request_hash != request.request_hash()
+            or attempt.request_method != request.method
+            or attempt.request_url != request.url
+            or attempt.request_params != request.sanitized_params()
+            or attempt.request_headers != request.sanitized_headers()
+            or attempt.request_params.get("sort") != "paperId:asc"
+            for attempt in page_attempts
+        ):
+            raise ExternalRetrievalWaveError(
+                "Semantic Scholar overlap parent request/token binding changed"
+            )
+        successful = [
+            attempt
+            for attempt in page_attempts
+            if attempt.status is RetrievalAttemptStatus.SUCCEEDED
+        ]
+        if len(successful) != 1 or successful[0].response_status != 200:
+            raise ExternalRetrievalWaveError(
+                "Semantic Scholar overlap parent accepted response changed"
+            )
+        success = successful[0]
+        payload = store.load_response(
+            success.raw_response_path, success.raw_response_hash
+        ).json()
+        data = payload.get("data")
+        if not isinstance(data, list):
+            raise ExternalRetrievalWaveError(
+                "Semantic Scholar overlap parent response data changed"
+            )
+        provider_ids = [item.get("paperId") for item in data]
+        response_token = payload.get("token")
+        expected_next_state = (
+            {"mode": "bulk", "token": response_token}
+            if response_token is not None
+            else None
+        )
+        if (
+            provider_ids != page.native_identifiers
+            or len(data) != page.returned_item_count
+            or payload.get("total") != page.source_reported_total
+            or page.total_is_exact
+            or page.next_state != expected_next_state
+        ):
+            raise ExternalRetrievalWaveError(
+                "Semantic Scholar overlap parent response/page binding changed"
+            )
+        if page.request_state.get("token") is not None:
+            consumed_tokens.append(page.request_state["token"])
+        if response_token is not None:
+            returned_tokens.append(response_token)
+        provider_total_history.append(page.source_reported_total)
+        token_chain.append(
+            {
+                "ordinal": page.ordinal,
+                "page_id": page.page_id,
+                "request_state": dict(page.request_state),
+                "next_state": dict(page.next_state) if page.next_state else None,
+                "request_hash": success.request_hash,
+                "response_sha256": success.raw_response_hash,
+            }
+        )
+        for index in range(1, len(page.native_identifiers)):
+            left = page.native_identifiers[index - 1]
+            right = page.native_identifiers[index]
+            if left > right:
+                ordering_anomalies.append(
+                    {
+                        "page_ordinal": page.ordinal,
+                        "left_index": index - 1,
+                        "left_paper_id": left,
+                        "right_paper_id": right,
+                    }
+                )
+        if (
+            previous_page is not None
+            and previous_page.native_identifiers
+            and page.native_identifiers
+            and previous_page.native_identifiers[-1] > page.native_identifiers[0]
+        ):
+            boundary_anomalies.append(
+                {
+                    "left_page_ordinal": previous_page.ordinal,
+                    "right_page_ordinal": page.ordinal,
+                }
+            )
+        expected_pair = expected_pair_by_ordinal.get(page.ordinal)
+        if expected_pair is not None:
+            if (
+                success.raw_response_path != expected_pair["response_path"]
+                or success.raw_response_hash != expected_pair["response_sha256"]
+                or page.source_reported_total != expected_pair["provider_total"]
+            ):
+                raise ExternalRetrievalWaveError(
+                    "Semantic Scholar overlap pair response binding changed"
+                )
+            matches = [
+                item
+                for item in data
+                if item.get("paperId") == SEMANTIC_NATIVE_ID_OVERLAP_PAPER_ID
+            ]
+            if len(matches) != 1:
+                raise ExternalRetrievalWaveError(
+                    "Semantic Scholar overlap paper is absent from its raw response"
+                )
+            provider_records[page.ordinal] = matches[0]
+        previous_page = page
+    if (
+        len(consumed_tokens) != len(pages) - 1
+        or len(set(consumed_tokens)) != len(consumed_tokens)
+        or len(returned_tokens) != len(pages)
+        or len(set(returned_tokens)) != len(returned_tokens)
+        or ordering_anomalies
+        != [dict(item) for item in SEMANTIC_NATIVE_ID_OVERLAP_ORDERING_ANOMALIES]
+        or boundary_anomalies
+    ):
+        raise ExternalRetrievalWaveError(
+            "Semantic Scholar overlap parent continuation/order evidence changed"
+        )
+    page_2_record = json.loads(json.dumps(provider_records[2], sort_keys=True))
+    page_42_record = json.loads(json.dumps(provider_records[42], sort_keys=True))
+    if (
+        len(page_2_record.get("authors", [])) != 3
+        or len(page_42_record.get("authors", [])) != 3
+        or page_2_record["authors"][2].get("name")
+        != SEMANTIC_NATIVE_ID_OVERLAP_OCCURRENCES[0]["author_name"]
+        or page_42_record["authors"][2].get("name")
+        != SEMANTIC_NATIVE_ID_OVERLAP_OCCURRENCES[1]["author_name"]
+    ):
+        raise ExternalRetrievalWaveError(
+            "Semantic Scholar overlap bibliographic difference changed"
+        )
+    page_42_record["authors"][2]["name"] = page_2_record["authors"][2]["name"]
+    if page_2_record != page_42_record:
+        raise ExternalRetrievalWaveError(
+            "Semantic Scholar overlap records differ beyond the adjudicated author name"
+        )
+    return {
+        "qf03_occurrence_count": pair_evidence["qf03_occurrence_count"],
+        "qf03_distinct_native_id_count": pair_evidence[
+            "qf03_distinct_native_id_count"
+        ],
+        "canonical_grouping": pair_evidence["canonical_grouping"],
+        "baseline_page_ids": [page.page_id for page in pages],
+        "page_42_next_state": dict(pages[42].next_state),
+        "raw_response_references": raw_response_references,
+        "raw_response_bindings": raw_response_bindings,
+        "raw_response_count": len(raw_response_references),
+        "raw_response_manifest_hash": _hash_payload(
+            {"responses": raw_response_bindings}
+        ),
+        "saved_token_chain_hash": _hash_payload({"pages": token_chain}),
+        "accepted_page_manifest_hash": _hash_payload(
+            {
+                "pages": [
+                    {
+                        "ordinal": page.ordinal,
+                        "page_id": page.page_id,
+                        "request_state": page.request_state,
+                        "next_state": page.next_state,
+                        "returned_item_count": page.returned_item_count,
+                        "occurrence_ids": page.occurrence_ids,
+                        "native_identifiers": page.native_identifiers,
+                        "source_reported_total": page.source_reported_total,
+                        "total_is_exact": page.total_is_exact,
+                    }
+                    for page in pages
+                ]
+            }
+        ),
+        "continuation": {
+            "next_page_ordinal": 43,
+            "predecessor_page_id": pages[-1].page_id,
+            "request_state": dict(pages[-1].next_state),
+        },
+        "provider_ordering_anomalies": ordering_anomalies,
+        "provider_total_history": provider_total_history,
+    }
+
+
+def _semantic_native_id_overlap_episode_4_provenance(
+    *,
+    checkpoint_reference: Mapping[str, Any],
+    validated: Mapping[str, Any],
+    prior_provenance: Mapping[str, Any],
+) -> dict[str, Any]:
+    groupings = {
+        item["native_id"]: {
+            key: value for key, value in item.items() if key != "native_id"
+        }
+        for item in validated["canonical_groupings"]
+    }
+    adjudications = []
+    for adjudication in _semantic_native_id_overlap_adjudications(
+        include_episode_3_pair=True
+    ):
+        adjudications.append(
+            {
+                "native_id": adjudication["native_id"],
+                "occurrences": [dict(item) for item in adjudication["occurrences"]],
+                "canonical_grouping": groupings[adjudication["native_id"]],
+            }
+        )
+    provenance = {
+        "schema_version": "1.1.0",
+        "authorization_reason": (
+            "OFFLINE_SEMANTIC_SCHOLAR_NATIVE_ID_OVERLAP_RECOVERY"
+        ),
+        "parent_episode_number": 3,
+        "recovery_episode_number": 4,
+        "parent_checkpoint": dict(checkpoint_reference),
+        "prior_adjudication_provenance_hash": prior_provenance["provenance_hash"],
+        "adjudicated_native_ids": [item["native_id"] for item in adjudications],
+        "adjudicated_occurrences": [
+            occurrence
+            for adjudication in adjudications
+            for occurrence in adjudication["occurrences"]
+        ],
+        "adjudications": adjudications,
+        "qf03_occurrence_count": validated["qf03_occurrence_count"],
+        "qf03_distinct_native_id_count": validated[
+            "qf03_distinct_native_id_count"
+        ],
+        "within_page_duplicate_count": 0,
+        "cross_page_duplicate_native_ids": [
+            SEMANTIC_NATIVE_ID_OVERLAP_PAPER_ID,
+            SEMANTIC_NATIVE_ID_OVERLAP_EPISODE_3_PAPER_ID,
+        ],
+        "saved_token_chain_hash": validated["saved_token_chain_hash"],
+        "accepted_page_manifest_hash": validated[
+            "accepted_page_manifest_hash"
+        ],
+        "continuation": dict(validated["continuation"]),
+        "provider_ordering_policy": "paperId:asc",
+        "provider_ordering_anomalies": [
+            dict(item) for item in validated["provider_ordering_anomalies"]
+        ],
+        "cross_page_boundary_ordering_anomalies": [],
+        "provider_total_history": list(validated["provider_total_history"]),
+        "provider_totals_are_exact": False,
+        "provider_completeness": "UNPROVEN",
+        "pagination_completion_rule": (
+            "continue until the provider omits the next token; termination does not "
+            "prove stable-snapshot completeness"
+        ),
+        "raw_response_count": validated["raw_response_count"],
+        "raw_response_manifest_hash": validated[
+            "raw_response_manifest_hash"
+        ],
+        "exception_scope": (
+            "the two exact validated historical occurrence pairs only; every new "
+            "overlap, including a third occurrence of either paperId, remains terminal"
+        ),
+        "generic_duplicate_validation_changed": False,
+        "network_used": False,
+    }
+    provenance["provenance_hash"] = _hash_payload(provenance)
+    return provenance
+
+
+def _validate_semantic_native_id_overlap_episode_3_parent_checkpoint(
+    *,
+    root: Path,
+    wave: ProductionRetrievalWave,
+    episodes: list[Mapping[str, Any]],
+) -> dict[str, Any]:
+    if len(episodes) < 3:
+        raise ExternalRetrievalWaveError(
+            "Semantic Scholar episode-4 recovery parent lineage changed"
+        )
+    episode_2 = episodes[1]
+    episode_3 = episodes[2]
+    if (
+        episode_2.get("episode_number") != 2
+        or episode_2.get("status") != "FAILED"
+        or episode_2.get("immutable") is not True
+        or episode_3.get("episode_number") != 3
+        or episode_3.get("status") != "FAILED"
+        or episode_3.get("immutable") is not True
+        or episode_3.get("recovery_of_episode_number") != 2
+        or episode_3.get("authorization_reason")
+        != "OFFLINE_SEMANTIC_SCHOLAR_NATIVE_ID_OVERLAP_RECOVERY"
+        or episode_3.get("network_used") is not False
+        or episode_3.get("parent_checkpoint_dataset")
+        != episode_2.get("checkpoint_dataset")
+        or episode_3.get("frozen_wave_manifest_hash") != wave.manifest_hash()
+        or episode_3.get("frozen_query_plan_hash") != wave.query_plan_hash
+    ):
+        raise ExternalRetrievalWaveError(
+            "Semantic Scholar episode-4 recovery parent lineage changed"
+        )
+    episode_2_validated = _validate_semantic_native_id_overlap_parent_checkpoint(
+        root=root,
+        wave=wave,
+        checkpoint_reference=episode_2.get("checkpoint_dataset", {}),
+    )
+    prior_provenance = _semantic_native_id_overlap_provenance(
+        checkpoint_reference=episode_2["checkpoint_dataset"],
+        validated=episode_2_validated,
+    )
+    if episode_3.get("adjudication_provenance") != prior_provenance:
+        raise ExternalRetrievalWaveError(
+            "Semantic Scholar episode-3 adjudication provenance changed"
+        )
+    _verify_recovery_raw_bindings(
+        root, episode_3.get("source_raw_responses", []), "episode_2_path"
+    )
+    checkpoint_reference = episode_3.get("checkpoint_dataset", {})
+    if (
+        checkpoint_reference.get("raw_sha256")
+        != SEMANTIC_NATIVE_ID_OVERLAP_EPISODE_3_PARENT_CHECKPOINT_SHA256
+        or checkpoint_reference.get("byte_size")
+        != SEMANTIC_NATIVE_ID_OVERLAP_EPISODE_3_PARENT_CHECKPOINT_SIZE
+    ):
+        raise ExternalRetrievalWaveError(
+            "Semantic Scholar episode-4 recovery requires the exact episode-3 "
+            "parent checkpoint"
+        )
+    checkpoint_path = _safe_output_path(root, checkpoint_reference["path"])
+    _verify_file_reference(checkpoint_path, checkpoint_reference, root)
+    dataset = load_review_dataset(checkpoint_path)
+    dataset.validate()
+    if (
+        len(dataset.retrieval_runs) != 1
+        or len(dataset.source_queries) != 5
+        or len(dataset.retrieval_attempts)
+        != SEMANTIC_NATIVE_ID_OVERLAP_EPISODE_3_EXPECTED_ATTEMPTS
+        or len(dataset.retrieval_pages)
+        != SEMANTIC_NATIVE_ID_OVERLAP_EPISODE_3_EXPECTED_PAGES
+        or len(dataset.occurrences)
+        != SEMANTIC_NATIVE_ID_OVERLAP_EPISODE_3_EXPECTED_OCCURRENCES
+        or len(dataset.canonical_records)
+        != SEMANTIC_NATIVE_ID_OVERLAP_EPISODE_3_EXPECTED_CANONICAL_RECORDS
+    ):
+        raise ExternalRetrievalWaveError(
+            "Semantic Scholar episode-3 overlap parent counts changed"
+        )
+    run = dataset.retrieval_runs[0]
+    specs = _source_query_specs(wave, "SemanticScholar", ieee_credential="")
+    expected_run_error = (
+        f"{SEMANTIC_NATIVE_ID_OVERLAP_QUERY_ID}: "
+        f"{SEMANTIC_NATIVE_ID_OVERLAP_EPISODE_3_ERROR}"
+    )
+    if (
+        run.run_id != f"{WAVE_ID}:SemanticScholar"
+        or run.query_plan_hash != _query_plan_hash(specs)
+        or run.query_plan_version != wave.query_plan_hash
+        or run.completion_status is not RetrievalCompletionStatus.FAILED
+        or run.retrieval_cutoff_date is not None
+        or run.errors != [expected_run_error]
+        or run.metadata.get("offline_semantic_native_id_overlap_recovery")
+        != prior_provenance
+    ):
+        raise ExternalRetrievalWaveError(
+            "Semantic Scholar episode-3 overlap parent run binding changed"
+        )
+    for query, spec, expected in zip(
+        dataset.source_queries,
+        specs,
+        SEMANTIC_NATIVE_ID_OVERLAP_EPISODE_3_QF_COUNTS,
+        strict=True,
+    ):
+        expected_status, expected_pages, expected_occurrences = expected
+        pages = sorted(
+            (
+                page
+                for page in dataset.retrieval_pages
+                if page.source_query_id == query.query_id
+            ),
+            key=lambda item: item.ordinal,
+        )
+        occurrences = [
+            item
+            for item in dataset.occurrences
+            if item.source_query_id == query.query_id
+        ]
+        if (
+            query.query_text != spec.query_text
+            or query.query_version != spec.query_version
+            or query.endpoint != spec.endpoint
+            or query.fields != spec.fields
+            or query.completion_status.value != expected_status
+            or query.result_count != expected_occurrences
+            or len(pages) != expected_pages
+            or len(occurrences) != expected_occurrences
+            or query.page_ids != [page.page_id for page in pages]
+            or [page.ordinal for page in pages] != list(range(expected_pages))
+        ):
+            raise ExternalRetrievalWaveError(
+                "Semantic Scholar episode-3 overlap parent query evidence changed"
+            )
+    pair_evidence = _validate_semantic_native_id_pair_and_canonicalization(
+        dataset,
+        require_parent_counts=True,
+        include_episode_3_pair=True,
+    )
+    if (
+        pair_evidence["qf03_occurrence_count"]
+        != SEMANTIC_NATIVE_ID_OVERLAP_EPISODE_3_QF_COUNTS[2][2]
+        or pair_evidence["qf03_distinct_native_id_count"]
+        != SEMANTIC_NATIVE_ID_OVERLAP_EPISODE_3_EXPECTED_QF03_DISTINCT_IDS
+    ):
+        raise ExternalRetrievalWaveError(
+            "Semantic Scholar episode-3 overlap parent identity counts changed"
+        )
+    qf03 = pair_evidence["query"]
+    pages = pair_evidence["pages"]
+    if (
+        qf03.status is not ProcessingStatus.FAILED
+        or qf03.errors != [SEMANTIC_NATIVE_ID_OVERLAP_EPISODE_3_ERROR]
+        or pages[-1].ordinal != 54
+        or pages[-1].status is not RetrievalCompletionStatus.COMPLETE
+        or pages[-1].metadata.get("completion_error")
+        != SEMANTIC_NATIVE_ID_OVERLAP_EPISODE_3_ERROR
+        or pages[-1].next_state is None
+        or pages[42].metadata.get("completion_error") is not None
+        or pages[43].request_state != episode_2_validated["page_42_next_state"]
+    ):
+        raise ExternalRetrievalWaveError(
+            "Semantic Scholar episode-3 overlap parent failure position changed"
+        )
+    baseline_attempts = {
+        attempt.attempt_id: attempt for attempt in dataset.retrieval_attempts
+    }
+    baseline_token_chain = []
+    for page in pages[:43]:
+        successful = [
+            baseline_attempts[attempt_id]
+            for attempt_id in page.attempt_ids
+            if baseline_attempts[attempt_id].status
+            is RetrievalAttemptStatus.SUCCEEDED
+        ]
+        if len(successful) != 1:
+            raise ExternalRetrievalWaveError(
+                "Semantic Scholar episode-3 baseline attempt history changed"
+            )
+        baseline_token_chain.append(
+            {
+                "ordinal": page.ordinal,
+                "page_id": page.page_id,
+                "request_state": dict(page.request_state),
+                "next_state": dict(page.next_state) if page.next_state else None,
+                "request_hash": successful[0].request_hash,
+                "response_sha256": successful[0].raw_response_hash,
+            }
+        )
+    if (
+        [page.page_id for page in pages[:43]]
+        != episode_2_validated["baseline_page_ids"]
+        or _hash_payload({"pages": baseline_token_chain})
+        != episode_2_validated["saved_token_chain_hash"]
+        or _semantic_accepted_page_manifest_hash(pages[:43])
+        != episode_2_validated["accepted_page_manifest_hash"]
+    ):
+        raise ExternalRetrievalWaveError(
+            "Semantic Scholar episode-3 baseline evidence changed"
+        )
+    inventory = _validate_semantic_overlap_response_inventory(
+        root=root,
+        checkpoint_path=checkpoint_path,
+        dataset=dataset,
+        expected_attempt_count=SEMANTIC_NATIVE_ID_OVERLAP_EPISODE_3_EXPECTED_ATTEMPTS,
+        error_prefix="Semantic Scholar episode-3 overlap parent",
+    )
+    expected_occurrence_bindings = tuple(
+        {**dict(item), "native_id": adjudication["native_id"]}
+        for adjudication in _semantic_native_id_overlap_adjudications(
+            include_episode_3_pair=True
+        )
+        for item in adjudication["occurrences"]
+    )
+    chain = _validate_semantic_qf03_page_chain(
+        pages=pages,
+        spec=specs[2],
+        attempts_by_id=inventory["attempts_by_id"],
+        store=inventory["store"],
+        expected_occurrences=expected_occurrence_bindings,
+        expected_ordering_anomalies=SEMANTIC_NATIVE_ID_OVERLAP_ORDERING_ANOMALIES,
+        error_prefix="Semantic Scholar episode-3 overlap parent",
+    )
+    second_records = chain["provider_records"]
+    page_3_record = json.loads(
+        json.dumps(
+            second_records[(SEMANTIC_NATIVE_ID_OVERLAP_EPISODE_3_PAPER_ID, 3)],
+            sort_keys=True,
+        )
+    )
+    page_54_record = json.loads(
+        json.dumps(
+            second_records[(SEMANTIC_NATIVE_ID_OVERLAP_EPISODE_3_PAPER_ID, 54)],
+            sort_keys=True,
+        )
+    )
+    if page_3_record != page_54_record:
+        raise ExternalRetrievalWaveError(
+            "Semantic Scholar episode-3 overlap records changed"
+        )
+    raw_response_bindings = inventory["raw_response_bindings"]
+    return {
+        "qf03_occurrence_count": pair_evidence["qf03_occurrence_count"],
+        "qf03_distinct_native_id_count": pair_evidence[
+            "qf03_distinct_native_id_count"
+        ],
+        "canonical_groupings": pair_evidence["canonical_groupings"],
+        "baseline_page_ids": [page.page_id for page in pages],
+        "page_54_next_state": dict(pages[54].next_state),
+        "raw_response_references": inventory["raw_response_references"],
+        "raw_response_bindings": raw_response_bindings,
+        "raw_response_count": len(raw_response_bindings),
+        "raw_response_manifest_hash": _hash_payload(
+            {"responses": raw_response_bindings}
+        ),
+        "saved_token_chain_hash": chain["saved_token_chain_hash"],
+        "accepted_page_manifest_hash": chain["accepted_page_manifest_hash"],
+        "continuation": chain["continuation"],
+        "provider_ordering_anomalies": chain[
+            "provider_ordering_anomalies"
+        ],
+        "provider_total_history": chain["provider_total_history"],
+        "prior_provenance": prior_provenance,
+    }
+
+
+def _validate_authorized_semantic_native_id_overlap_recovery(
+    *,
+    root: Path,
+    source_state: Mapping[str, Any],
+    wave: ProductionRetrievalWave,
+) -> None:
+    if source_state.get("active_episode_number") == 4:
+        _validate_authorized_semantic_native_id_overlap_episode_4(
+            root=root, source_state=source_state, wave=wave
+        )
+        return
+    episodes = source_state.get("execution_episodes", [])
+    if len(episodes) != 3:
+        raise ExternalRetrievalWaveError(
+            "Semantic Scholar overlap recovery episode lineage changed"
+        )
+    parent = episodes[1]
+    active = episodes[2]
+    if (
+        parent.get("episode_number") != 2
+        or parent.get("status") != "FAILED"
+        or parent.get("immutable") is not True
+        or active.get("episode_number") != 3
+        or active.get("recovery_of_episode_number") != 2
+        or active.get("authorization_reason")
+        != "OFFLINE_SEMANTIC_SCHOLAR_NATIVE_ID_OVERLAP_RECOVERY"
+        or active.get("network_used") is not False
+        or active.get("parent_checkpoint_dataset")
+        != parent.get("checkpoint_dataset")
+        or active.get("frozen_wave_manifest_hash") != wave.manifest_hash()
+        or active.get("frozen_query_plan_hash") != wave.query_plan_hash
+        or active.get("checkpoint_path")
+        != f"{EXECUTION_ROOT}/SemanticScholar/episodes/episode-003/checkpoint"
+        or source_state.get("active_episode_number") != 3
+        or source_state.get("active_run_id") != active.get("run_id")
+        or source_state.get("active_checkpoint_path")
+        != active.get("checkpoint_path")
+        or source_state.get("checkpoint_dataset")
+        != active.get("checkpoint_dataset")
+    ):
+        raise ExternalRetrievalWaveError(
+            "Semantic Scholar overlap recovery active lineage changed"
+        )
+    validated = _validate_semantic_native_id_overlap_parent_checkpoint(
+        root=root,
+        wave=wave,
+        checkpoint_reference=parent.get("checkpoint_dataset", {}),
+    )
+    expected_provenance = _semantic_native_id_overlap_provenance(
+        checkpoint_reference=parent["checkpoint_dataset"], validated=validated
+    )
+    if active.get("adjudication_provenance") != expected_provenance:
+        raise ExternalRetrievalWaveError(
+            "Semantic Scholar overlap recovery adjudication provenance changed"
+        )
+    bindings = active.get("source_raw_responses", [])
+    if len(bindings) != validated["raw_response_count"]:
+        raise ExternalRetrievalWaveError(
+            "Semantic Scholar overlap recovery response manifest changed"
+        )
+    _verify_recovery_raw_bindings(root, bindings, "episode_2_path")
+    active_checkpoint = _safe_output_path(root, active["checkpoint_dataset"]["path"])
+    _verify_file_reference(active_checkpoint, active["checkpoint_dataset"], root)
+    dataset = load_review_dataset(active_checkpoint)
+    dataset.validate()
+    run = dataset.retrieval_runs[0]
+    if run.metadata.get("offline_semantic_native_id_overlap_recovery") != (
+        expected_provenance
+    ):
+        raise ExternalRetrievalWaveError(
+            "Semantic Scholar overlap recovery checkpoint provenance changed"
+        )
+    if (
+        run.run_id != active.get("run_id")
+        or run.query_plan_hash
+        != _query_plan_hash(
+            _source_query_specs(wave, "SemanticScholar", ieee_credential="")
+        )
+        or run.query_plan_version != wave.query_plan_hash
+    ):
+        raise ExternalRetrievalWaveError(
+            "Semantic Scholar overlap recovery run/query-plan binding changed"
+        )
+    child = _validate_semantic_native_id_pair_and_canonicalization(
+        dataset, require_parent_counts=False
+    )
+    pages = child["pages"]
+    attempts_by_id = {
+        attempt.attempt_id: attempt for attempt in dataset.retrieval_attempts
+    }
+    baseline_token_chain = []
+    for page in pages[:43]:
+        successful = [
+            attempts_by_id[attempt_id]
+            for attempt_id in page.attempt_ids
+            if attempts_by_id[attempt_id].status
+            is RetrievalAttemptStatus.SUCCEEDED
+        ]
+        if len(successful) != 1:
+            raise ExternalRetrievalWaveError(
+                "Semantic Scholar overlap recovery baseline attempt history changed"
+            )
+        success = successful[0]
+        baseline_token_chain.append(
+            {
+                "ordinal": page.ordinal,
+                "page_id": page.page_id,
+                "request_state": dict(page.request_state),
+                "next_state": dict(page.next_state) if page.next_state else None,
+                "request_hash": success.request_hash,
+                "response_sha256": success.raw_response_hash,
+            }
+        )
+    accepted_page_manifest_hash = _hash_payload(
+        {
+            "pages": [
+                {
+                    "ordinal": page.ordinal,
+                    "page_id": page.page_id,
+                    "request_state": page.request_state,
+                    "next_state": page.next_state,
+                    "returned_item_count": page.returned_item_count,
+                    "occurrence_ids": page.occurrence_ids,
+                    "native_identifiers": page.native_identifiers,
+                    "source_reported_total": page.source_reported_total,
+                    "total_is_exact": page.total_is_exact,
+                }
+                for page in pages[:43]
+            ]
+        }
+    )
+    if (
+        len(pages) < 43
+        or [page.page_id for page in pages[:43]]
+        != validated["baseline_page_ids"]
+        or _hash_payload({"pages": baseline_token_chain})
+        != validated["saved_token_chain_hash"]
+        or accepted_page_manifest_hash
+        != validated["accepted_page_manifest_hash"]
+        or pages[42].metadata.get("completion_error") is not None
+        or pages[42].next_state != validated["page_42_next_state"]
+        or (
+            len(pages) > 43
+            and pages[43].request_state != validated["page_42_next_state"]
+        )
+    ):
+        raise ExternalRetrievalWaveError(
+            "Semantic Scholar overlap recovery continuation evidence changed"
+        )
+    completed_indexes = [0, 1, 3, 4]
+    if any(
+        dataset.source_queries[index].completion_status
+        is not RetrievalCompletionStatus.COMPLETE
+        or dataset.source_queries[index].result_count
+        != SEMANTIC_NATIVE_ID_OVERLAP_QF_COUNTS[index][2]
+        for index in completed_indexes
+    ):
+        raise ExternalRetrievalWaveError(
+            "Semantic Scholar overlap recovery changed a completed query"
+        )
+    if (
+        source_state.get("occurrence_count") != len(dataset.occurrences)
+        or source_state.get("attempt_count") != len(dataset.retrieval_attempts)
+        or source_state.get("completed_query_count")
+        != sum(
+            query.completion_status is RetrievalCompletionStatus.COMPLETE
+            for query in dataset.source_queries
+        )
+    ):
+        raise ExternalRetrievalWaveError(
+            "Semantic Scholar overlap recovery state/checkpoint counts disagree"
+        )
+
+
+def _validate_authorized_semantic_native_id_overlap_episode_4(
+    *,
+    root: Path,
+    source_state: Mapping[str, Any],
+    wave: ProductionRetrievalWave,
+) -> None:
+    episodes = source_state.get("execution_episodes", [])
+    if len(episodes) != 4:
+        raise ExternalRetrievalWaveError(
+            "Semantic Scholar episode-4 overlap recovery lineage changed"
+        )
+    active = episodes[3]
+    if (
+        active.get("episode_number") != 4
+        or active.get("recovery_of_episode_number") != 3
+        or active.get("authorization_reason")
+        != "OFFLINE_SEMANTIC_SCHOLAR_NATIVE_ID_OVERLAP_RECOVERY"
+        or active.get("network_used") is not False
+        or active.get("parent_checkpoint_dataset")
+        != episodes[2].get("checkpoint_dataset")
+        or active.get("frozen_wave_manifest_hash") != wave.manifest_hash()
+        or active.get("frozen_query_plan_hash") != wave.query_plan_hash
+        or active.get("checkpoint_path")
+        != f"{EXECUTION_ROOT}/SemanticScholar/episodes/episode-004/checkpoint"
+        or source_state.get("active_episode_number") != 4
+        or source_state.get("active_run_id") != active.get("run_id")
+        or source_state.get("active_checkpoint_path")
+        != active.get("checkpoint_path")
+        or source_state.get("checkpoint_dataset")
+        != active.get("checkpoint_dataset")
+        or active.get("status") != source_state.get("status")
+        or active.get("immutable")
+        is not (source_state.get("status") in {"COMPLETE", "FAILED"})
+    ):
+        raise ExternalRetrievalWaveError(
+            "Semantic Scholar episode-4 overlap recovery active lineage changed"
+        )
+    validated = _validate_semantic_native_id_overlap_episode_3_parent_checkpoint(
+        root=root,
+        wave=wave,
+        episodes=episodes,
+    )
+    expected_provenance = _semantic_native_id_overlap_episode_4_provenance(
+        checkpoint_reference=episodes[2]["checkpoint_dataset"],
+        validated=validated,
+        prior_provenance=validated["prior_provenance"],
+    )
+    if active.get("adjudication_provenance") != expected_provenance:
+        raise ExternalRetrievalWaveError(
+            "Semantic Scholar episode-4 overlap recovery provenance changed"
+        )
+    bindings = active.get("source_raw_responses", [])
+    if len(bindings) != validated["raw_response_count"]:
+        raise ExternalRetrievalWaveError(
+            "Semantic Scholar episode-4 overlap recovery response manifest changed"
+        )
+    _verify_recovery_raw_bindings(root, bindings, "episode_3_path")
+    active_checkpoint = _safe_output_path(root, active["checkpoint_dataset"]["path"])
+    _verify_file_reference(active_checkpoint, active["checkpoint_dataset"], root)
+    dataset = load_review_dataset(active_checkpoint)
+    dataset.validate()
+    run = dataset.retrieval_runs[0]
+    if (
+        run.metadata.get("offline_semantic_native_id_overlap_recovery_episode_4")
+        != expected_provenance
+        or run.run_id != active.get("run_id")
+        or run.query_plan_hash
+        != _query_plan_hash(
+            _source_query_specs(wave, "SemanticScholar", ieee_credential="")
+        )
+        or run.query_plan_version != wave.query_plan_hash
+    ):
+        raise ExternalRetrievalWaveError(
+            "Semantic Scholar episode-4 overlap recovery checkpoint provenance changed"
+        )
+    child = _validate_semantic_native_id_pair_and_canonicalization(
+        dataset,
+        require_parent_counts=False,
+        include_episode_3_pair=True,
+    )
+    pages = child["pages"]
+    if len(pages) < 55 or [page.page_id for page in pages[:55]] != validated[
+        "baseline_page_ids"
+    ]:
+        raise ExternalRetrievalWaveError(
+            "Semantic Scholar episode-4 overlap recovery baseline pages changed"
+        )
+    attempts_by_id = {
+        attempt.attempt_id: attempt for attempt in dataset.retrieval_attempts
+    }
+    expected_occurrence_bindings = tuple(
+        {**dict(item), "native_id": adjudication["native_id"]}
+        for adjudication in _semantic_native_id_overlap_adjudications(
+            include_episode_3_pair=True
+        )
+        for item in adjudication["occurrences"]
+    )
+    chain = _validate_semantic_qf03_page_chain(
+        pages=pages[:55],
+        spec=_source_query_specs(
+            wave, "SemanticScholar", ieee_credential=""
+        )[2],
+        attempts_by_id=attempts_by_id,
+        store=CheckpointStore(active_checkpoint.parent),
+        expected_occurrences=expected_occurrence_bindings,
+        expected_ordering_anomalies=SEMANTIC_NATIVE_ID_OVERLAP_ORDERING_ANOMALIES,
+        error_prefix="Semantic Scholar episode-4 overlap recovery baseline",
+    )
+    if (
+        chain["saved_token_chain_hash"] != validated["saved_token_chain_hash"]
+        or chain["accepted_page_manifest_hash"]
+        != validated["accepted_page_manifest_hash"]
+        or pages[54].metadata.get("completion_error") is not None
+        or pages[54].next_state != validated["page_54_next_state"]
+        or (len(pages) > 55 and pages[55].request_state != validated["page_54_next_state"])
+    ):
+        raise ExternalRetrievalWaveError(
+            "Semantic Scholar episode-4 overlap recovery continuation evidence changed"
+        )
+    completed_indexes = [0, 1, 3, 4]
+    if any(
+        dataset.source_queries[index].completion_status
+        is not RetrievalCompletionStatus.COMPLETE
+        or dataset.source_queries[index].result_count
+        != SEMANTIC_NATIVE_ID_OVERLAP_EPISODE_3_QF_COUNTS[index][2]
+        for index in completed_indexes
+    ):
+        raise ExternalRetrievalWaveError(
+            "Semantic Scholar episode-4 overlap recovery changed a completed query"
+        )
+    if (
+        source_state.get("occurrence_count") != len(dataset.occurrences)
+        or source_state.get("attempt_count") != len(dataset.retrieval_attempts)
+        or source_state.get("completed_query_count")
+        != sum(
+            query.completion_status is RetrievalCompletionStatus.COMPLETE
+            for query in dataset.source_queries
+        )
+    ):
+        raise ExternalRetrievalWaveError(
+            "Semantic Scholar episode-4 overlap recovery state/checkpoint counts "
+            "disagree"
+        )
+
+
+def authorize_semantic_scholar_native_id_overlap_recovery(
+    *, root: str | Path, timestamp: Callable[[], str] = utc_now
+) -> dict[str, Any]:
+    """Create an offline episode for the one exact adjudicated QF03 overlap."""
+
+    root_path = Path(root).resolve()
+    with _exclusive_external_source_session(root_path):
+        return _authorize_semantic_scholar_native_id_overlap_recovery_locked(
+            root=root_path, timestamp=timestamp
+        )
+
+
+def _authorize_semantic_scholar_native_id_overlap_recovery_locked(
+    *, root: Path, timestamp: Callable[[], str]
+) -> dict[str, Any]:
+    wave, preflight = validate_persisted_external_preflight(root=root)
+    state_path = _safe_output_path(root, EXECUTION_STATE_PATH)
+    if not state_path.is_file():
+        raise ExternalRetrievalWaveError("external execution state does not exist")
+    state = _load_execution_state(state_path, root, wave, preflight)
+    source_state = state["sources"]["SemanticScholar"]
+    if _semantic_native_id_overlap_recovery_active(source_state):
+        if (
+            source_state.get("active_episode_number") == 3
+            and source_state.get("status") == "FAILED"
+        ):
+            return _authorize_semantic_scholar_native_id_overlap_episode_4_locked(
+                root=root,
+                timestamp=timestamp,
+                wave=wave,
+                state_path=state_path,
+                state=state,
+                source_state=source_state,
+            )
+        _validate_authorized_semantic_native_id_overlap_recovery(
+            root=root, source_state=source_state, wave=wave
+        )
+        return state
+    episodes = source_state.get("execution_episodes", [])
+    if (
+        len(episodes) != 2
+        or source_state.get("status") != "FAILED"
+        or source_state.get("active_episode_number") != 2
+        or source_state.get("active_run_id")
+        != f"{WAVE_ID}:SemanticScholar"
+        or source_state.get("checkpoint_dataset")
+        != episodes[1].get("checkpoint_dataset")
+        or source_state.get("active_checkpoint_path")
+        != episodes[1].get("checkpoint_path")
+        or source_state.get("failure_reason")
+        != f"{SEMANTIC_NATIVE_ID_OVERLAP_QUERY_ID}: {SEMANTIC_NATIVE_ID_OVERLAP_ERROR}"
+        or source_state.get("completed_query_count") != 4
+        or source_state.get("total_query_count") != 5
+        or source_state.get("occurrence_count")
+        != SEMANTIC_NATIVE_ID_OVERLAP_EXPECTED_OCCURRENCES
+        or source_state.get("attempt_count")
+        != SEMANTIC_NATIVE_ID_OVERLAP_EXPECTED_ATTEMPTS
+        or episodes[1].get("episode_number") != 2
+        or episodes[1].get("status") != "FAILED"
+        or episodes[1].get("immutable") is not True
+    ):
+        raise ExternalRetrievalWaveError(
+            "Semantic Scholar overlap recovery requires the exact failed episode-2 "
+            "lineage"
+        )
+    if state.get("external_retrieval_cutoff_date") is not None:
+        raise ExternalRetrievalWaveError(
+            "Semantic Scholar overlap recovery cannot alter a closed retrieval wave"
+        )
+    parent_reference = episodes[1]["checkpoint_dataset"]
+    validated = _validate_semantic_native_id_overlap_parent_checkpoint(
+        root=root, wave=wave, checkpoint_reference=parent_reference
+    )
+    other_sources_before = {
+        key: json.loads(json.dumps(value, sort_keys=True))
+        for key, value in state["sources"].items()
+        if key != "SemanticScholar"
+    }
+    parent_episodes = json.loads(json.dumps(episodes, sort_keys=True))
+    recovery_checkpoint_relative = (
+        f"{EXECUTION_ROOT}/SemanticScholar/episodes/episode-003/checkpoint"
+    )
+    recovery_checkpoint_dir = _safe_output_path(root, recovery_checkpoint_relative)
+    if recovery_checkpoint_dir.exists():
+        raise ExternalRetrievalWaveError(
+            "Semantic Scholar overlap recovery checkpoint exists without valid lineage"
+        )
+    response_bindings = _copy_recovery_raw_responses(
+        root=root,
+        source_checkpoint_dir=_safe_output_path(root, episodes[1]["checkpoint_path"]),
+        recovery_checkpoint_dir=recovery_checkpoint_dir,
+        raw_response_references=validated["raw_response_references"],
+        source_path_key="episode_2_path",
+        error_prefix="Semantic Scholar native-ID-overlap",
+    )
+    parent_checkpoint = _safe_output_path(root, parent_reference["path"])
+    dataset = load_review_dataset(parent_checkpoint)
+    run = dataset.retrieval_runs[0]
+    qf03 = next(
+        query
+        for query in dataset.source_queries
+        if query.query_id == SEMANTIC_NATIVE_ID_OVERLAP_QUERY_ID
+    )
+    page_42 = next(
+        page
+        for page in dataset.retrieval_pages
+        if page.source_query_id == qf03.query_id and page.ordinal == 42
+    )
+    recovered_at = timestamp()
+    run.status = ProcessingStatus.PARTIAL
+    run.completion_status = RetrievalCompletionStatus.RUNNING
+    run.retrieval_completed_at = recovered_at
+    run.retrieval_cutoff_date = None
+    run.errors = [
+        "offline Semantic Scholar native-ID overlap recovery complete; live resume pending"
+    ]
+    qf03.status = ProcessingStatus.PARTIAL
+    qf03.completion_status = RetrievalCompletionStatus.RUNNING
+    qf03.errors = []
+    qf03.retrieval_ended_at = recovered_at
+    page_42.metadata.pop("completion_error", None)
+    provenance = _semantic_native_id_overlap_provenance(
+        checkpoint_reference=parent_reference, validated=validated
+    )
+    run.metadata["offline_semantic_native_id_overlap_recovery"] = provenance
+    dataset.validate()
+    store = CheckpointStore(recovery_checkpoint_dir)
+    checkpoint_hash = store.save_dataset(dataset)
+    child_reference = _file_reference(store.dataset_path, root)
+    if checkpoint_hash != child_reference["raw_sha256"]:
+        raise ExternalRetrievalWaveError(
+            "Semantic Scholar overlap recovery checkpoint hash disagreement"
+        )
+    if (
+        parent_checkpoint.stat().st_size
+        != SEMANTIC_NATIVE_ID_OVERLAP_PARENT_CHECKPOINT_SIZE
+        or _sha256(parent_checkpoint.read_bytes())
+        != SEMANTIC_NATIVE_ID_OVERLAP_PARENT_CHECKPOINT_SHA256
+    ):
+        raise ExternalRetrievalWaveError(
+            "Semantic Scholar episode-2 parent changed during overlap recovery"
+        )
+    _verify_recovery_raw_bindings(root, response_bindings, "episode_2_path")
+    episode_3 = {
+        "episode_number": 3,
+        "episode_id": "SemanticScholar-episode-003",
+        "run_id": run.run_id,
+        "status": SEMANTIC_NATIVE_ID_OVERLAP_RECOVERY_STATUS,
+        "recovery_of_episode_number": 2,
+        "authorization_reason": (
+            "OFFLINE_SEMANTIC_SCHOLAR_NATIVE_ID_OVERLAP_RECOVERY"
+        ),
+        "authorized_at_utc": recovered_at,
+        "checkpoint_path": recovery_checkpoint_relative,
+        "checkpoint_dataset": child_reference,
+        "parent_checkpoint_dataset": dict(parent_reference),
+        "frozen_wave_manifest_hash": wave.manifest_hash(),
+        "frozen_query_plan_hash": wave.query_plan_hash,
+        "adjudication_provenance": provenance,
+        "source_raw_responses": response_bindings,
+        "retained_successful_page_count": len(dataset.retrieval_pages),
+        "continuation_state": dict(validated["continuation"]),
+        "network_used": False,
+        "immutable": False,
+    }
+    source_state.update(
+        {
+            "status": SEMANTIC_NATIVE_ID_OVERLAP_RECOVERY_STATUS,
+            "execution_episodes": [*parent_episodes, episode_3],
+            "active_episode_number": 3,
+            "active_run_id": run.run_id,
+            "active_checkpoint_path": recovery_checkpoint_relative,
+            "checkpoint_path": recovery_checkpoint_relative,
+            "checkpoint_dataset": child_reference,
+            "completed_query_count": 4,
+            "total_query_count": 5,
+            "occurrence_count": len(dataset.occurrences),
+            "attempt_count": len(dataset.retrieval_attempts),
+            "preserved_source_attempt_count": len(dataset.retrieval_attempts),
+            "preserved_source_response_count": len(response_bindings),
+            "requests_this_session": 0,
+            "candidate_request_count": 0,
+            "pause_reason": (
+                "OFFLINE_NATIVE_ID_OVERLAP_RECOVERY_COMPLETE; LIVE_RESUME_REQUIRED"
+            ),
+            "failure_reason": None,
+            "last_session_started_at_utc": recovered_at,
+            "last_session_completed_at_utc": recovered_at,
+        }
+    )
+    source_state.pop("pause_metadata", None)
+    if source_state["execution_episodes"][:2] != parent_episodes:
+        raise ExternalRetrievalWaveError(
+            "Semantic Scholar overlap recovery changed its parent episodes"
+        )
+    if {
+        key: value
+        for key, value in state["sources"].items()
+        if key != "SemanticScholar"
+    } != other_sources_before:
+        raise ExternalRetrievalWaveError(
+            "Semantic Scholar overlap recovery changed another source"
+        )
+    state["status"] = "RUNNING"
+    state["external_retrieval_completed_at_utc"] = None
+    state["external_retrieval_cutoff_date"] = None
+    _save_execution_state(state_path, state)
+    _validate_authorized_semantic_native_id_overlap_recovery(
+        root=root, source_state=source_state, wave=wave
+    )
+    return state
+
+
+def _authorize_semantic_scholar_native_id_overlap_episode_4_locked(
+    *,
+    root: Path,
+    timestamp: Callable[[], str],
+    wave: ProductionRetrievalWave,
+    state_path: Path,
+    state: dict[str, Any],
+    source_state: dict[str, Any],
+) -> dict[str, Any]:
+    episodes = source_state.get("execution_episodes", [])
+    expected_failure = (
+        f"{SEMANTIC_NATIVE_ID_OVERLAP_QUERY_ID}: "
+        f"{SEMANTIC_NATIVE_ID_OVERLAP_EPISODE_3_ERROR}"
+    )
+    if (
+        len(episodes) != 3
+        or source_state.get("status") != "FAILED"
+        or source_state.get("active_episode_number") != 3
+        or source_state.get("active_run_id") != episodes[2].get("run_id")
+        or source_state.get("checkpoint_dataset")
+        != episodes[2].get("checkpoint_dataset")
+        or source_state.get("active_checkpoint_path")
+        != episodes[2].get("checkpoint_path")
+        or source_state.get("failure_reason") != expected_failure
+        or source_state.get("completed_query_count") != 4
+        or source_state.get("total_query_count") != 5
+        or source_state.get("occurrence_count")
+        != SEMANTIC_NATIVE_ID_OVERLAP_EPISODE_3_EXPECTED_OCCURRENCES
+        or source_state.get("attempt_count")
+        != SEMANTIC_NATIVE_ID_OVERLAP_EPISODE_3_EXPECTED_ATTEMPTS
+    ):
+        raise ExternalRetrievalWaveError(
+            "Semantic Scholar episode-4 overlap recovery requires the exact failed "
+            "episode-3 lineage"
+        )
+    if state.get("external_retrieval_cutoff_date") is not None:
+        raise ExternalRetrievalWaveError(
+            "Semantic Scholar episode-4 overlap recovery cannot alter a closed "
+            "retrieval wave"
+        )
+    validated = _validate_semantic_native_id_overlap_episode_3_parent_checkpoint(
+        root=root,
+        wave=wave,
+        episodes=episodes,
+    )
+    other_sources_before = {
+        key: json.loads(json.dumps(value, sort_keys=True))
+        for key, value in state["sources"].items()
+        if key != "SemanticScholar"
+    }
+    parent_episodes = json.loads(json.dumps(episodes, sort_keys=True))
+    parent_reference = episodes[2]["checkpoint_dataset"]
+    parent_checkpoint = _safe_output_path(root, parent_reference["path"])
+    recovery_checkpoint_relative = (
+        f"{EXECUTION_ROOT}/SemanticScholar/episodes/episode-004/checkpoint"
+    )
+    recovery_checkpoint_dir = _safe_output_path(root, recovery_checkpoint_relative)
+    if recovery_checkpoint_dir.exists():
+        raise ExternalRetrievalWaveError(
+            "Semantic Scholar episode-4 overlap recovery checkpoint exists without "
+            "valid lineage"
+        )
+    response_bindings = _copy_recovery_raw_responses(
+        root=root,
+        source_checkpoint_dir=parent_checkpoint.parent,
+        recovery_checkpoint_dir=recovery_checkpoint_dir,
+        raw_response_references=validated["raw_response_references"],
+        source_path_key="episode_3_path",
+        error_prefix="Semantic Scholar episode-4 native-ID-overlap",
+    )
+    dataset = load_review_dataset(parent_checkpoint)
+    run = dataset.retrieval_runs[0]
+    qf03 = next(
+        query
+        for query in dataset.source_queries
+        if query.query_id == SEMANTIC_NATIVE_ID_OVERLAP_QUERY_ID
+    )
+    page_54 = next(
+        page
+        for page in dataset.retrieval_pages
+        if page.source_query_id == qf03.query_id and page.ordinal == 54
+    )
+    recovered_at = timestamp()
+    run.status = ProcessingStatus.PARTIAL
+    run.completion_status = RetrievalCompletionStatus.RUNNING
+    run.retrieval_completed_at = recovered_at
+    run.retrieval_cutoff_date = None
+    run.errors = [
+        (
+            "offline Semantic Scholar native-ID overlap recovery complete; live "
+            "resume pending"
+        )
+    ]
+    qf03.status = ProcessingStatus.PARTIAL
+    qf03.completion_status = RetrievalCompletionStatus.RUNNING
+    qf03.errors = []
+    qf03.retrieval_ended_at = recovered_at
+    page_54.metadata.pop("completion_error", None)
+    provenance = _semantic_native_id_overlap_episode_4_provenance(
+        checkpoint_reference=parent_reference,
+        validated=validated,
+        prior_provenance=validated["prior_provenance"],
+    )
+    run.metadata[
+        "offline_semantic_native_id_overlap_recovery_episode_4"
+    ] = provenance
+    dataset.validate()
+    store = CheckpointStore(recovery_checkpoint_dir)
+    checkpoint_hash = store.save_dataset(dataset)
+    child_reference = _file_reference(store.dataset_path, root)
+    if checkpoint_hash != child_reference["raw_sha256"]:
+        raise ExternalRetrievalWaveError(
+            "Semantic Scholar episode-4 overlap recovery checkpoint hash disagreement"
+        )
+    if (
+        parent_checkpoint.stat().st_size
+        != SEMANTIC_NATIVE_ID_OVERLAP_EPISODE_3_PARENT_CHECKPOINT_SIZE
+        or _sha256(parent_checkpoint.read_bytes())
+        != SEMANTIC_NATIVE_ID_OVERLAP_EPISODE_3_PARENT_CHECKPOINT_SHA256
+    ):
+        raise ExternalRetrievalWaveError(
+            "Semantic Scholar episode-3 parent changed during episode-4 overlap "
+            "recovery"
+        )
+    _verify_recovery_raw_bindings(root, response_bindings, "episode_3_path")
+    episode_4 = {
+        "episode_number": 4,
+        "episode_id": "SemanticScholar-episode-004",
+        "run_id": run.run_id,
+        "status": SEMANTIC_NATIVE_ID_OVERLAP_RECOVERY_STATUS,
+        "recovery_of_episode_number": 3,
+        "authorization_reason": (
+            "OFFLINE_SEMANTIC_SCHOLAR_NATIVE_ID_OVERLAP_RECOVERY"
+        ),
+        "authorized_at_utc": recovered_at,
+        "checkpoint_path": recovery_checkpoint_relative,
+        "checkpoint_dataset": child_reference,
+        "parent_checkpoint_dataset": dict(parent_reference),
+        "frozen_wave_manifest_hash": wave.manifest_hash(),
+        "frozen_query_plan_hash": wave.query_plan_hash,
+        "adjudication_provenance": provenance,
+        "source_raw_responses": response_bindings,
+        "retained_successful_page_count": len(dataset.retrieval_pages),
+        "continuation_state": dict(validated["continuation"]),
+        "network_used": False,
+        "immutable": False,
+    }
+    source_state.update(
+        {
+            "status": SEMANTIC_NATIVE_ID_OVERLAP_RECOVERY_STATUS,
+            "execution_episodes": [*parent_episodes, episode_4],
+            "active_episode_number": 4,
+            "active_run_id": run.run_id,
+            "active_checkpoint_path": recovery_checkpoint_relative,
+            "checkpoint_path": recovery_checkpoint_relative,
+            "checkpoint_dataset": child_reference,
+            "completed_query_count": 4,
+            "total_query_count": 5,
+            "occurrence_count": len(dataset.occurrences),
+            "attempt_count": len(dataset.retrieval_attempts),
+            "preserved_source_attempt_count": len(dataset.retrieval_attempts),
+            "preserved_source_response_count": len(response_bindings),
+            "requests_this_session": 0,
+            "candidate_request_count": 0,
+            "pause_reason": (
+                "OFFLINE_NATIVE_ID_OVERLAP_RECOVERY_COMPLETE; LIVE_RESUME_REQUIRED"
+            ),
+            "failure_reason": None,
+            "last_session_started_at_utc": recovered_at,
+            "last_session_completed_at_utc": recovered_at,
+        }
+    )
+    source_state.pop("pause_metadata", None)
+    if source_state["execution_episodes"][:3] != parent_episodes:
+        raise ExternalRetrievalWaveError(
+            "Semantic Scholar episode-4 overlap recovery changed its parent episodes"
+        )
+    if {
+        key: value
+        for key, value in state["sources"].items()
+        if key != "SemanticScholar"
+    } != other_sources_before:
+        raise ExternalRetrievalWaveError(
+            "Semantic Scholar episode-4 overlap recovery changed another source"
+        )
+    state["status"] = "RUNNING"
+    state["external_retrieval_completed_at_utc"] = None
+    state["external_retrieval_cutoff_date"] = None
+    _save_execution_state(state_path, state)
+    _validate_authorized_semantic_native_id_overlap_recovery(
+        root=root,
+        source_state=source_state,
+        wave=wave,
+    )
     return state
 
 
@@ -4409,6 +6514,12 @@ def _execute_external_source_session_locked(
         else _initial_execution_state(root_path, wave, preflight, timestamp())
     )
     source_state = state["sources"][source]
+    if source == "SemanticScholar" and _semantic_native_id_overlap_recovery_active(
+        source_state
+    ):
+        _validate_authorized_semantic_native_id_overlap_recovery(
+            root=root_path, source_state=source_state, wave=wave
+        )
     if source_state["status"] == "COMPLETE":
         return state
     arxiv_transport_policy = (
@@ -8018,7 +10129,30 @@ def main(argv: list[str] | None = None) -> int:
         "--authorize-semantic-scholar-candidate-5xx-recovery",
         action="store_true",
     )
+    parser.add_argument(
+        "--authorize-semantic-scholar-native-id-overlap-recovery",
+        action="store_true",
+    )
     args = parser.parse_args(argv)
+    if args.authorize_semantic_scholar_native_id_overlap_recovery and (
+        args.authorize_live_external_retrieval
+        or args.authorize_transport_retry_reset
+        or args.authorize_pubmed_parser_recovery
+        or args.authorize_europe_pmc_terminal_recovery
+        or args.authorize_ieee_total_drift_recovery
+        or args.authorize_ieee_repeated_window_recovery
+        or args.authorize_arxiv_rate_limit_recovery
+        or args.authorize_arxiv_mixed_state_recovery
+        or args.authorize_arxiv_episode_3_state_reconciliation
+        or args.authorize_arxiv_transport_policy_recovery
+        or args.authorize_semantic_scholar_control_5xx_recovery
+        or args.authorize_semantic_scholar_candidate_5xx_recovery
+        or args.resume
+    ):
+        parser.error(
+            "Semantic Scholar native-ID-overlap recovery is a separate offline "
+            "authorization boundary"
+        )
     if args.authorize_arxiv_transport_policy_recovery:
         if args.source != "arXiv":
             parser.error(
@@ -8125,6 +10259,54 @@ def main(argv: list[str] | None = None) -> int:
                     ],
                     "network_used": False,
                     "checkpoint_modified": False,
+                },
+                sort_keys=True,
+                indent=2,
+            )
+        )
+        return 0
+    if args.authorize_semantic_scholar_native_id_overlap_recovery:
+        if args.source != "SemanticScholar":
+            parser.error(
+                "native-ID-overlap recovery is supported only for --source "
+                "SemanticScholar"
+            )
+        state = authorize_semantic_scholar_native_id_overlap_recovery(
+            root=args.root
+        )
+        source_state = state["sources"]["SemanticScholar"]
+        active = next(
+            episode
+            for episode in source_state["execution_episodes"]
+            if episode.get("episode_number")
+            == source_state["active_episode_number"]
+        )
+        print(
+            json.dumps(
+                {
+                    "execution_status": state["status"],
+                    "source": "SemanticScholar",
+                    "source_status": source_state["status"],
+                    "active_episode_number": source_state[
+                        "active_episode_number"
+                    ],
+                    "completed_query_count": source_state[
+                        "completed_query_count"
+                    ],
+                    "checkpoint_dataset": source_state[
+                        "checkpoint_dataset"
+                    ],
+                    "parent_checkpoint_dataset": active[
+                        "parent_checkpoint_dataset"
+                    ],
+                    "adjudicated_occurrences": active[
+                        "adjudication_provenance"
+                    ]["adjudicated_occurrences"],
+                    "continuation": active["continuation_state"],
+                    "provider_completeness": active[
+                        "adjudication_provenance"
+                    ]["provider_completeness"],
+                    "network_used": False,
                 },
                 sort_keys=True,
                 indent=2,
