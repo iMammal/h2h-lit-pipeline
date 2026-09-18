@@ -371,6 +371,53 @@ ARXIV_EPISODE_3_EXPECTED_REQUEST_HASH = (
 ARXIV_TRANSPORT_POLICY_RECOVERY_STATUS = (
     "TRANSPORT_POLICY_RECOVERY_READY_TO_RESUME"
 )
+ARXIV_RETRYABLE_5XX_RECOVERY_STATUS = (
+    "RETRYABLE_5XX_RECOVERY_READY_TO_RESUME"
+)
+ARXIV_EPISODE_4_FAILED_CHECKPOINT_SHA256 = (
+    "9a2f4888d6b777b7c9eab8094e8837ffeb15333c08acc65362acf999eb1c4f3a"
+)
+ARXIV_EPISODE_4_FAILED_CHECKPOINT_SIZE = 277_454
+ARXIV_EPISODE_4_ATTEMPT_MANIFEST_SHA256 = (
+    "ca603bc05360f5ce9875ed84dc3d75c4863b5e2d67139fb2e59960aa2add7ec3"
+)
+ARXIV_EPISODE_4_FAILURE_SIGNATURES = (
+    (
+        "production:STAR-QF01-RELATIONAL-VIS:arXiv",
+        "query:dc71331332f3131c6ac8b7cd",
+        "page:308545d96dfb2269380f8bad",
+        "fb3ac42a7aa345b75a36091007082d133f3a96f1176e9f452e8bef366fd470fc",
+        500,
+    ),
+    (
+        "production:STAR-QF02-ASSISTED-VIS:arXiv",
+        "query:bb3a20413b87a6451cd50381",
+        "page:d36c237368975d93e62bc11e",
+        "3711800d936e1dd89536b498e4efe6f60fc44b4c027cc12695fb8b1d20886ff9",
+        500,
+    ),
+    (
+        "production:STAR-QF03-INTERACTIVE-SYSTEMS:arXiv",
+        "query:54277aff164d7db0f6dd7deb",
+        "page:b157a552b705303383c0f689",
+        "9f03b8756c93fc2bca0cad623bd1acdad7d504359ad6aebe6ceedf4babe95ef8",
+        503,
+    ),
+    (
+        "production:STAR-QF04-NONDESKTOP-ENV:arXiv",
+        "query:eab7594e261198a0cc02d899",
+        "page:c95b851ce236d5e58a6a1b07",
+        "6d3fb8e36a1c53bdb4731843803efe51e386b732950fdd9051fb5d5ff71804ef",
+        500,
+    ),
+    (
+        "production:STAR-QF05-CONVERSATIONAL:arXiv",
+        "query:f2c1cdae2e380638f9873e30",
+        "page:8d3266844980afb71151a02d",
+        "80a60f727873bd2ec256df0e5a79c62bb009c709d00689cb6534125ebc4d46e7",
+        500,
+    ),
+)
 ARXIV_LEGACY_READ_TIMEOUT_SECONDS = 30.0
 ARXIV_RECOVERED_READ_TIMEOUT_SECONDS = 120.0
 ARXIV_MAX_ATTEMPTS_PER_INVOCATION = 3
@@ -5475,6 +5522,634 @@ def authorize_arxiv_transport_policy_recovery(
         return state
 
 
+def _validate_failed_arxiv_retryable_5xx_checkpoint(
+    *,
+    dataset: Any,
+    checkpoint_dir: Path,
+    wave: ProductionRetrievalWave,
+) -> dict[str, Any]:
+    """Validate the exact response-backed episode-4 arXiv failure."""
+
+    dataset.validate()
+    specs = _source_query_specs(
+        wave,
+        "arXiv",
+        ieee_credential="",
+        arxiv_read_timeout_seconds=ARXIV_RECOVERED_READ_TIMEOUT_SECONDS,
+    )
+    signatures = ARXIV_EPISODE_4_FAILURE_SIGNATURES
+    run = dataset.retrieval_runs[0] if len(dataset.retrieval_runs) == 1 else None
+    if (
+        run is None
+        or run.run_id != f"{WAVE_ID}:arXiv"
+        or run.status is not ProcessingStatus.FAILED
+        or run.completion_status is not RetrievalCompletionStatus.FAILED
+        or run.query_plan_hash != _query_plan_hash(specs)
+        or len(dataset.source_queries) != 5
+        or len(dataset.retrieval_pages) != 5
+        or len(dataset.retrieval_attempts) != 19
+        or dataset.occurrences
+        or dataset.canonical_records
+        or dataset.duplicate_decisions
+    ):
+        raise ExternalRetrievalWaveError(
+            "arXiv episode-4 retryable-5xx failure shape changed"
+        )
+    attempt_manifest_hash = _hash_payload(
+        {"retrieval_attempts": dataset.to_dict()["retrieval_attempts"]}
+    )
+    if attempt_manifest_hash != ARXIV_EPISODE_4_ATTEMPT_MANIFEST_SHA256:
+        raise ExternalRetrievalWaveError(
+            "arXiv episode-4 19-attempt manifest changed"
+        )
+
+    pages = {item.source_query_id: item for item in dataset.retrieval_pages}
+    attempts = {item.attempt_id: item for item in dataset.retrieval_attempts}
+    adapter = PAGINATED_SOURCE_ADAPTERS["arXiv"]
+    response_statuses: list[int] = []
+    response_bindings: list[dict[str, Any]] = []
+    restart_states: list[dict[str, Any]] = []
+    terminal_statuses: list[int] = []
+    store = CheckpointStore(checkpoint_dir)
+    for query, spec, signature in zip(
+        dataset.source_queries, specs, signatures, strict=True
+    ):
+        production_id, query_id, page_id, request_hash, terminal_status = signature
+        page = pages.get(query_id)
+        request = adapter.build_request(spec, {"start": 0})
+        if (
+            query.query_id != query_id
+            or query.query_text != spec.query_text
+            or query.query_version != spec.query_version
+            or query.metadata.get("production_query_id") != production_id
+            or query.filters != {"page_size": 2000}
+            or query.metadata.get("request_timeout_seconds")
+            != ARXIV_RECOVERED_READ_TIMEOUT_SECONDS
+            or query.status is not ProcessingStatus.FAILED
+            or query.completion_status is not RetrievalCompletionStatus.FAILED
+            or query.result_count != 0
+            or query.page_ids != [page_id]
+            or query.source_reported_total is not None
+            or page is None
+            or page.page_id != page_id
+            or page.ordinal != 0
+            or page.request_state != {"start": 0}
+            or page.status is not RetrievalCompletionStatus.FAILED
+            or page.returned_item_count != 0
+            or page.occurrence_ids
+            or page.native_identifiers
+            or page.next_state is not None
+            or page.terminal
+            or request.timeout != ARXIV_RECOVERED_READ_TIMEOUT_SECONDS
+            or request.params.get("start") != 0
+            or request.params.get("max_results") != 2000
+            or request.request_hash() != request_hash
+            or not page.attempt_ids
+        ):
+            raise ExternalRetrievalWaveError(
+                "arXiv episode-4 query/page/request identity changed"
+            )
+        page_attempts = [attempts[item] for item in page.attempt_ids]
+        if any(
+            attempt.status is not RetrievalAttemptStatus.FAILED
+            or attempt.request_hash != request_hash
+            or attempt.request_params != request.params
+            or attempt.request_method != request.method
+            or attempt.request_url != request.url
+            or attempt.raw_response_path is None
+            or attempt.raw_response_hash is None
+            or attempt.response_status not in {429, 500, 503}
+            for attempt in page_attempts
+        ):
+            raise ExternalRetrievalWaveError(
+                "arXiv episode-4 request or response evidence changed"
+            )
+        for attempt in page_attempts:
+            response = store.load_response(
+                attempt.raw_response_path, attempt.raw_response_hash
+            )
+            if response.status_code != attempt.response_status:
+                raise ExternalRetrievalWaveError(
+                    "arXiv episode-4 persisted response status changed"
+                )
+            response_statuses.append(response.status_code)
+            response_bindings.append(
+                {
+                    "attempt_id": attempt.attempt_id,
+                    "path": attempt.raw_response_path,
+                    "raw_sha256": attempt.raw_response_hash,
+                    "http_status": response.status_code,
+                }
+            )
+        final_status = page_attempts[-1].response_status
+        terminal_statuses.append(final_status)
+        if final_status != terminal_status:
+            raise ExternalRetrievalWaveError(
+                "arXiv episode-4 terminal HTTP statuses changed"
+            )
+        restart_states.append(
+            {
+                "production_query_id": production_id,
+                "query_id": query_id,
+                "page_id": page_id,
+                "request_state": {"start": 0},
+                "max_results": 2000,
+                "request_hash": request_hash,
+                "terminal_http_status": terminal_status,
+            }
+        )
+    if (
+        Counter(response_statuses) != Counter({429: 4, 500: 12, 503: 3})
+        or tuple(terminal_statuses) != (500, 500, 503, 500, 500)
+    ):
+        raise ExternalRetrievalWaveError(
+            "arXiv episode-4 response-status manifest changed"
+        )
+    return {
+        "attempt_manifest_hash": attempt_manifest_hash,
+        "raw_response_bindings": response_bindings,
+        "raw_response_manifest_hash": _hash_payload(
+            {"responses": response_bindings}
+        ),
+        "restart_states": restart_states,
+        "terminal_http_statuses": terminal_statuses,
+    }
+
+
+def _arxiv_retryable_5xx_recovery_active(
+    source_state: Mapping[str, Any],
+) -> bool:
+    return (
+        source_state.get("active_episode_number") == 5
+        and any(
+            item.get("episode_number") == 5
+            and item.get("authorization_reason")
+            == "OFFLINE_ARXIV_RETRYABLE_5XX_RECOVERY"
+            for item in source_state.get("execution_episodes", [])
+        )
+    )
+
+
+def _validate_authorized_arxiv_retryable_5xx_recovery(
+    *,
+    root: Path,
+    source_state: Mapping[str, Any],
+    wave: ProductionRetrievalWave,
+) -> None:
+    """Revalidate episode-5 provenance before authorization reuse or resume."""
+
+    episodes = source_state.get("execution_episodes", [])
+    if len(episodes) != 5 or [item.get("episode_number") for item in episodes] != [
+        1,
+        2,
+        3,
+        4,
+        5,
+    ]:
+        raise ExternalRetrievalWaveError("arXiv episode-5 lineage changed")
+    for historical in episodes[:4]:
+        reference = historical.get("checkpoint_dataset")
+        if not isinstance(reference, dict) or historical.get("immutable") is not True:
+            raise ExternalRetrievalWaveError(
+                "arXiv historical episode provenance changed"
+            )
+        checkpoint = _safe_output_path(root, str(reference.get("path")))
+        _verify_file_reference(checkpoint, reference, root)
+    episode_4 = episodes[3]
+    expected_parent_reference = {
+        "path": (
+            f"{EXECUTION_ROOT}/arXiv/episodes/episode-004/checkpoint/"
+            "review_dataset.json"
+        ),
+        "byte_size": ARXIV_EPISODE_4_FAILED_CHECKPOINT_SIZE,
+        "raw_sha256": ARXIV_EPISODE_4_FAILED_CHECKPOINT_SHA256,
+    }
+    if (
+        episode_4.get("episode_id") != "arXiv-episode-004"
+        or episode_4.get("status") != "FAILED"
+        or episode_4.get("authorization_reason")
+        != "OFFLINE_ARXIV_TRANSPORT_POLICY_RECOVERY"
+        or episode_4.get("checkpoint_dataset") != expected_parent_reference
+        or episode_4.get("attempt_count") != 19
+        or episode_4.get("occurrence_count") != 0
+        or episode_4.get("completed_query_count") != 0
+    ):
+        raise ExternalRetrievalWaveError("arXiv failed episode-4 lineage changed")
+    parent_checkpoint = _safe_output_path(root, expected_parent_reference["path"])
+    parent_validation = _validate_failed_arxiv_retryable_5xx_checkpoint(
+        dataset=load_review_dataset(parent_checkpoint),
+        checkpoint_dir=parent_checkpoint.parent,
+        wave=wave,
+    )
+    parent_episode_manifest_hash = _hash_payload(
+        {"execution_episodes": episodes[:4]}
+    )
+    episode_5 = episodes[4]
+    transport_policy = {
+        "read_timeout_seconds": ARXIV_RECOVERED_READ_TIMEOUT_SECONDS,
+        "maximum_attempts_per_invocation": ARXIV_MAX_ATTEMPTS_PER_INVOCATION,
+    }
+    expected_provenance = {
+        "recovery_episode_number": 5,
+        "parent_episode_number": 4,
+        "parent_checkpoint_dataset": expected_parent_reference,
+        "parent_episode_manifest_hash": parent_episode_manifest_hash,
+        "parent_attempt_manifest_hash": parent_validation[
+            "attempt_manifest_hash"
+        ],
+        "parent_raw_response_manifest_hash": parent_validation[
+            "raw_response_manifest_hash"
+        ],
+        "parent_raw_responses": parent_validation["raw_response_bindings"],
+        "terminal_http_statuses": parent_validation[
+            "terminal_http_statuses"
+        ],
+        "restart_states": parent_validation["restart_states"],
+        "historical_lineage_counts": {
+            "preserved_before_episode_4_attempts": 32,
+            "preserved_before_episode_4_raw_responses": 9,
+            "episode_4_attempts": 19,
+            "episode_4_raw_responses": 19,
+            "preserved_total_attempts": 51,
+            "preserved_total_raw_responses": 28,
+            "accepted_occurrences": 0,
+        },
+        "transport_policy": transport_policy,
+        "network_used": False,
+    }
+    checkpoint_reference = episode_5.get("checkpoint_dataset")
+    if not isinstance(checkpoint_reference, dict):
+        raise ExternalRetrievalWaveError("arXiv episode-5 checkpoint binding is absent")
+    checkpoint = _safe_output_path(root, str(checkpoint_reference.get("path")))
+    _verify_file_reference(checkpoint, checkpoint_reference, root)
+    dataset = load_review_dataset(checkpoint)
+    dataset.validate()
+    specs = _source_query_specs(
+        wave,
+        "arXiv",
+        ieee_credential="",
+        arxiv_read_timeout_seconds=ARXIV_RECOVERED_READ_TIMEOUT_SECONDS,
+    )
+    run = dataset.retrieval_runs[0] if len(dataset.retrieval_runs) == 1 else None
+    if (
+        episode_5.get("episode_id") != "arXiv-episode-005"
+        or episode_5.get("authorization_reason")
+        != "OFFLINE_ARXIV_RETRYABLE_5XX_RECOVERY"
+        or episode_5.get("recovery_of_episode_number") != 4
+        or episode_5.get("parent_checkpoint_dataset")
+        != expected_parent_reference
+        or episode_5.get("recovery_provenance") != expected_provenance
+        or episode_5.get("transport_policy") != transport_policy
+        or episode_5.get("network_used") is not False
+        or source_state.get("active_episode_number") != 5
+        or source_state.get("active_run_id") != f"{WAVE_ID}:arXiv"
+        or source_state.get("active_checkpoint_path")
+        != episode_5.get("checkpoint_path")
+        or source_state.get("checkpoint_path") != episode_5.get("checkpoint_path")
+        or source_state.get("checkpoint_dataset") != checkpoint_reference
+        or source_state.get("transport_policy") != transport_policy
+        or source_state.get("preserved_source_attempt_count") != 51
+        or source_state.get("preserved_source_raw_response_count") != 28
+        or source_state.get("attempt_count") != len(dataset.retrieval_attempts)
+        or source_state.get("occurrence_count") != len(dataset.occurrences)
+        or source_state.get("completed_query_count")
+        != sum(
+            item.completion_status is RetrievalCompletionStatus.COMPLETE
+            for item in dataset.source_queries
+        )
+        or run is None
+        or run.run_id != f"{WAVE_ID}:arXiv"
+        or run.query_plan_hash != _query_plan_hash(specs)
+        or run.metadata.get("offline_arxiv_retryable_5xx_recovery")
+        != expected_provenance
+        or len(dataset.source_queries) != 5
+    ):
+        raise ExternalRetrievalWaveError(
+            "authorized arXiv episode-5 recovery provenance changed"
+        )
+    for query, spec, restart in zip(
+        dataset.source_queries,
+        specs,
+        parent_validation["restart_states"],
+        strict=True,
+    ):
+        request = PAGINATED_SOURCE_ADAPTERS["arXiv"].build_request(
+            spec, {"start": 0}
+        )
+        if (
+            query.query_id != restart["query_id"]
+            or query.query_text != spec.query_text
+            or query.query_version != spec.query_version
+            or query.metadata.get("production_query_id")
+            != restart["production_query_id"]
+            or query.filters != {"page_size": 2000}
+            or query.metadata.get("request_timeout_seconds")
+            != ARXIV_RECOVERED_READ_TIMEOUT_SECONDS
+            or request.request_hash() != restart["request_hash"]
+            or query.metadata.get("offline_arxiv_retryable_5xx_recovery")
+            != {
+                "parent_episode_number": 4,
+                "request_state": {"start": 0},
+                "request_hash": restart["request_hash"],
+            }
+        ):
+            raise ExternalRetrievalWaveError(
+                "authorized arXiv episode-5 query provenance changed"
+            )
+
+
+def authorize_arxiv_retryable_5xx_recovery(
+    *,
+    root: str | Path,
+    timestamp: Callable[[], str] = utc_now,
+) -> dict[str, Any]:
+    """Create an opt-in episode 5 for the verified retryable-5xx failure."""
+
+    root_path = Path(root).resolve()
+    with _exclusive_external_source_session(root_path):
+        wave, preflight = validate_persisted_external_preflight(root=root_path)
+        state_path = _safe_output_path(root_path, EXECUTION_STATE_PATH)
+        if not state_path.is_file():
+            raise ExternalRetrievalWaveError("external execution state does not exist")
+        state = _load_execution_state(state_path, root_path, wave, preflight)
+        if any(item.get("status") == "RUNNING" for item in state["sources"].values()):
+            raise ExternalRetrievalWaveError(
+                "cannot recover while an external-source session is marked RUNNING"
+            )
+        if state.get("external_retrieval_cutoff_date") is not None:
+            raise ExternalRetrievalWaveError(
+                "arXiv retryable-5xx recovery cannot alter a closed wave"
+            )
+        source_state = state["sources"]["arXiv"]
+        if _arxiv_retryable_5xx_recovery_active(source_state):
+            _validate_authorized_arxiv_retryable_5xx_recovery(
+                root=root_path, source_state=source_state, wave=wave
+            )
+            return state
+        episodes = source_state.get("execution_episodes", [])
+        expected_parent_reference = {
+            "path": (
+                f"{EXECUTION_ROOT}/arXiv/episodes/episode-004/checkpoint/"
+                "review_dataset.json"
+            ),
+            "byte_size": ARXIV_EPISODE_4_FAILED_CHECKPOINT_SIZE,
+            "raw_sha256": ARXIV_EPISODE_4_FAILED_CHECKPOINT_SHA256,
+        }
+        if (
+            source_state.get("status") != "FAILED"
+            or source_state.get("active_episode_number") != 4
+            or source_state.get("active_run_id") != f"{WAVE_ID}:arXiv"
+            or source_state.get("checkpoint_dataset") != expected_parent_reference
+            or source_state.get("attempt_count") != 19
+            or source_state.get("occurrence_count") != 0
+            or source_state.get("completed_query_count") != 0
+            or source_state.get("total_query_count") != 5
+            or source_state.get("preserved_source_attempt_count") != 32
+            or source_state.get("preserved_source_raw_response_count") != 9
+            or len(episodes) != 4
+        ):
+            raise ExternalRetrievalWaveError(
+                "arXiv retryable-5xx recovery requires the exact failed episode 4"
+            )
+        episode_4 = episodes[3]
+        if (
+            episode_4.get("episode_number") != 4
+            or episode_4.get("episode_id") != "arXiv-episode-004"
+            or episode_4.get("status") != "FAILED"
+            or episode_4.get("immutable") is not True
+            or episode_4.get("authorization_reason")
+            != "OFFLINE_ARXIV_TRANSPORT_POLICY_RECOVERY"
+            or episode_4.get("checkpoint_dataset") != expected_parent_reference
+            or episode_4.get("transport_policy")
+            != {
+                "read_timeout_seconds": ARXIV_RECOVERED_READ_TIMEOUT_SECONDS,
+                "maximum_attempts_per_invocation": (
+                    ARXIV_MAX_ATTEMPTS_PER_INVOCATION
+                ),
+            }
+        ):
+            raise ExternalRetrievalWaveError("arXiv episode-4 provenance changed")
+        parent_checkpoint = _safe_output_path(
+            root_path, expected_parent_reference["path"]
+        )
+        _verify_file_reference(parent_checkpoint, expected_parent_reference, root_path)
+        parent_dataset = load_review_dataset(parent_checkpoint)
+        parent_validation = _validate_failed_arxiv_retryable_5xx_checkpoint(
+            dataset=parent_dataset,
+            checkpoint_dir=parent_checkpoint.parent,
+            wave=wave,
+        )
+        transport_recovery = parent_dataset.retrieval_runs[0].metadata.get(
+            "offline_arxiv_transport_policy_recovery", {}
+        )
+        if (
+            transport_recovery.get("recovery_episode_number") != 4
+            or transport_recovery.get("network_used") is not False
+            or transport_recovery.get("new_transport_policy")
+            != episode_4["transport_policy"]
+            or [
+                item.get("new_request_hash")
+                for item in transport_recovery.get("request_identity_changes", [])
+            ]
+            != [item[3] for item in ARXIV_EPISODE_4_FAILURE_SIGNATURES]
+        ):
+            raise ExternalRetrievalWaveError(
+                "arXiv episode-4 transport-policy provenance changed"
+            )
+
+        historical_files: dict[Path, bytes] = {}
+        for episode in episodes:
+            reference = episode.get("checkpoint_dataset")
+            if not isinstance(reference, dict):
+                raise ExternalRetrievalWaveError(
+                    "arXiv historical episode lacks checkpoint provenance"
+                )
+            checkpoint = _safe_output_path(root_path, str(reference.get("path")))
+            _verify_file_reference(checkpoint, reference, root_path)
+            for artifact in checkpoint.parent.rglob("*"):
+                if artifact.is_file():
+                    historical_files.setdefault(artifact, artifact.read_bytes())
+        parent_episode_manifest_hash = _hash_payload(
+            {"execution_episodes": episodes}
+        )
+        recovery_checkpoint_relative = (
+            f"{EXECUTION_ROOT}/arXiv/episodes/episode-005/checkpoint"
+        )
+        recovery_checkpoint_dir = _safe_output_path(
+            root_path, recovery_checkpoint_relative
+        )
+        if recovery_checkpoint_dir.exists():
+            raise ExternalRetrievalWaveError(
+                "arXiv episode-5 checkpoint exists without valid state lineage"
+            )
+        other_sources_before = {
+            key: json.loads(json.dumps(value, sort_keys=True))
+            for key, value in state["sources"].items()
+            if key != "arXiv"
+        }
+        recovered_at = timestamp()
+        run = parent_dataset.retrieval_runs[0]
+        parent_dataset.retrieval_pages = []
+        parent_dataset.retrieval_attempts = []
+        parent_dataset.occurrences = []
+        parent_dataset.canonical_records = []
+        parent_dataset.duplicate_decisions = []
+        run.retrieval_started_at = recovered_at
+        run.retrieval_completed_at = recovered_at
+        run.retrieval_cutoff_date = None
+        run.status = ProcessingStatus.PARTIAL
+        run.completion_status = RetrievalCompletionStatus.RUNNING
+        run.errors = [
+            "offline arXiv retryable-5xx recovery complete; live resume pending"
+        ]
+        for key in (
+            "pause_state",
+            "pause_reason",
+            "pause_metadata",
+            "session_request_count",
+        ):
+            run.metadata.pop(key, None)
+        transport_policy = dict(episode_4["transport_policy"])
+        provenance = {
+            "recovery_episode_number": 5,
+            "parent_episode_number": 4,
+            "parent_checkpoint_dataset": expected_parent_reference,
+            "parent_episode_manifest_hash": parent_episode_manifest_hash,
+            "parent_attempt_manifest_hash": parent_validation[
+                "attempt_manifest_hash"
+            ],
+            "parent_raw_response_manifest_hash": parent_validation[
+                "raw_response_manifest_hash"
+            ],
+            "parent_raw_responses": parent_validation["raw_response_bindings"],
+            "terminal_http_statuses": parent_validation[
+                "terminal_http_statuses"
+            ],
+            "restart_states": parent_validation["restart_states"],
+            "historical_lineage_counts": {
+                "preserved_before_episode_4_attempts": 32,
+                "preserved_before_episode_4_raw_responses": 9,
+                "episode_4_attempts": 19,
+                "episode_4_raw_responses": 19,
+                "preserved_total_attempts": 51,
+                "preserved_total_raw_responses": 28,
+                "accepted_occurrences": 0,
+            },
+            "transport_policy": transport_policy,
+            "network_used": False,
+        }
+        run.metadata["offline_arxiv_retryable_5xx_recovery"] = provenance
+        for query, restart in zip(
+            parent_dataset.source_queries,
+            parent_validation["restart_states"],
+            strict=True,
+        ):
+            query.retrieval_started_at = recovered_at
+            query.retrieval_ended_at = recovered_at
+            query.status = ProcessingStatus.PARTIAL
+            query.completion_status = RetrievalCompletionStatus.PLANNED
+            query.page = None
+            query.cursor = None
+            query.result_count = 0
+            query.errors = []
+            query.page_ids = []
+            query.source_reported_total = None
+            query.total_is_exact = False
+            query.completion_proof = None
+            for key in ("pause_state", "pause_reason", "pause_metadata"):
+                query.metadata.pop(key, None)
+            query.metadata["offline_arxiv_retryable_5xx_recovery"] = {
+                "parent_episode_number": 4,
+                "request_state": {"start": 0},
+                "request_hash": restart["request_hash"],
+            }
+        parent_dataset.validate()
+        recovery_store = CheckpointStore(recovery_checkpoint_dir)
+        checkpoint_hash = recovery_store.save_dataset(parent_dataset)
+        recovery_reference = _file_reference(
+            recovery_store.dataset_path, root_path
+        )
+        if checkpoint_hash != recovery_reference["raw_sha256"]:
+            raise ExternalRetrievalWaveError(
+                "arXiv retryable-5xx recovery checkpoint hash disagreement"
+            )
+        if any(
+            path.read_bytes() != content
+            for path, content in historical_files.items()
+        ):
+            raise ExternalRetrievalWaveError(
+                "arXiv historical evidence changed during retryable-5xx recovery"
+            )
+        episode_5 = {
+            "episode_number": 5,
+            "episode_id": "arXiv-episode-005",
+            "run_id": run.run_id,
+            "status": ARXIV_RETRYABLE_5XX_RECOVERY_STATUS,
+            "recovery_of_episode_number": 4,
+            "authorization_reason": "OFFLINE_ARXIV_RETRYABLE_5XX_RECOVERY",
+            "authorized_at_utc": recovered_at,
+            "checkpoint_path": recovery_checkpoint_relative,
+            "checkpoint_dataset": recovery_reference,
+            "frozen_wave_manifest_hash": wave.manifest_hash(),
+            "frozen_query_plan_hash": wave.query_plan_hash,
+            "parent_checkpoint_dataset": expected_parent_reference,
+            "transport_policy": transport_policy,
+            "recovery_provenance": provenance,
+            "network_used": False,
+            "immutable": False,
+        }
+        source_state["execution_episodes"].append(episode_5)
+        source_state.update(
+            {
+                "status": ARXIV_RETRYABLE_5XX_RECOVERY_STATUS,
+                "active_episode_number": 5,
+                "active_run_id": run.run_id,
+                "active_checkpoint_path": recovery_checkpoint_relative,
+                "checkpoint_path": recovery_checkpoint_relative,
+                "checkpoint_dataset": recovery_reference,
+                "completed_query_count": 0,
+                "total_query_count": 5,
+                "occurrence_count": 0,
+                "attempt_count": 0,
+                "preserved_source_attempt_count": 51,
+                "preserved_source_raw_response_count": 28,
+                "requests_this_session": 0,
+                "pause_reason": (
+                    "OFFLINE_RETRYABLE_5XX_RECOVERY_COMPLETE; "
+                    "LIVE_RESUME_REQUIRED"
+                ),
+                "failure_reason": None,
+                "last_session_started_at_utc": recovered_at,
+                "last_session_completed_at_utc": recovered_at,
+                "transport_policy": transport_policy,
+            }
+        )
+        source_state.pop("pause_metadata", None)
+        if {
+            key: value
+            for key, value in state["sources"].items()
+            if key != "arXiv"
+        } != other_sources_before:
+            raise ExternalRetrievalWaveError(
+                "arXiv retryable-5xx recovery changed another source"
+            )
+        state["status"] = "RUNNING"
+        state["external_retrieval_completed_at_utc"] = None
+        state["external_retrieval_cutoff_date"] = None
+        _save_execution_state(state_path, state)
+        if any(
+            path.read_bytes() != content
+            for path, content in historical_files.items()
+        ):
+            raise ExternalRetrievalWaveError(
+                "arXiv historical evidence changed after state persistence"
+            )
+        _validate_authorized_arxiv_retryable_5xx_recovery(
+            root=root_path, source_state=source_state, wave=wave
+        )
+        return state
+
+
 def authorize_pubmed_transport_retry(
     *,
     root: str | Path,
@@ -6444,10 +7119,13 @@ def _active_arxiv_transport_policy(
             ARXIV_MAX_ATTEMPTS_PER_INVOCATION
         ),
     }
+    expected_reason = {
+        4: "OFFLINE_ARXIV_TRANSPORT_POLICY_RECOVERY",
+        5: "OFFLINE_ARXIV_RETRYABLE_5XX_RECOVERY",
+    }.get(active_number)
     if (
-        active_number != 4
-        or active.get("authorization_reason")
-        != "OFFLINE_ARXIV_TRANSPORT_POLICY_RECOVERY"
+        expected_reason is None
+        or active.get("authorization_reason") != expected_reason
         or policy != expected
         or source_state.get("transport_policy") != expected
     ):
@@ -6518,6 +7196,10 @@ def _execute_external_source_session_locked(
         source_state
     ):
         _validate_authorized_semantic_native_id_overlap_recovery(
+            root=root_path, source_state=source_state, wave=wave
+        )
+    if source == "arXiv" and _arxiv_retryable_5xx_recovery_active(source_state):
+        _validate_authorized_arxiv_retryable_5xx_recovery(
             root=root_path, source_state=source_state, wave=wave
         )
     if source_state["status"] == "COMPLETE":
@@ -6676,8 +7358,8 @@ def _execute_external_source_session_locked(
             else frozenset()
         ),
         resumable_provider_5xx_exhaustion_sources=(
-            frozenset({"SemanticScholar"})
-            if source == "SemanticScholar"
+            frozenset({source})
+            if source in {"arXiv", "SemanticScholar"}
             else frozenset()
         ),
     )
@@ -10122,6 +10804,10 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
     )
     parser.add_argument(
+        "--authorize-arxiv-retryable-5xx-recovery",
+        action="store_true",
+    )
+    parser.add_argument(
         "--authorize-semantic-scholar-control-5xx-recovery",
         action="store_true",
     )
@@ -10145,6 +10831,7 @@ def main(argv: list[str] | None = None) -> int:
         or args.authorize_arxiv_mixed_state_recovery
         or args.authorize_arxiv_episode_3_state_reconciliation
         or args.authorize_arxiv_transport_policy_recovery
+        or args.authorize_arxiv_retryable_5xx_recovery
         or args.authorize_semantic_scholar_control_5xx_recovery
         or args.authorize_semantic_scholar_candidate_5xx_recovery
         or args.resume
@@ -10153,6 +10840,66 @@ def main(argv: list[str] | None = None) -> int:
             "Semantic Scholar native-ID-overlap recovery is a separate offline "
             "authorization boundary"
         )
+    if args.authorize_arxiv_retryable_5xx_recovery:
+        if args.source != "arXiv":
+            parser.error(
+                "retryable-5xx recovery is supported only for --source arXiv"
+            )
+        if (
+            args.authorize_live_external_retrieval
+            or args.authorize_transport_retry_reset
+            or args.authorize_pubmed_parser_recovery
+            or args.authorize_europe_pmc_terminal_recovery
+            or args.authorize_ieee_total_drift_recovery
+            or args.authorize_ieee_repeated_window_recovery
+            or args.authorize_arxiv_rate_limit_recovery
+            or args.authorize_arxiv_mixed_state_recovery
+            or args.authorize_arxiv_episode_3_state_reconciliation
+            or args.authorize_arxiv_transport_policy_recovery
+            or args.authorize_semantic_scholar_control_5xx_recovery
+            or args.authorize_semantic_scholar_candidate_5xx_recovery
+            or args.authorize_semantic_scholar_native_id_overlap_recovery
+            or args.resume
+        ):
+            parser.error(
+                "arXiv retryable-5xx recovery is a separate offline "
+                "authorization boundary"
+            )
+        state = authorize_arxiv_retryable_5xx_recovery(root=args.root)
+        source_state = state["sources"]["arXiv"]
+        active = source_state["execution_episodes"][4]
+        print(
+            json.dumps(
+                {
+                    "execution_status": state["status"],
+                    "source": "arXiv",
+                    "source_status": source_state["status"],
+                    "active_episode_number": source_state[
+                        "active_episode_number"
+                    ],
+                    "checkpoint_dataset": source_state[
+                        "checkpoint_dataset"
+                    ],
+                    "parent_checkpoint_dataset": active[
+                        "parent_checkpoint_dataset"
+                    ],
+                    "restart_states": active["recovery_provenance"][
+                        "restart_states"
+                    ],
+                    "transport_policy": active["transport_policy"],
+                    "historical_lineage_counts": active[
+                        "recovery_provenance"
+                    ]["historical_lineage_counts"],
+                    "external_retrieval_cutoff_date": state[
+                        "external_retrieval_cutoff_date"
+                    ],
+                    "network_used": False,
+                },
+                sort_keys=True,
+                indent=2,
+            )
+        )
+        return 0
     if args.authorize_arxiv_transport_policy_recovery:
         if args.source != "arXiv":
             parser.error(
