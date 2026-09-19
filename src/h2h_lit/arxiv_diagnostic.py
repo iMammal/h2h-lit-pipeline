@@ -32,6 +32,7 @@ from h2h_lit.sources.arxiv import API_URL, ArxivPaginator
 
 DIAGNOSTIC_RUN_ID = "star-external-retrieval-wave-001:arXiv:diagnostic:small-page-001"
 DIAGNOSTIC_RELATIVE_ROOT = "outputs/diagnostics/arxiv/arxiv-small-page-diagnostic-001"
+DIAGNOSTIC_NAMESPACE_ROOT = "outputs/diagnostics/arxiv"
 DIAGNOSTIC_MANIFEST_NAME = "diagnostic_manifest.json"
 PURPOSE = "diagnostic"
 PRODUCTION_ELIGIBLE = False
@@ -133,7 +134,9 @@ def _load_json(path: Path) -> dict[str, Any]:
     return payload
 
 
-def _verify_production_is_idle(state: Mapping[str, Any]) -> None:
+def _verify_production_is_idle(
+    state: Mapping[str, Any], *, episode_5_diagnostic: bool = False
+) -> None:
     sources = state.get("sources")
     if not isinstance(sources, dict):
         raise ArxivDiagnosticError("production execution state lacks source states")
@@ -149,10 +152,20 @@ def _verify_production_is_idle(state: Mapping[str, Any]) -> None:
     arxiv = sources.get("arXiv")
     if not isinstance(arxiv, dict):
         raise ArxivDiagnosticError("production execution state lacks arXiv state")
-    if arxiv.get("active_episode_number") != 4:
-        raise ArxivDiagnosticError("arXiv episode 4 is not the active production episode")
-    if arxiv.get("status") != "PAUSED_PROVIDER_RATE_LIMIT":
-        raise ArxivDiagnosticError("arXiv production state is not paused for provider rate limit")
+    expected_episode = 5 if episode_5_diagnostic else 4
+    expected_status = (
+        "PAUSED_TRANSIENT_PROVIDER"
+        if episode_5_diagnostic
+        else "PAUSED_PROVIDER_RATE_LIMIT"
+    )
+    if arxiv.get("active_episode_number") != expected_episode:
+        raise ArxivDiagnosticError(
+            f"arXiv episode {expected_episode} is not the active production episode"
+        )
+    if arxiv.get("status") != expected_status:
+        raise ArxivDiagnosticError(
+            f"arXiv production state is not {expected_status}"
+        )
     if arxiv.get("last_session_completed_at_utc") is None:
         raise ArxivDiagnosticError("arXiv production session has no completion timestamp")
 
@@ -230,6 +243,22 @@ def _build_request(query_text: str, query_version: str) -> PageRequest:
     ):
         raise ArxivDiagnosticError("arXiv diagnostic request construction changed")
     return request
+
+
+def _diagnostic_root(root: Path, relative: str) -> Path:
+    if not relative.strip():
+        raise ArxivDiagnosticError("diagnostic namespace is required")
+    candidate = _safe_fixed_path(root, relative)
+    namespace_root = _safe_fixed_path(root, DIAGNOSTIC_NAMESPACE_ROOT)
+    try:
+        candidate.relative_to(namespace_root)
+    except ValueError as exc:
+        raise ArxivDiagnosticError(
+            "diagnostic namespace must be within outputs/diagnostics/arxiv"
+        ) from exc
+    if candidate == namespace_root:
+        raise ArxivDiagnosticError("diagnostic namespace must name a child directory")
+    return candidate
 
 
 def _relevant_headers(headers: Mapping[str, Any]) -> dict[str, str]:
@@ -373,16 +402,48 @@ def run_arxiv_diagnostic(
     timestamp: Callable[[], str] = utc_now,
     monotonic: Callable[[], float] = time.monotonic,
     sleep: Callable[[float], None] = time.sleep,
+    single_control: bool = False,
+    single_qf01: bool = False,
+    diagnostic_namespace: str | None = None,
 ) -> dict[str, Any]:
-    """Run at most two diagnostic-only arXiv requests with no retries."""
+    """Run one or two diagnostic-only arXiv requests with no retries."""
 
     if not authorize_live_diagnostic:
         raise ArxivDiagnosticError("live diagnostic requires explicit authorization")
+    if single_control and single_qf01:
+        raise ArxivDiagnosticError("single diagnostic modes are mutually exclusive")
+    single_mode = (
+        "single-control"
+        if single_control
+        else "single-qf01"
+        if single_qf01
+        else None
+    )
     root_path = Path(root).resolve()
     production_root = _safe_fixed_path(root_path, OUTPUT_ROOT)
     state_path = _safe_fixed_path(root_path, EXECUTION_STATE_PATH)
     lock_path = _safe_fixed_path(root_path, EXTERNAL_SOURCE_SESSION_LOCK_PATH)
-    diagnostic_root = _safe_fixed_path(root_path, DIAGNOSTIC_RELATIVE_ROOT)
+    if single_mode is not None:
+        if diagnostic_namespace is None:
+            raise ArxivDiagnosticError(
+                "single-request mode requires a diagnostic namespace"
+            )
+        diagnostic_root = _diagnostic_root(root_path, diagnostic_namespace)
+        diagnostic_relative_root = diagnostic_root.relative_to(root_path).as_posix()
+        maximum_requests = 1
+        run_id = (
+            f"star-external-retrieval-wave-001:arXiv:diagnostic:{single_mode}:"
+            + hashlib.sha256(diagnostic_relative_root.encode("utf-8")).hexdigest()[:16]
+        )
+    else:
+        if diagnostic_namespace is not None:
+            raise ArxivDiagnosticError(
+                "a caller-supplied namespace requires single-control mode"
+            )
+        diagnostic_root = _safe_fixed_path(root_path, DIAGNOSTIC_RELATIVE_ROOT)
+        diagnostic_relative_root = DIAGNOSTIC_RELATIVE_ROOT
+        maximum_requests = MAXIMUM_REQUESTS
+        run_id = DIAGNOSTIC_RUN_ID
     manifest_path = diagnostic_root / DIAGNOSTIC_MANIFEST_NAME
     if not production_root.is_dir() or not state_path.is_file():
         raise ArxivDiagnosticError("production retrieval evidence is absent")
@@ -401,7 +462,9 @@ def run_arxiv_diagnostic(
     with _exclusive_external_source_session(root_path):
         before = _tree_snapshot(production_root, root_path)
         state = _load_json(state_path)
-        _verify_production_is_idle(state)
+        _verify_production_is_idle(
+            state, episode_5_diagnostic=single_mode is not None
+        )
         qf01 = _load_qf01_binding(root_path, state)
         protected_inputs = [
             _file_reference(state_path, root_path),
@@ -417,19 +480,23 @@ def run_arxiv_diagnostic(
             if path.is_file():
                 protected_inputs.append(_file_reference(path, root_path))
 
-        probes = [
-            {
-                "probe_id": "simple-control",
-                "query_text": CONTROL_QUERY,
-                "query_version": "arxiv-isolated-control-v1",
-            },
-            {
-                "probe_id": "checkpointed-production-qf01-small-page",
-                "query_text": qf01["query_text"],
-                "query_version": qf01["query_version"],
-                "source_query_id": qf01["query_id"],
-            },
-        ]
+        control_probe = {
+            "probe_id": "simple-control",
+            "query_text": CONTROL_QUERY,
+            "query_version": "arxiv-isolated-control-v1",
+        }
+        qf01_probe = {
+            "probe_id": "checkpointed-production-qf01-small-page",
+            "query_text": qf01["query_text"],
+            "query_version": qf01["query_version"],
+            "source_query_id": qf01["query_id"],
+        }
+        if single_control:
+            probes = [control_probe]
+        elif single_qf01:
+            probes = [qf01_probe]
+        else:
+            probes = [control_probe, qf01_probe]
         requests = [
             (probe, _build_request(probe["query_text"], probe["query_version"]))
             for probe in probes
@@ -437,16 +504,17 @@ def run_arxiv_diagnostic(
         started_at = timestamp()
         manifest: dict[str, Any] = {
             "schema_version": "1.0.0",
-            "run_id": DIAGNOSTIC_RUN_ID,
+            "run_id": run_id,
             "purpose": PURPOSE,
+            "diagnostic_mode": single_mode or "two-probe",
             "production_eligible": PRODUCTION_ELIGIBLE,
             "production_records_created": False,
             "prisma_counted": False,
-            "namespace": DIAGNOSTIC_RELATIVE_ROOT,
+            "namespace": diagnostic_relative_root,
             "started_at_utc": started_at,
             "completed_at_utc": None,
             "status": "RUNNING",
-            "request_budget": MAXIMUM_REQUESTS,
+            "request_budget": maximum_requests,
             "requests_made": 0,
             "automatic_retries": False,
             "minimum_request_interval_seconds": MINIMUM_REQUEST_INTERVAL_SECONDS,
@@ -480,7 +548,7 @@ def run_arxiv_diagnostic(
         _save_manifest(manifest_path, manifest)
 
         for index, (probe, request) in enumerate(requests, start=1):
-            if manifest["requests_made"] >= MAXIMUM_REQUESTS:
+            if manifest["requests_made"] >= maximum_requests:
                 raise ArxivDiagnosticError("diagnostic request budget exhausted")
             pacing_delay = limiter.wait("arXiv")
             request_started_at = timestamp()
@@ -562,6 +630,9 @@ def run_arxiv_diagnostic(
                 )
             _save_manifest(manifest_path, manifest)
 
+            if single_mode is not None:
+                manifest["stop_reason"] = f"{single_mode.upper().replace('-', '_')}_REQUEST_COMPLETE"
+                break
             if index == 1 and evidence["http_status"] == 429:
                 manifest["stop_reason"] = "FIRST_PROBE_HTTP_429"
                 break
@@ -595,10 +666,22 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", default=".")
     parser.add_argument("--authorize-live-diagnostic", action="store_true")
+    single_group = parser.add_mutually_exclusive_group()
+    single_group.add_argument("--single-control", action="store_true")
+    single_group.add_argument("--single-qf01", action="store_true")
+    parser.add_argument("--diagnostic-namespace")
     args = parser.parse_args(argv)
+    single_requested = args.single_control or args.single_qf01
+    if single_requested != (args.diagnostic_namespace is not None):
+        parser.error(
+            "a single-request mode and --diagnostic-namespace must be supplied together"
+        )
     result = run_arxiv_diagnostic(
         root=args.root,
         authorize_live_diagnostic=args.authorize_live_diagnostic,
+        single_control=args.single_control,
+        single_qf01=args.single_qf01,
+        diagnostic_namespace=args.diagnostic_namespace,
     )
     print(
         json.dumps(
@@ -613,7 +696,7 @@ def main(argv: list[str] | None = None) -> int:
                 "production_artifacts_unchanged": result["production_integrity"][
                     "unchanged"
                 ],
-                "manifest": f"{DIAGNOSTIC_RELATIVE_ROOT}/{DIAGNOSTIC_MANIFEST_NAME}",
+                "manifest": f"{result['namespace']}/{DIAGNOSTIC_MANIFEST_NAME}",
             },
             sort_keys=True,
             indent=2,
