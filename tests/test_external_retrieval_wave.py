@@ -16,6 +16,7 @@ import h2h_lit.sources.pubmed as pubmed_module
 from h2h_lit.external_retrieval_wave import (
     ACM_RECONCILIATION_PATH,
     ARXIV_MIXED_RECOVERY_STATUS,
+    ARXIV_PAGE_SIZE_RECOVERY_STATUS,
     ARXIV_RATE_LIMIT_RECOVERY_STATUS,
     ARXIV_RECOVERED_READ_TIMEOUT_SECONDS,
     ARXIV_RETRYABLE_5XX_RECOVERY_STATUS,
@@ -37,6 +38,7 @@ from h2h_lit.external_retrieval_wave import (
     _safe_output_path,
     authorize_arxiv_episode_3_state_reconciliation,
     authorize_arxiv_mixed_state_recovery,
+    authorize_arxiv_page_size_recovery,
     authorize_arxiv_rate_limit_recovery,
     authorize_arxiv_retryable_5xx_recovery,
     authorize_arxiv_transport_policy_recovery,
@@ -1592,6 +1594,414 @@ def test_arxiv_retryable_5xx_recovery_rejects_tampering_and_lock_contention(
     with pytest.raises(
         ExternalRetrievalWaveError,
         match="episode-5 recovery provenance changed",
+    ):
+        execute_external_source_session(
+            root=tmp_path,
+            source="arXiv",
+            http=http,
+            resume=True,
+            retry_policy=RetryPolicy(max_attempts=3),
+        )
+    assert http.calls == []
+
+
+def _arxiv_page(*, prefix: str, start: int, count: int, total: int) -> bytes:
+    entries = "".join(
+        f"<entry><id>http://arxiv.org/abs/{prefix}-{index}</id>"
+        f"<title>{prefix}-{index}</title><summary>Abstract</summary></entry>"
+        for index in range(start, start + count)
+    )
+    return f"""<feed xmlns="http://www.w3.org/2005/Atom"
+      xmlns:opensearch="http://a9.com/-/spec/opensearch/1.1/">
+      <updated>2026-09-19T00:00:00Z</updated>
+      <opensearch:totalResults>{total}</opensearch:totalResults>
+      <opensearch:startIndex>{start}</opensearch:startIndex>
+      <opensearch:itemsPerPage>{count}</opensearch:itemsPerPage>
+      {entries}</feed>""".encode()
+
+
+def _write_arxiv_qf01_diagnostic_binding(
+    tmp_path, monkeypatch, external_wave, parent_reference, qf01_query_id
+) -> None:
+    old_spec = external_module._source_query_specs(
+        external_wave,
+        "arXiv",
+        ieee_credential="",
+        arxiv_read_timeout_seconds=120.0,
+    )[0]
+    diagnostic_spec = external_module.RetrievalQuerySpec(
+        source_database="arXiv",
+        query_text=old_spec.query_text,
+        query_version=old_spec.query_version,
+        limit=1,
+        endpoint=old_spec.endpoint,
+        fields=list(old_spec.fields),
+        filters=dict(old_spec.filters),
+        metadata=dict(old_spec.metadata),
+        pagination_mode=old_spec.pagination_mode,
+    )
+    request = external_module.PAGINATED_SOURCE_ADAPTERS["arXiv"].build_request(
+        diagnostic_spec, {"start": 0}
+    )
+    namespace = "outputs/diagnostics/arxiv/arxiv-qf01-small-page-diagnostic-test"
+    root = tmp_path / namespace
+    response_path = root / "evidence/responses/qf01.json"
+    response_path.parent.mkdir(parents=True, exist_ok=True)
+    content = _arxiv_feed("diagnostic-success")
+    response_payload = {
+        "status_code": 200,
+        "headers": {"content-type": "application/atom+xml"},
+        "content_base64": base64.b64encode(content).decode("ascii"),
+        "request_url": request.url,
+        "url": request.url,
+    }
+    response_path.write_text(
+        json.dumps(response_payload, sort_keys=True) + "\n", encoding="utf-8"
+    )
+    response_hash = hashlib.sha256(response_path.read_bytes()).hexdigest()
+    snapshot = {
+        "root": external_module.OUTPUT_ROOT,
+        "file_count": 1,
+        "total_bytes": 1,
+        "tree_sha256": "unchanged-production-tree",
+    }
+    manifest = {
+        "diagnostic_mode": "single-qf01",
+        "status": "COMPLETE",
+        "request_budget": 1,
+        "requests_made": 1,
+        "automatic_retries": False,
+        "production_eligible": False,
+        "production_records_created": False,
+        "prisma_counted": False,
+        "namespace": namespace,
+        "production_binding": {
+            "source_checkpoint": parent_reference,
+            "production_run_id": external_module.WAVE_ID + ":arXiv",
+            "production_query_id": old_spec.metadata["production_query_id"],
+            "source_query_id": qf01_query_id,
+        },
+        "production_integrity": {
+            "before": snapshot,
+            "after": snapshot,
+            "changed_paths": [],
+            "unchanged": True,
+        },
+        "attempts": [
+            {
+                "probe_id": "checkpointed-production-qf01-small-page",
+                "http_status": 200,
+                "transport_exception": None,
+                "request": {
+                    "method": request.method,
+                    "endpoint": request.url,
+                    "params": request.params,
+                    "headers": request.headers,
+                    "timeout_seconds": request.timeout,
+                    "request_hash": request.request_hash(),
+                    "source_query_id": qf01_query_id,
+                },
+                "raw_response": {
+                    "path": response_path.relative_to(root).as_posix(),
+                    "raw_sha256": response_hash,
+                },
+                "response_body_sha256": hashlib.sha256(content).hexdigest(),
+            }
+        ],
+    }
+    manifest_path = root / "diagnostic_manifest.json"
+    manifest_path.write_text(
+        json.dumps(manifest, sort_keys=True) + "\n", encoding="utf-8"
+    )
+    monkeypatch.setattr(
+        external_module,
+        "ARXIV_QF01_DIAGNOSTIC_MANIFEST_PATH",
+        manifest_path.relative_to(tmp_path).as_posix(),
+    )
+    monkeypatch.setattr(
+        external_module,
+        "ARXIV_QF01_DIAGNOSTIC_MANIFEST_SIZE",
+        manifest_path.stat().st_size,
+    )
+    monkeypatch.setattr(
+        external_module,
+        "ARXIV_QF01_DIAGNOSTIC_MANIFEST_SHA256",
+        hashlib.sha256(manifest_path.read_bytes()).hexdigest(),
+    )
+
+
+def _paused_arxiv_page_size_parent(
+    tmp_path, monkeypatch, external_wave, external_preflight
+):
+    _, clock = _failed_arxiv_retryable_5xx_episode(
+        tmp_path, monkeypatch, external_wave, external_preflight
+    )
+    authorize_arxiv_retryable_5xx_recovery(root=tmp_path, timestamp=clock)
+    status_groups = ([500, 503, 503], [500, 500, 500])
+    state = None
+    for statuses in status_groups:
+        state = execute_external_source_session(
+            root=tmp_path,
+            source="arXiv",
+            http=FakeHttp(
+                [
+                    FakeResponse(status_code=status, content=b"server error")
+                    for status in statuses
+                ]
+            ),
+            resume=True,
+            timestamp=clock,
+            retry_policy=RetryPolicy(max_attempts=3, base_delay_seconds=0),
+            rate_limiter=RateLimiter({}),
+            retry_sleep=lambda _: None,
+        )
+        assert state["sources"]["arXiv"]["status"] == "PAUSED_TRANSIENT_PROVIDER"
+    source = state["sources"]["arXiv"]
+    parent_reference = source["checkpoint_dataset"]
+    checkpoint = tmp_path / parent_reference["path"]
+    dataset = external_module.load_review_dataset(checkpoint)
+    bindings = [
+        {
+            "attempt_id": attempt.attempt_id,
+            "path": attempt.raw_response_path,
+            "raw_sha256": attempt.raw_response_hash,
+            "http_status": attempt.response_status,
+        }
+        for attempt in dataset.retrieval_attempts
+    ]
+    monkeypatch.setattr(
+        external_module,
+        "ARXIV_EPISODE_5_PARENT_CHECKPOINT_SHA256",
+        parent_reference["raw_sha256"],
+    )
+    monkeypatch.setattr(
+        external_module,
+        "ARXIV_EPISODE_5_PARENT_CHECKPOINT_SIZE",
+        parent_reference["byte_size"],
+    )
+    monkeypatch.setattr(
+        external_module,
+        "ARXIV_EPISODE_5_ATTEMPT_MANIFEST_SHA256",
+        external_module._hash_payload(
+            {"retrieval_attempts": dataset.to_dict()["retrieval_attempts"]}
+        ),
+    )
+    monkeypatch.setattr(
+        external_module,
+        "ARXIV_EPISODE_5_RAW_RESPONSE_MANIFEST_SHA256",
+        external_module._hash_payload({"responses": bindings}),
+    )
+    _write_arxiv_qf01_diagnostic_binding(
+        tmp_path,
+        monkeypatch,
+        external_wave,
+        parent_reference,
+        dataset.source_queries[0].query_id,
+    )
+    return state, clock
+
+
+def test_arxiv_page_size_recovery_creates_bound_episode_six_idempotently(
+    tmp_path, monkeypatch, external_wave, external_preflight
+) -> None:
+    parent_state, clock = _paused_arxiv_page_size_parent(
+        tmp_path, monkeypatch, external_wave, external_preflight
+    )
+    parent_source = parent_state["sources"]["arXiv"]
+    parent_reference = dict(parent_source["checkpoint_dataset"])
+    historical_files = {
+        path.relative_to(tmp_path).as_posix(): path.read_bytes()
+        for episode in parent_source["execution_episodes"]
+        for path in (tmp_path / episode["checkpoint_dataset"]["path"]).parent.rglob("*")
+        if path.is_file()
+    }
+    other_sources = copy.deepcopy(
+        {
+            key: value
+            for key, value in parent_state["sources"].items()
+            if key != "arXiv"
+        }
+    )
+
+    recovered = authorize_arxiv_page_size_recovery(
+        root=tmp_path, timestamp=clock
+    )
+    repeated = authorize_arxiv_page_size_recovery(
+        root=tmp_path, timestamp=clock
+    )
+
+    assert repeated == recovered
+    arxiv = recovered["sources"]["arXiv"]
+    assert arxiv["status"] == ARXIV_PAGE_SIZE_RECOVERY_STATUS
+    assert arxiv["active_episode_number"] == 6
+    assert arxiv["attempt_count"] == arxiv["occurrence_count"] == 0
+    assert arxiv["preserved_source_attempt_count"] == 57
+    assert arxiv["preserved_source_raw_response_count"] == 34
+    assert arxiv["execution_episodes"][4]["immutable"] is True
+    assert arxiv["execution_episodes"][4]["checkpoint_dataset"] == parent_reference
+    episode = arxiv["execution_episodes"][5]
+    provenance = episode["recovery_provenance"]
+    assert episode["page_size_policy"] == {
+        "old_page_size": 2000,
+        "page_size": 100,
+    }
+    assert provenance["old_page_size"] == 2000
+    assert provenance["new_page_size"] == 100
+    assert provenance["page_size_causality"] == "UNPROVEN"
+    assert provenance["supporting_diagnostic"]["valid_entry_count"] == 1
+    assert provenance["supporting_diagnostic"]["production_eligible"] is False
+    assert len(provenance["request_identity_changes"]) == 5
+    assert all(
+        identity["old_page_size"] == 2000
+        and identity["new_page_size"] == 100
+        and identity["old_request_hash"] != identity["new_request_hash"]
+        and identity["frozen_request_specification_hash"]
+        for identity in provenance["request_identity_changes"]
+    )
+    child = external_module.load_review_dataset(
+        tmp_path / arxiv["checkpoint_dataset"]["path"]
+    )
+    assert child.retrieval_pages == child.retrieval_attempts == []
+    assert child.occurrences == child.canonical_records == []
+    assert all(
+        query.filters == {"page_size": 100}
+        and query.completion_status is RetrievalCompletionStatus.PLANNED
+        for query in child.source_queries
+    )
+    assert {
+        path.relative_to(tmp_path).as_posix(): path.read_bytes()
+        for episode in arxiv["execution_episodes"][:5]
+        for path in (tmp_path / episode["checkpoint_dataset"]["path"]).parent.rglob("*")
+        if path.is_file()
+    } == historical_files
+    assert {
+        key: value
+        for key, value in recovered["sources"].items()
+        if key != "arXiv"
+    } == other_sources
+
+
+def test_arxiv_page_size_recovery_persists_100_across_pages_and_resume(
+    tmp_path, monkeypatch, external_wave, external_preflight
+) -> None:
+    _, clock = _paused_arxiv_page_size_parent(
+        tmp_path, monkeypatch, external_wave, external_preflight
+    )
+    authorize_arxiv_page_size_recovery(root=tmp_path, timestamp=clock)
+    first_http = FakeHttp(
+        [
+            FakeResponse(content=_arxiv_page(prefix="qf01", start=0, count=100, total=101)),
+            FakeResponse(status_code=500, content=b"server error"),
+            FakeResponse(status_code=503, content=b"unavailable"),
+            FakeResponse(status_code=500, content=b"server error"),
+            FakeResponse(content=_arxiv_feed("must-not-start-qf02")),
+        ]
+    )
+    paused = execute_external_source_session(
+        root=tmp_path,
+        source="arXiv",
+        http=first_http,
+        resume=True,
+        timestamp=clock,
+        retry_policy=RetryPolicy(max_attempts=3, base_delay_seconds=0),
+        rate_limiter=RateLimiter({}),
+        retry_sleep=lambda _: None,
+    )
+
+    assert len(first_http.calls) == 4
+    assert [call["params"]["start"] for call in first_http.calls] == [0, 100, 100, 100]
+    assert {call["params"]["max_results"] for call in first_http.calls} == {100}
+    assert {call["params"]["sortBy"] for call in first_http.calls} == {
+        "submittedDate"
+    }
+    assert {call["params"]["sortOrder"] for call in first_http.calls} == {
+        "ascending"
+    }
+    assert {call["timeout"] for call in first_http.calls} == {120.0}
+    assert paused["sources"]["arXiv"]["status"] == "PAUSED_TRANSIENT_PROVIDER"
+    assert paused["sources"]["arXiv"]["occurrence_count"] == 100
+
+    second_http = FakeHttp(
+        [
+            FakeResponse(content=_arxiv_page(prefix="qf01", start=100, count=1, total=101)),
+            *[
+                FakeResponse(content=_arxiv_feed(f"family-{index}"))
+                for index in range(2, 6)
+            ],
+        ]
+    )
+    completed = execute_external_source_session(
+        root=tmp_path,
+        source="arXiv",
+        http=second_http,
+        resume=True,
+        timestamp=clock,
+        retry_policy=RetryPolicy(max_attempts=3, base_delay_seconds=0),
+        rate_limiter=RateLimiter({}),
+        retry_sleep=lambda _: None,
+    )
+
+    assert len(second_http.calls) == 5
+    assert [call["params"]["start"] for call in second_http.calls] == [100, 0, 0, 0, 0]
+    assert {call["params"]["max_results"] for call in second_http.calls} == {100}
+    assert completed["sources"]["arXiv"]["status"] == "COMPLETE"
+    assert completed["sources"]["arXiv"]["completed_query_count"] == 5
+    assert completed["sources"]["arXiv"]["occurrence_count"] == 105
+
+
+def test_arxiv_page_size_recovery_rejects_parent_and_diagnostic_drift(
+    tmp_path, monkeypatch, external_wave, external_preflight
+) -> None:
+    state, clock = _paused_arxiv_page_size_parent(
+        tmp_path, monkeypatch, external_wave, external_preflight
+    )
+    checkpoint = tmp_path / state["sources"]["arXiv"]["checkpoint_dataset"]["path"]
+    checkpoint.write_bytes(checkpoint.read_bytes() + b" ")
+    with pytest.raises(ExternalRetrievalWaveError, match="checkpoint file hash/size changed"):
+        authorize_arxiv_page_size_recovery(root=tmp_path, timestamp=clock)
+
+    state, clock = _paused_arxiv_page_size_parent(
+        tmp_path / "diagnostic-drift",
+        monkeypatch,
+        external_wave,
+        external_preflight,
+    )
+    diagnostic = (
+        tmp_path
+        / "diagnostic-drift"
+        / external_module.ARXIV_QF01_DIAGNOSTIC_MANIFEST_PATH
+    )
+    diagnostic.write_bytes(diagnostic.read_bytes() + b"tampered")
+    with pytest.raises(ExternalRetrievalWaveError, match="bound repository evidence changed"):
+        authorize_arxiv_page_size_recovery(
+            root=tmp_path / "diagnostic-drift", timestamp=clock
+        )
+
+
+def test_arxiv_page_size_recovery_rejects_provenance_tampering_and_lock_contention(
+    tmp_path, monkeypatch, external_wave, external_preflight
+) -> None:
+    _, clock = _paused_arxiv_page_size_parent(
+        tmp_path, monkeypatch, external_wave, external_preflight
+    )
+    state_path = tmp_path / external_module.EXECUTION_STATE_PATH
+    before = state_path.read_bytes()
+    with external_module._exclusive_external_source_session(tmp_path), pytest.raises(
+        ExternalRetrievalWaveError,
+        match="another external-source session is already active",
+    ):
+        authorize_arxiv_page_size_recovery(root=tmp_path, timestamp=clock)
+    assert state_path.read_bytes() == before
+
+    state = authorize_arxiv_page_size_recovery(root=tmp_path, timestamp=clock)
+    state["sources"]["arXiv"]["execution_episodes"][5][
+        "recovery_provenance"
+    ]["new_page_size"] = 200
+    external_module._save_execution_state(state_path, state)
+    http = FakeHttp([])
+    with pytest.raises(
+        ExternalRetrievalWaveError,
+        match="episode-6 recovery provenance changed",
     ):
         execute_external_source_session(
             root=tmp_path,

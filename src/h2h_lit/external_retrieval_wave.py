@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import fcntl
 import hashlib
 import json
@@ -14,6 +15,7 @@ from collections.abc import Callable, Mapping
 from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 from h2h_lit.acm_field_execution import load_acm_final_reconciliation_manifest
@@ -374,6 +376,7 @@ ARXIV_TRANSPORT_POLICY_RECOVERY_STATUS = (
 ARXIV_RETRYABLE_5XX_RECOVERY_STATUS = (
     "RETRYABLE_5XX_RECOVERY_READY_TO_RESUME"
 )
+ARXIV_PAGE_SIZE_RECOVERY_STATUS = "PAGE_SIZE_RECOVERY_READY_TO_RESUME"
 ARXIV_EPISODE_4_FAILED_CHECKPOINT_SHA256 = (
     "9a2f4888d6b777b7c9eab8094e8837ffeb15333c08acc65362acf999eb1c4f3a"
 )
@@ -421,6 +424,27 @@ ARXIV_EPISODE_4_FAILURE_SIGNATURES = (
 ARXIV_LEGACY_READ_TIMEOUT_SECONDS = 30.0
 ARXIV_RECOVERED_READ_TIMEOUT_SECONDS = 120.0
 ARXIV_MAX_ATTEMPTS_PER_INVOCATION = 3
+ARXIV_LEGACY_PAGE_SIZE = 2_000
+ARXIV_RECOVERED_PAGE_SIZE = 100
+ARXIV_EPISODE_5_PARENT_CHECKPOINT_SHA256 = (
+    "9453b4abbe4710ff7aabeb5d8cf32c5919441d6d32111d975ede379ef29b492f"
+)
+ARXIV_EPISODE_5_PARENT_CHECKPOINT_SIZE = 90_597
+ARXIV_EPISODE_5_ATTEMPT_MANIFEST_SHA256 = (
+    "c4c7f84e9a6d2a2522c94034ff9191d86946759c7821802dcf28b7b36677407f"
+)
+ARXIV_EPISODE_5_RAW_RESPONSE_MANIFEST_SHA256 = (
+    "b83d2767a7f248bc095fb5a021b37a795cbb8383c0ccc152f71336b24e469e9d"
+)
+ARXIV_EPISODE_5_HTTP_STATUSES = (500, 503, 503, 500, 500, 500)
+ARXIV_QF01_DIAGNOSTIC_MANIFEST_PATH = (
+    "outputs/diagnostics/arxiv/arxiv-qf01-small-page-diagnostic-001/"
+    "diagnostic_manifest.json"
+)
+ARXIV_QF01_DIAGNOSTIC_MANIFEST_SIZE = 17_369
+ARXIV_QF01_DIAGNOSTIC_MANIFEST_SHA256 = (
+    "562533d6300b7a11469dacb25c10cca08fd6df23b4817ae29d1c6fecb724311d"
+)
 EUROPE_PMC_TERMINAL_RECOVERY_STATUS = "TERMINAL_SENTINEL_RECOVERY_COMPLETE"
 EUROPE_PMC_TERMINAL_ERROR = (
     "PaginationError: Europe PMC returned an empty non-terminal cursor page"
@@ -5695,17 +5719,22 @@ def _validate_authorized_arxiv_retryable_5xx_recovery(
     root: Path,
     source_state: Mapping[str, Any],
     wave: ProductionRetrievalWave,
-) -> None:
+    allow_descendant: bool = False,
+) -> dict[str, Any]:
     """Revalidate episode-5 provenance before authorization reuse or resume."""
 
-    episodes = source_state.get("execution_episodes", [])
-    if len(episodes) != 5 or [item.get("episode_number") for item in episodes] != [
+    all_episodes = source_state.get("execution_episodes", [])
+    episodes = all_episodes[:5]
+    if (
+        (len(all_episodes) != 6 if allow_descendant else len(all_episodes) != 5)
+        or [item.get("episode_number") for item in episodes] != [
         1,
         2,
         3,
         4,
         5,
-    ]:
+        ]
+    ):
         raise ExternalRetrievalWaveError("arXiv episode-5 lineage changed")
     for historical in episodes[:4]:
         reference = historical.get("checkpoint_dataset")
@@ -5801,21 +5830,28 @@ def _validate_authorized_arxiv_retryable_5xx_recovery(
         or episode_5.get("recovery_provenance") != expected_provenance
         or episode_5.get("transport_policy") != transport_policy
         or episode_5.get("network_used") is not False
-        or source_state.get("active_episode_number") != 5
-        or source_state.get("active_run_id") != f"{WAVE_ID}:arXiv"
-        or source_state.get("active_checkpoint_path")
-        != episode_5.get("checkpoint_path")
-        or source_state.get("checkpoint_path") != episode_5.get("checkpoint_path")
-        or source_state.get("checkpoint_dataset") != checkpoint_reference
-        or source_state.get("transport_policy") != transport_policy
-        or source_state.get("preserved_source_attempt_count") != 51
-        or source_state.get("preserved_source_raw_response_count") != 28
-        or source_state.get("attempt_count") != len(dataset.retrieval_attempts)
-        or source_state.get("occurrence_count") != len(dataset.occurrences)
-        or source_state.get("completed_query_count")
-        != sum(
-            item.completion_status is RetrievalCompletionStatus.COMPLETE
-            for item in dataset.source_queries
+        or (
+            not allow_descendant
+            and (
+                source_state.get("active_episode_number") != 5
+                or source_state.get("active_run_id") != f"{WAVE_ID}:arXiv"
+                or source_state.get("active_checkpoint_path")
+                != episode_5.get("checkpoint_path")
+                or source_state.get("checkpoint_path")
+                != episode_5.get("checkpoint_path")
+                or source_state.get("checkpoint_dataset") != checkpoint_reference
+                or source_state.get("transport_policy") != transport_policy
+                or source_state.get("preserved_source_attempt_count") != 51
+                or source_state.get("preserved_source_raw_response_count") != 28
+                or source_state.get("attempt_count")
+                != len(dataset.retrieval_attempts)
+                or source_state.get("occurrence_count") != len(dataset.occurrences)
+                or source_state.get("completed_query_count")
+                != sum(
+                    item.completion_status is RetrievalCompletionStatus.COMPLETE
+                    for item in dataset.source_queries
+                )
+            )
         )
         or run is None
         or run.run_id != f"{WAVE_ID}:arXiv"
@@ -5856,6 +5892,15 @@ def _validate_authorized_arxiv_retryable_5xx_recovery(
             raise ExternalRetrievalWaveError(
                 "authorized arXiv episode-5 query provenance changed"
             )
+    return {
+        "dataset": dataset,
+        "checkpoint": checkpoint,
+        "checkpoint_reference": checkpoint_reference,
+        "episode": episode_5,
+        "specs": specs,
+        "transport_policy": transport_policy,
+        "recovery_provenance": expected_provenance,
+    }
 
 
 def authorize_arxiv_retryable_5xx_recovery(
@@ -6145,6 +6190,760 @@ def authorize_arxiv_retryable_5xx_recovery(
                 "arXiv historical evidence changed after state persistence"
             )
         _validate_authorized_arxiv_retryable_5xx_recovery(
+            root=root_path, source_state=source_state, wave=wave
+        )
+        return state
+
+
+def _arxiv_page_size_recovery_active(source_state: Mapping[str, Any]) -> bool:
+    return (
+        source_state.get("active_episode_number") == 6
+        and any(
+            item.get("episode_number") == 6
+            and item.get("authorization_reason")
+            == "OFFLINE_ARXIV_PAGE_SIZE_RECOVERY"
+            for item in source_state.get("execution_episodes", [])
+        )
+    )
+
+
+def _verify_fixed_repository_file(
+    *,
+    root: Path,
+    relative_path: str,
+    byte_size: int,
+    raw_sha256: str,
+) -> tuple[Path, dict[str, Any]]:
+    path = (root / relative_path).resolve()
+    try:
+        relative = path.relative_to(root).as_posix()
+    except ValueError as exc:
+        raise ExternalRetrievalWaveError(
+            "bound repository evidence escaped the repository root"
+        ) from exc
+    reference = {
+        "path": relative,
+        "byte_size": byte_size,
+        "raw_sha256": raw_sha256,
+    }
+    if relative != relative_path or not path.is_file():
+        raise ExternalRetrievalWaveError("bound repository evidence is absent")
+    raw = path.read_bytes()
+    if len(raw) != byte_size or _sha256(raw) != raw_sha256:
+        raise ExternalRetrievalWaveError("bound repository evidence changed")
+    return path, reference
+
+
+def _validate_arxiv_qf01_page_size_diagnostic(
+    *,
+    root: Path,
+    wave: ProductionRetrievalWave,
+    parent_reference: Mapping[str, Any],
+    qf01_query_id: str,
+) -> dict[str, Any]:
+    manifest_path, manifest_reference = _verify_fixed_repository_file(
+        root=root,
+        relative_path=ARXIV_QF01_DIAGNOSTIC_MANIFEST_PATH,
+        byte_size=ARXIV_QF01_DIAGNOSTIC_MANIFEST_SIZE,
+        raw_sha256=ARXIV_QF01_DIAGNOSTIC_MANIFEST_SHA256,
+    )
+    manifest = _load_json(manifest_path)
+    attempts = manifest.get("attempts")
+    attempt = attempts[0] if isinstance(attempts, list) and len(attempts) == 1 else None
+    old_spec = _source_query_specs(
+        wave,
+        "arXiv",
+        ieee_credential="",
+        arxiv_read_timeout_seconds=ARXIV_RECOVERED_READ_TIMEOUT_SECONDS,
+    )[0]
+    diagnostic_spec = RetrievalQuerySpec(
+        source_database=old_spec.source_database,
+        query_text=old_spec.query_text,
+        query_version=old_spec.query_version,
+        limit=1,
+        endpoint=old_spec.endpoint,
+        fields=list(old_spec.fields),
+        filters=dict(old_spec.filters),
+        metadata=dict(old_spec.metadata),
+        pagination_mode=old_spec.pagination_mode,
+    )
+    request = PAGINATED_SOURCE_ADAPTERS["arXiv"].build_request(
+        diagnostic_spec, {"start": 0}
+    )
+    expected_request = {
+        "method": request.method,
+        "endpoint": request.url,
+        "params": request.params,
+        "headers": request.headers,
+        "timeout_seconds": request.timeout,
+        "request_hash": request.request_hash(),
+        "source_query_id": qf01_query_id,
+    }
+    production_binding = manifest.get("production_binding")
+    integrity = manifest.get("production_integrity")
+    if (
+        manifest.get("diagnostic_mode") != "single-qf01"
+        or manifest.get("status") != "COMPLETE"
+        or manifest.get("request_budget") != 1
+        or manifest.get("requests_made") != 1
+        or manifest.get("automatic_retries") is not False
+        or manifest.get("production_eligible") is not False
+        or manifest.get("production_records_created") is not False
+        or manifest.get("prisma_counted") is not False
+        or not isinstance(attempt, dict)
+        or attempt.get("probe_id")
+        != "checkpointed-production-qf01-small-page"
+        or attempt.get("http_status") != 200
+        or attempt.get("transport_exception") is not None
+        or attempt.get("request") != expected_request
+        or production_binding
+        != {
+            "source_checkpoint": dict(parent_reference),
+            "production_run_id": f"{WAVE_ID}:arXiv",
+            "production_query_id": old_spec.metadata["production_query_id"],
+            "source_query_id": qf01_query_id,
+        }
+        or not isinstance(integrity, dict)
+        or integrity.get("unchanged") is not True
+        or integrity.get("changed_paths") != []
+        or integrity.get("before") != integrity.get("after")
+    ):
+        raise ExternalRetrievalWaveError(
+            "supporting arXiv QF01 diagnostic provenance changed"
+        )
+    raw_reference = attempt.get("raw_response")
+    if not isinstance(raw_reference, dict):
+        raise ExternalRetrievalWaveError(
+            "supporting arXiv QF01 diagnostic response binding is absent"
+        )
+    response_path = (manifest_path.parent / str(raw_reference.get("path"))).resolve()
+    try:
+        response_path.relative_to(manifest_path.parent)
+    except ValueError as exc:
+        raise ExternalRetrievalWaveError(
+            "supporting arXiv QF01 diagnostic response escaped its namespace"
+        ) from exc
+    raw_response = response_path.read_bytes() if response_path.is_file() else b""
+    if _sha256(raw_response) != raw_reference.get("raw_sha256"):
+        raise ExternalRetrievalWaveError(
+            "supporting arXiv QF01 diagnostic response hash changed"
+        )
+    response_payload = json.loads(raw_response)
+    try:
+        content = base64.b64decode(response_payload["content_base64"], validate=True)
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ExternalRetrievalWaveError(
+            "supporting arXiv QF01 diagnostic response encoding changed"
+        ) from exc
+    parsed = PAGINATED_SOURCE_ADAPTERS["arXiv"].parse_response(
+        diagnostic_spec,
+        {"start": 0},
+        SimpleNamespace(content=content),
+    )
+    if (
+        response_payload.get("status_code") != 200
+        or _sha256(content) != attempt.get("response_body_sha256")
+        or parsed.raw_item_count != 1
+        or len(parsed.records) != 1
+        or parsed.metadata.get("items_per_page") != 1
+        or parsed.source_reported_total is None
+    ):
+        raise ExternalRetrievalWaveError(
+            "supporting arXiv QF01 diagnostic success evidence changed"
+        )
+    return {
+        "manifest": manifest_reference,
+        "raw_response": {
+            "path": response_path.relative_to(root).as_posix(),
+            "raw_sha256": raw_reference["raw_sha256"],
+        },
+        "request_hash": request.request_hash(),
+        "http_status": 200,
+        "valid_entry_count": 1,
+        "source_reported_total": parsed.source_reported_total,
+        "items_per_page": 1,
+        "production_eligible": False,
+        "prisma_counted": False,
+        "page_size_causality": "UNPROVEN",
+    }
+
+
+def _validate_arxiv_episode_5_page_size_parent(
+    *,
+    root: Path,
+    source_state: Mapping[str, Any],
+    wave: ProductionRetrievalWave,
+    allow_descendant: bool = False,
+) -> dict[str, Any]:
+    lineage = _validate_authorized_arxiv_retryable_5xx_recovery(
+        root=root,
+        source_state=source_state,
+        wave=wave,
+        allow_descendant=allow_descendant,
+    )
+    reference = {
+        "path": (
+            f"{EXECUTION_ROOT}/arXiv/episodes/episode-005/checkpoint/"
+            "review_dataset.json"
+        ),
+        "byte_size": ARXIV_EPISODE_5_PARENT_CHECKPOINT_SIZE,
+        "raw_sha256": ARXIV_EPISODE_5_PARENT_CHECKPOINT_SHA256,
+    }
+    episode = lineage["episode"]
+    dataset = lineage["dataset"]
+    run = dataset.retrieval_runs[0]
+    page = dataset.retrieval_pages[0] if len(dataset.retrieval_pages) == 1 else None
+    qf01 = dataset.source_queries[0]
+    old_request = PAGINATED_SOURCE_ADAPTERS["arXiv"].build_request(
+        lineage["specs"][0], {"start": 0}
+    )
+    if (
+        episode.get("checkpoint_dataset") != reference
+        or episode.get("status") != "PAUSED_TRANSIENT_PROVIDER"
+        or episode.get("attempt_count") != 6
+        or episode.get("occurrence_count") != 0
+        or episode.get("completed_query_count") != 0
+        or run.status is not ProcessingStatus.PARTIAL
+        or run.completion_status is not RetrievalCompletionStatus.RUNNING
+        or run.errors != ["RETRYABLE_PROVIDER_5XX_EXHAUSTED"]
+        or len(dataset.retrieval_attempts) != 6
+        or dataset.occurrences
+        or dataset.canonical_records
+        or dataset.duplicate_decisions
+        or page is None
+        or page.source_query_id != qf01.query_id
+        or page.ordinal != 0
+        or page.request_state != {"start": 0}
+        or page.status is not RetrievalCompletionStatus.RUNNING
+        or page.returned_item_count != 0
+        or page.occurrence_ids
+        or page.native_identifiers
+        or page.next_state is not None
+        or page.terminal
+        or page.attempt_ids
+        != [attempt.attempt_id for attempt in dataset.retrieval_attempts]
+        or qf01.result_count != 0
+        or qf01.page_ids != [page.page_id]
+        or qf01.source_reported_total is not None
+        or any(query.result_count != 0 for query in dataset.source_queries)
+        or old_request.params.get("max_results") != ARXIV_LEGACY_PAGE_SIZE
+    ):
+        raise ExternalRetrievalWaveError(
+            "arXiv episode-5 page-size-recovery parent shape changed"
+        )
+    attempt_manifest_hash = _hash_payload(
+        {"retrieval_attempts": dataset.to_dict()["retrieval_attempts"]}
+    )
+    if attempt_manifest_hash != ARXIV_EPISODE_5_ATTEMPT_MANIFEST_SHA256:
+        raise ExternalRetrievalWaveError(
+            "arXiv episode-5 six-attempt manifest changed"
+        )
+    attempts = {item.attempt_id: item for item in dataset.retrieval_attempts}
+    page_attempts = [attempts[item] for item in page.attempt_ids]
+    response_bindings = []
+    response_statuses = []
+    store = CheckpointStore(lineage["checkpoint"].parent)
+    for attempt in page_attempts:
+        if (
+            attempt.status is not RetrievalAttemptStatus.FAILED
+            or attempt.request_hash != old_request.request_hash()
+            or attempt.request_method != old_request.method
+            or attempt.request_url != old_request.url
+            or attempt.request_params != old_request.params
+            or attempt.request_headers != old_request.headers
+            or attempt.raw_response_path is None
+            or attempt.raw_response_hash is None
+        ):
+            raise ExternalRetrievalWaveError(
+                "arXiv episode-5 request or response evidence changed"
+            )
+        response = store.load_response(
+            attempt.raw_response_path, attempt.raw_response_hash
+        )
+        if response.status_code != attempt.response_status:
+            raise ExternalRetrievalWaveError(
+                "arXiv episode-5 persisted response status changed"
+            )
+        response_statuses.append(response.status_code)
+        response_bindings.append(
+            {
+                "attempt_id": attempt.attempt_id,
+                "path": attempt.raw_response_path,
+                "raw_sha256": attempt.raw_response_hash,
+                "http_status": response.status_code,
+            }
+        )
+    if tuple(response_statuses) != ARXIV_EPISODE_5_HTTP_STATUSES:
+        raise ExternalRetrievalWaveError(
+            "arXiv episode-5 HTTP status sequence changed"
+        )
+    raw_response_manifest_hash = _hash_payload({"responses": response_bindings})
+    if raw_response_manifest_hash != ARXIV_EPISODE_5_RAW_RESPONSE_MANIFEST_SHA256:
+        raise ExternalRetrievalWaveError(
+            "arXiv episode-5 raw-response manifest changed"
+        )
+    if not allow_descendant and (
+        source_state.get("status") != "PAUSED_TRANSIENT_PROVIDER"
+        or source_state.get("active_episode_number") != 5
+        or source_state.get("checkpoint_dataset") != reference
+        or source_state.get("attempt_count") != 6
+        or source_state.get("occurrence_count") != 0
+        or source_state.get("completed_query_count") != 0
+        or source_state.get("preserved_source_attempt_count") != 51
+        or source_state.get("preserved_source_raw_response_count") != 28
+        or source_state.get("requests_this_session") != 3
+        or source_state.get("pause_reason")
+        != "RETRYABLE_PROVIDER_5XX_EXHAUSTED"
+        or source_state.get("failure_reason") is not None
+    ):
+        raise ExternalRetrievalWaveError(
+            "arXiv episode-5 execution-state parent binding changed"
+        )
+    diagnostic = _validate_arxiv_qf01_page_size_diagnostic(
+        root=root,
+        wave=wave,
+        parent_reference=reference,
+        qf01_query_id=qf01.query_id,
+    )
+    return {
+        **lineage,
+        "checkpoint_reference": reference,
+        "attempt_manifest_hash": attempt_manifest_hash,
+        "raw_response_bindings": response_bindings,
+        "raw_response_manifest_hash": raw_response_manifest_hash,
+        "http_statuses": response_statuses,
+        "diagnostic": diagnostic,
+    }
+
+
+def _arxiv_page_size_recovery_provenance(
+    *,
+    source_state: Mapping[str, Any],
+    parent_validation: Mapping[str, Any],
+    wave: ProductionRetrievalWave,
+) -> tuple[dict[str, Any], list[RetrievalQuerySpec]]:
+    old_specs = parent_validation["specs"]
+    new_specs = _source_query_specs(
+        wave,
+        "arXiv",
+        ieee_credential="",
+        arxiv_read_timeout_seconds=ARXIV_RECOVERED_READ_TIMEOUT_SECONDS,
+        arxiv_page_size=ARXIV_RECOVERED_PAGE_SIZE,
+    )
+    identities = []
+    for query, old_spec, new_spec in zip(
+        parent_validation["dataset"].source_queries,
+        old_specs,
+        new_specs,
+        strict=True,
+    ):
+        state = {"start": 0}
+        old_request = PAGINATED_SOURCE_ADAPTERS["arXiv"].build_request(
+            old_spec, state
+        )
+        new_request = PAGINATED_SOURCE_ADAPTERS["arXiv"].build_request(
+            new_spec, state
+        )
+        old_params = dict(old_request.params)
+        new_params = dict(new_request.params)
+        old_max_results = old_params.pop("max_results", None)
+        new_max_results = new_params.pop("max_results", None)
+        if (
+            old_spec.query_text != new_spec.query_text
+            or old_spec.query_version != new_spec.query_version
+            or old_spec.endpoint != new_spec.endpoint
+            or old_spec.metadata != new_spec.metadata
+            or old_spec.filters != new_spec.filters
+            or old_max_results != ARXIV_LEGACY_PAGE_SIZE
+            or new_max_results != ARXIV_RECOVERED_PAGE_SIZE
+            or old_params != new_params
+            or old_request.method != new_request.method
+            or old_request.url != new_request.url
+            or old_request.headers != new_request.headers
+            or old_request.timeout != new_request.timeout
+            or old_request.state != new_request.state
+            or old_request.request_hash() == new_request.request_hash()
+            or query.metadata.get("frozen_request_specification_hash")
+            != old_spec.metadata["frozen_request_specification_hash"]
+        ):
+            raise ExternalRetrievalWaveError(
+                "arXiv page-size recovery request identity is not a page-size-only change"
+            )
+        identities.append(
+            {
+                "production_query_id": old_spec.metadata["production_query_id"],
+                "query_id": query.query_id,
+                "frozen_request_specification_hash": old_spec.metadata[
+                    "frozen_request_specification_hash"
+                ],
+                "request_state": state,
+                "old_page_size": old_max_results,
+                "new_page_size": new_max_results,
+                "old_request_hash": old_request.request_hash(),
+                "new_request_hash": new_request.request_hash(),
+            }
+        )
+    provenance = {
+        "recovery_episode_number": 6,
+        "parent_episode_number": 5,
+        "parent_checkpoint_dataset": parent_validation["checkpoint_reference"],
+        "parent_episode_manifest_hash": _hash_payload(
+            {"execution_episodes": source_state["execution_episodes"][:5]}
+        ),
+        "parent_attempt_manifest_hash": parent_validation[
+            "attempt_manifest_hash"
+        ],
+        "parent_raw_response_manifest_hash": parent_validation[
+            "raw_response_manifest_hash"
+        ],
+        "parent_raw_responses": parent_validation["raw_response_bindings"],
+        "parent_http_statuses": parent_validation["http_statuses"],
+        "historical_lineage_counts": {
+            "preserved_before_episode_5_attempts": 51,
+            "preserved_before_episode_5_raw_responses": 28,
+            "episode_5_attempts": 6,
+            "episode_5_raw_responses": 6,
+            "preserved_total_attempts": 57,
+            "preserved_total_raw_responses": 34,
+            "accepted_pages": 0,
+            "accepted_occurrences": 0,
+        },
+        "old_page_size": ARXIV_LEGACY_PAGE_SIZE,
+        "new_page_size": ARXIV_RECOVERED_PAGE_SIZE,
+        "parent_query_plan_hash": _query_plan_hash(old_specs),
+        "new_query_plan_hash": _query_plan_hash(new_specs),
+        "request_identity_changes": identities,
+        "supporting_diagnostic": parent_validation["diagnostic"],
+        "page_size_causality": "UNPROVEN",
+        "transport_policy": parent_validation["transport_policy"],
+        "network_used": False,
+    }
+    return provenance, new_specs
+
+
+def _validate_authorized_arxiv_page_size_recovery(
+    *,
+    root: Path,
+    source_state: Mapping[str, Any],
+    wave: ProductionRetrievalWave,
+) -> None:
+    episodes = source_state.get("execution_episodes", [])
+    if len(episodes) != 6 or [item.get("episode_number") for item in episodes] != [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+    ]:
+        raise ExternalRetrievalWaveError("arXiv episode-6 lineage changed")
+    if any(item.get("immutable") is not True for item in episodes[:5]):
+        raise ExternalRetrievalWaveError(
+            "arXiv episode-6 historical episode mutability changed"
+        )
+    parent_validation = _validate_arxiv_episode_5_page_size_parent(
+        root=root,
+        source_state=source_state,
+        wave=wave,
+        allow_descendant=True,
+    )
+    provenance, specs = _arxiv_page_size_recovery_provenance(
+        source_state=source_state,
+        parent_validation=parent_validation,
+        wave=wave,
+    )
+    episode = episodes[5]
+    checkpoint_reference = episode.get("checkpoint_dataset")
+    if not isinstance(checkpoint_reference, dict):
+        raise ExternalRetrievalWaveError("arXiv episode-6 checkpoint binding is absent")
+    checkpoint = _safe_output_path(root, str(checkpoint_reference.get("path")))
+    _verify_file_reference(checkpoint, checkpoint_reference, root)
+    dataset = load_review_dataset(checkpoint)
+    dataset.validate()
+    run = dataset.retrieval_runs[0] if len(dataset.retrieval_runs) == 1 else None
+    page_size_policy = {
+        "old_page_size": ARXIV_LEGACY_PAGE_SIZE,
+        "page_size": ARXIV_RECOVERED_PAGE_SIZE,
+    }
+    if (
+        episode.get("episode_id") != "arXiv-episode-006"
+        or episode.get("authorization_reason")
+        != "OFFLINE_ARXIV_PAGE_SIZE_RECOVERY"
+        or episode.get("recovery_of_episode_number") != 5
+        or episode.get("parent_checkpoint_dataset")
+        != parent_validation["checkpoint_reference"]
+        or episode.get("recovery_provenance") != provenance
+        or episode.get("transport_policy") != parent_validation["transport_policy"]
+        or episode.get("page_size_policy") != page_size_policy
+        or episode.get("network_used") is not False
+        or source_state.get("active_episode_number") != 6
+        or source_state.get("active_run_id") != f"{WAVE_ID}:arXiv"
+        or source_state.get("active_checkpoint_path")
+        != episode.get("checkpoint_path")
+        or source_state.get("checkpoint_path") != episode.get("checkpoint_path")
+        or source_state.get("checkpoint_dataset") != checkpoint_reference
+        or source_state.get("transport_policy")
+        != parent_validation["transport_policy"]
+        or source_state.get("page_size_policy") != page_size_policy
+        or source_state.get("preserved_source_attempt_count") != 57
+        or source_state.get("preserved_source_raw_response_count") != 34
+        or source_state.get("attempt_count") != len(dataset.retrieval_attempts)
+        or source_state.get("occurrence_count") != len(dataset.occurrences)
+        or source_state.get("completed_query_count")
+        != sum(
+            item.completion_status is RetrievalCompletionStatus.COMPLETE
+            for item in dataset.source_queries
+        )
+        or run is None
+        or run.run_id != f"{WAVE_ID}:arXiv"
+        or run.query_plan_hash != _query_plan_hash(specs)
+        or run.metadata.get("offline_arxiv_page_size_recovery") != provenance
+        or len(dataset.source_queries) != 5
+    ):
+        raise ExternalRetrievalWaveError(
+            "authorized arXiv episode-6 recovery provenance changed"
+        )
+    for query, spec, identity in zip(
+        dataset.source_queries,
+        specs,
+        provenance["request_identity_changes"],
+        strict=True,
+    ):
+        if (
+            query.query_id != identity["query_id"]
+            or query.query_text != spec.query_text
+            or query.query_version != spec.query_version
+            or query.endpoint != spec.endpoint
+            or query.filters != {"page_size": ARXIV_RECOVERED_PAGE_SIZE}
+            or query.metadata.get("production_query_id")
+            != identity["production_query_id"]
+            or query.metadata.get("frozen_request_specification_hash")
+            != identity["frozen_request_specification_hash"]
+            or query.metadata.get("request_timeout_seconds")
+            != ARXIV_RECOVERED_READ_TIMEOUT_SECONDS
+            or query.metadata.get("offline_arxiv_page_size_recovery")
+            != {
+                "parent_episode_number": 5,
+                "request_state": {"start": 0},
+                "old_request_hash": identity["old_request_hash"],
+                "new_request_hash": identity["new_request_hash"],
+                "old_page_size": ARXIV_LEGACY_PAGE_SIZE,
+                "new_page_size": ARXIV_RECOVERED_PAGE_SIZE,
+            }
+        ):
+            raise ExternalRetrievalWaveError(
+                "authorized arXiv episode-6 query provenance changed"
+            )
+
+
+def authorize_arxiv_page_size_recovery(
+    *,
+    root: str | Path,
+    timestamp: Callable[[], str] = utc_now,
+) -> dict[str, Any]:
+    """Create an opt-in episode 6 with an arXiv page size of 100."""
+
+    root_path = Path(root).resolve()
+    with _exclusive_external_source_session(root_path):
+        wave, preflight = validate_persisted_external_preflight(root=root_path)
+        state_path = _safe_output_path(root_path, EXECUTION_STATE_PATH)
+        if not state_path.is_file():
+            raise ExternalRetrievalWaveError("external execution state does not exist")
+        state = _load_execution_state(state_path, root_path, wave, preflight)
+        if any(item.get("status") == "RUNNING" for item in state["sources"].values()):
+            raise ExternalRetrievalWaveError(
+                "cannot recover while an external-source session is marked RUNNING"
+            )
+        if state.get("external_retrieval_cutoff_date") is not None:
+            raise ExternalRetrievalWaveError(
+                "arXiv page-size recovery cannot alter a closed wave"
+            )
+        source_state = state["sources"]["arXiv"]
+        if _arxiv_page_size_recovery_active(source_state):
+            _validate_authorized_arxiv_page_size_recovery(
+                root=root_path, source_state=source_state, wave=wave
+            )
+            return state
+        parent_validation = _validate_arxiv_episode_5_page_size_parent(
+            root=root_path,
+            source_state=source_state,
+            wave=wave,
+        )
+        episodes = source_state["execution_episodes"]
+        if len(episodes) != 5 or episodes[4].get("immutable") is not False:
+            raise ExternalRetrievalWaveError(
+                "arXiv page-size recovery requires the exact mutable episode 5"
+            )
+        historical_references = []
+        for episode in episodes:
+            reference = episode.get("checkpoint_dataset")
+            if not isinstance(reference, dict):
+                raise ExternalRetrievalWaveError(
+                    "arXiv historical episode lacks checkpoint provenance"
+                )
+            checkpoint = _safe_output_path(root_path, str(reference.get("path")))
+            _verify_file_reference(checkpoint, reference, root_path)
+            for artifact in sorted(
+                (item for item in checkpoint.parent.rglob("*") if item.is_file()),
+                key=lambda item: item.as_posix(),
+            ):
+                historical_references.append(_file_reference(artifact, root_path))
+        recovery_checkpoint_relative = (
+            f"{EXECUTION_ROOT}/arXiv/episodes/episode-006/checkpoint"
+        )
+        recovery_checkpoint_dir = _safe_output_path(
+            root_path, recovery_checkpoint_relative
+        )
+        if recovery_checkpoint_dir.exists():
+            raise ExternalRetrievalWaveError(
+                "arXiv episode-6 checkpoint exists without valid state lineage"
+            )
+        other_sources_before = {
+            key: json.loads(json.dumps(value, sort_keys=True))
+            for key, value in state["sources"].items()
+            if key != "arXiv"
+        }
+        episodes[4]["immutable"] = True
+        provenance, new_specs = _arxiv_page_size_recovery_provenance(
+            source_state=source_state,
+            parent_validation=parent_validation,
+            wave=wave,
+        )
+        recovered_at = timestamp()
+        dataset = parent_validation["dataset"]
+        dataset.retrieval_pages = []
+        dataset.retrieval_attempts = []
+        dataset.occurrences = []
+        dataset.canonical_records = []
+        dataset.duplicate_decisions = []
+        run = dataset.retrieval_runs[0]
+        run.query_plan_hash = provenance["new_query_plan_hash"]
+        run.retrieval_started_at = recovered_at
+        run.retrieval_completed_at = recovered_at
+        run.retrieval_cutoff_date = None
+        run.status = ProcessingStatus.PARTIAL
+        run.completion_status = RetrievalCompletionStatus.RUNNING
+        run.errors = [
+            "offline arXiv page-size recovery complete; live resume pending"
+        ]
+        for key in (
+            "pause_state",
+            "pause_reason",
+            "pause_metadata",
+            "session_request_count",
+        ):
+            run.metadata.pop(key, None)
+        run.metadata["offline_arxiv_page_size_recovery"] = provenance
+        for query, spec, identity in zip(
+            dataset.source_queries,
+            new_specs,
+            provenance["request_identity_changes"],
+            strict=True,
+        ):
+            query.retrieval_started_at = recovered_at
+            query.retrieval_ended_at = recovered_at
+            query.status = ProcessingStatus.PARTIAL
+            query.completion_status = RetrievalCompletionStatus.PLANNED
+            query.page = None
+            query.cursor = None
+            query.result_count = 0
+            query.errors = []
+            query.page_ids = []
+            query.source_reported_total = None
+            query.total_is_exact = False
+            query.completion_proof = None
+            query.filters = {"page_size": spec.limit}
+            for key in ("pause_state", "pause_reason", "pause_metadata"):
+                query.metadata.pop(key, None)
+            query.metadata["offline_arxiv_page_size_recovery"] = {
+                "parent_episode_number": 5,
+                "request_state": {"start": 0},
+                "old_request_hash": identity["old_request_hash"],
+                "new_request_hash": identity["new_request_hash"],
+                "old_page_size": ARXIV_LEGACY_PAGE_SIZE,
+                "new_page_size": ARXIV_RECOVERED_PAGE_SIZE,
+            }
+        dataset.validate()
+        recovery_store = CheckpointStore(recovery_checkpoint_dir)
+        checkpoint_hash = recovery_store.save_dataset(dataset)
+        recovery_reference = _file_reference(recovery_store.dataset_path, root_path)
+        if checkpoint_hash != recovery_reference["raw_sha256"]:
+            raise ExternalRetrievalWaveError(
+                "arXiv page-size recovery checkpoint hash disagreement"
+            )
+        page_size_policy = {
+            "old_page_size": ARXIV_LEGACY_PAGE_SIZE,
+            "page_size": ARXIV_RECOVERED_PAGE_SIZE,
+        }
+        episode_6 = {
+            "episode_number": 6,
+            "episode_id": "arXiv-episode-006",
+            "run_id": run.run_id,
+            "status": ARXIV_PAGE_SIZE_RECOVERY_STATUS,
+            "recovery_of_episode_number": 5,
+            "authorization_reason": "OFFLINE_ARXIV_PAGE_SIZE_RECOVERY",
+            "authorized_at_utc": recovered_at,
+            "checkpoint_path": recovery_checkpoint_relative,
+            "checkpoint_dataset": recovery_reference,
+            "frozen_wave_manifest_hash": wave.manifest_hash(),
+            "frozen_query_plan_hash": wave.query_plan_hash,
+            "parent_checkpoint_dataset": parent_validation[
+                "checkpoint_reference"
+            ],
+            "transport_policy": parent_validation["transport_policy"],
+            "page_size_policy": page_size_policy,
+            "recovery_provenance": provenance,
+            "network_used": False,
+            "immutable": False,
+        }
+        episodes.append(episode_6)
+        source_state.update(
+            {
+                "status": ARXIV_PAGE_SIZE_RECOVERY_STATUS,
+                "active_episode_number": 6,
+                "active_run_id": run.run_id,
+                "active_checkpoint_path": recovery_checkpoint_relative,
+                "checkpoint_path": recovery_checkpoint_relative,
+                "checkpoint_dataset": recovery_reference,
+                "completed_query_count": 0,
+                "total_query_count": 5,
+                "occurrence_count": 0,
+                "attempt_count": 0,
+                "preserved_source_attempt_count": 57,
+                "preserved_source_raw_response_count": 34,
+                "requests_this_session": 0,
+                "pause_reason": (
+                    "OFFLINE_PAGE_SIZE_RECOVERY_COMPLETE; LIVE_RESUME_REQUIRED"
+                ),
+                "failure_reason": None,
+                "last_session_started_at_utc": recovered_at,
+                "last_session_completed_at_utc": recovered_at,
+                "transport_policy": parent_validation["transport_policy"],
+                "page_size_policy": page_size_policy,
+            }
+        )
+        source_state.pop("pause_metadata", None)
+        if {
+            key: value for key, value in state["sources"].items() if key != "arXiv"
+        } != other_sources_before:
+            raise ExternalRetrievalWaveError(
+                "arXiv page-size recovery changed another source"
+            )
+        state["status"] = "RUNNING"
+        state["external_retrieval_completed_at_utc"] = None
+        state["external_retrieval_cutoff_date"] = None
+        _save_execution_state(state_path, state)
+        for reference in historical_references:
+            artifact = (root_path / reference["path"]).resolve()
+            raw = artifact.read_bytes() if artifact.is_file() else b""
+            if (
+                len(raw) != reference["byte_size"]
+                or _sha256(raw) != reference["raw_sha256"]
+            ):
+                raise ExternalRetrievalWaveError(
+                    "arXiv historical evidence changed during page-size recovery"
+                )
+        _validate_authorized_arxiv_page_size_recovery(
             root=root_path, source_state=source_state, wave=wave
         )
         return state
@@ -7122,6 +7921,7 @@ def _active_arxiv_transport_policy(
     expected_reason = {
         4: "OFFLINE_ARXIV_TRANSPORT_POLICY_RECOVERY",
         5: "OFFLINE_ARXIV_RETRYABLE_5XX_RECOVERY",
+        6: "OFFLINE_ARXIV_PAGE_SIZE_RECOVERY",
     }.get(active_number)
     if (
         expected_reason is None
@@ -7133,6 +7933,34 @@ def _active_arxiv_transport_policy(
             "active arXiv transport policy lineage changed"
         )
     return dict(policy)
+
+
+def _active_arxiv_page_size(source_state: Mapping[str, Any]) -> int | None:
+    if source_state.get("active_episode_number") != 6:
+        return None
+    active = next(
+        (
+            item
+            for item in source_state.get("execution_episodes", [])
+            if item.get("episode_number") == 6
+        ),
+        None,
+    )
+    expected = {
+        "old_page_size": ARXIV_LEGACY_PAGE_SIZE,
+        "page_size": ARXIV_RECOVERED_PAGE_SIZE,
+    }
+    if (
+        active is None
+        or active.get("authorization_reason")
+        != "OFFLINE_ARXIV_PAGE_SIZE_RECOVERY"
+        or active.get("page_size_policy") != expected
+        or source_state.get("page_size_policy") != expected
+    ):
+        raise ExternalRetrievalWaveError(
+            "active arXiv page-size policy lineage changed"
+        )
+    return ARXIV_RECOVERED_PAGE_SIZE
 
 
 def execute_external_source_session(
@@ -7202,12 +8030,19 @@ def _execute_external_source_session_locked(
         _validate_authorized_arxiv_retryable_5xx_recovery(
             root=root_path, source_state=source_state, wave=wave
         )
+    if source == "arXiv" and _arxiv_page_size_recovery_active(source_state):
+        _validate_authorized_arxiv_page_size_recovery(
+            root=root_path, source_state=source_state, wave=wave
+        )
     if source_state["status"] == "COMPLETE":
         return state
     arxiv_transport_policy = (
         _active_arxiv_transport_policy(source_state)
         if source == "arXiv"
         else None
+    )
+    arxiv_page_size = (
+        _active_arxiv_page_size(source_state) if source == "arXiv" else None
     )
     effective_retry_policy = retry_policy or RetryPolicy()
     if (
@@ -7319,6 +8154,7 @@ def _execute_external_source_session_locked(
             if arxiv_transport_policy is not None
             else None
         ),
+        arxiv_page_size=arxiv_page_size,
     )
     request_budget = None
     quota = None
@@ -7450,6 +8286,7 @@ def _source_query_specs(
     ieee_credential: str,
     ieee_mutable_total_mode: bool = False,
     arxiv_read_timeout_seconds: float | None = None,
+    arxiv_page_size: int | None = None,
 ) -> list[RetrievalQuerySpec]:
     specs = []
     for family in wave.query_families:
@@ -7463,6 +8300,12 @@ def _source_query_specs(
             or parameters.get("max_results")
             or parameters.get("max_records")
         )
+        if source == "arXiv" and arxiv_page_size is not None:
+            if arxiv_page_size < 1 or arxiv_page_size > ARXIV_LEGACY_PAGE_SIZE:
+                raise ExternalRetrievalWaveError(
+                    "arXiv episode page size is outside the supported range"
+                )
+            limit = arxiv_page_size
         metadata = {
             "production_query_id": family.query_family_id,
             "frozen_request_specification_hash": parameters[
@@ -10808,6 +11651,10 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
     )
     parser.add_argument(
+        "--authorize-arxiv-page-size-recovery",
+        action="store_true",
+    )
+    parser.add_argument(
         "--authorize-semantic-scholar-control-5xx-recovery",
         action="store_true",
     )
@@ -10832,6 +11679,7 @@ def main(argv: list[str] | None = None) -> int:
         or args.authorize_arxiv_episode_3_state_reconciliation
         or args.authorize_arxiv_transport_policy_recovery
         or args.authorize_arxiv_retryable_5xx_recovery
+        or args.authorize_arxiv_page_size_recovery
         or args.authorize_semantic_scholar_control_5xx_recovery
         or args.authorize_semantic_scholar_candidate_5xx_recovery
         or args.resume
@@ -10840,6 +11688,70 @@ def main(argv: list[str] | None = None) -> int:
             "Semantic Scholar native-ID-overlap recovery is a separate offline "
             "authorization boundary"
         )
+    if args.authorize_arxiv_page_size_recovery:
+        if args.source != "arXiv":
+            parser.error(
+                "page-size recovery is supported only for --source arXiv"
+            )
+        if (
+            args.authorize_live_external_retrieval
+            or args.authorize_transport_retry_reset
+            or args.authorize_pubmed_parser_recovery
+            or args.authorize_europe_pmc_terminal_recovery
+            or args.authorize_ieee_total_drift_recovery
+            or args.authorize_ieee_repeated_window_recovery
+            or args.authorize_arxiv_rate_limit_recovery
+            or args.authorize_arxiv_mixed_state_recovery
+            or args.authorize_arxiv_episode_3_state_reconciliation
+            or args.authorize_arxiv_transport_policy_recovery
+            or args.authorize_arxiv_retryable_5xx_recovery
+            or args.authorize_semantic_scholar_control_5xx_recovery
+            or args.authorize_semantic_scholar_candidate_5xx_recovery
+            or args.authorize_semantic_scholar_native_id_overlap_recovery
+            or args.resume
+        ):
+            parser.error(
+                "arXiv page-size recovery is a separate offline "
+                "authorization boundary"
+            )
+        state = authorize_arxiv_page_size_recovery(root=args.root)
+        source_state = state["sources"]["arXiv"]
+        active = source_state["execution_episodes"][5]
+        print(
+            json.dumps(
+                {
+                    "execution_status": state["status"],
+                    "source": "arXiv",
+                    "source_status": source_state["status"],
+                    "active_episode_number": source_state[
+                        "active_episode_number"
+                    ],
+                    "checkpoint_dataset": source_state[
+                        "checkpoint_dataset"
+                    ],
+                    "parent_checkpoint_dataset": active[
+                        "parent_checkpoint_dataset"
+                    ],
+                    "page_size_policy": active["page_size_policy"],
+                    "request_identity_changes": active[
+                        "recovery_provenance"
+                    ]["request_identity_changes"],
+                    "historical_lineage_counts": active[
+                        "recovery_provenance"
+                    ]["historical_lineage_counts"],
+                    "page_size_causality": active[
+                        "recovery_provenance"
+                    ]["page_size_causality"],
+                    "external_retrieval_cutoff_date": state[
+                        "external_retrieval_cutoff_date"
+                    ],
+                    "network_used": False,
+                },
+                sort_keys=True,
+                indent=2,
+            )
+        )
+        return 0
     if args.authorize_arxiv_retryable_5xx_recovery:
         if args.source != "arXiv":
             parser.error(
@@ -10856,6 +11768,7 @@ def main(argv: list[str] | None = None) -> int:
             or args.authorize_arxiv_mixed_state_recovery
             or args.authorize_arxiv_episode_3_state_reconciliation
             or args.authorize_arxiv_transport_policy_recovery
+            or args.authorize_arxiv_page_size_recovery
             or args.authorize_semantic_scholar_control_5xx_recovery
             or args.authorize_semantic_scholar_candidate_5xx_recovery
             or args.authorize_semantic_scholar_native_id_overlap_recovery
