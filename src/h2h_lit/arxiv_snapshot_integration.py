@@ -1141,8 +1141,45 @@ def validate_applied_snapshot_adjudications(
         item["normalized_arxiv_id"]: item for item in package.identity_proposals
     }
     occurrence_by_id = {item.occurrence_id: item for item in dataset.occurrences}
+    resolved_target_by_arxiv: dict[str, str] = {}
     for normalized_id, occurrence_ids in candidates.items():
         proposal = proposals[normalized_id]
+        approved_identity = proposal["existing_identity"]
+        approved_occurrence_id = str(
+            approved_identity.get("survivor_occurrence_id") or ""
+        )
+        resolved_target_canonical_ids = {
+            effective[item.occurrence_id].canonical_record_id
+            for item in dataset.occurrences
+            if item.record.source_database != "arXivSnapshotV303"
+            and _normalize_arxiv_id(item.record.arxiv_id) == normalized_id
+        }
+        if len(resolved_target_canonical_ids) != 1:
+            raise ArxivSnapshotIntegrationError(
+                "snapshot adjudication target identity changed"
+            )
+        resolved_target_canonical_id = next(iter(resolved_target_canonical_ids))
+        if approved_occurrence_id:
+            approved_occurrence = occurrence_by_id.get(approved_occurrence_id)
+            approved_key = record_key(approved_identity)
+            if (
+                approved_occurrence is None
+                or approved_occurrence.record.source_database == "arXivSnapshotV303"
+                or _normalize_arxiv_id(approved_occurrence.record.arxiv_id)
+                != normalized_id
+                or (
+                    approved_identity.get("source_database")
+                    and approved_occurrence.record.source_database
+                    != approved_identity["source_database"]
+                )
+                or (approved_key and record_key(approved_occurrence.record) != approved_key)
+                or effective[approved_occurrence_id].canonical_record_id
+                != resolved_target_canonical_id
+            ):
+                raise ArxivSnapshotIntegrationError(
+                    "approved snapshot adjudication target evidence changed"
+                )
+        resolved_target_by_arxiv[normalized_id] = resolved_target_canonical_id
         for occurrence_id in occurrence_ids:
             decision = effective[occurrence_id]
             metadata = occurrence_by_id[occurrence_id].metadata.get(
@@ -1170,7 +1207,7 @@ def validate_applied_snapshot_adjudications(
             survivor = occurrence_by_id[decision.survivor_occurrence_id]
             if (
                 survivor.record.source_database == "arXivSnapshotV303"
-                or _normalize_arxiv_id(survivor.record.arxiv_id) != normalized_id
+                or decision.canonical_record_id != resolved_target_canonical_id
             ):
                 raise ArxivSnapshotIntegrationError(
                     "snapshot adjudication target identity changed"
@@ -1231,7 +1268,8 @@ def validate_applied_snapshot_adjudications(
         survivor = occurrence_by_id[decision.survivor_occurrence_id]
         if (
             survivor.record.source_database == "arXivSnapshotV303"
-            or _normalize_arxiv_id(survivor.record.arxiv_id) != normalized_id
+            or decision.canonical_record_id
+            != resolved_target_by_arxiv.get(normalized_id)
         ):
             raise ArxivSnapshotIntegrationError(
                 "snapshot propagated identity target changed"

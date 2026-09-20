@@ -567,6 +567,9 @@ def _item_hashes(datasets: list[ReviewDataset], field_name: str, item_id: str) -
             payload = review_model._serialize(item)
             if field_name == "occurrences":
                 payload.get("metadata", {}).pop("identity_adjudication", None)
+                payload.get("metadata", {}).pop(
+                    "identity_adjudication_propagation", None
+                )
             elif field_name == "retrieval_runs":
                 payload.get("metadata", {}).pop(INTEGRATION_MARKER, None)
             digest = _json_hash(payload)

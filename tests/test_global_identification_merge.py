@@ -7,7 +7,10 @@ from pathlib import Path
 import pytest
 
 import h2h_lit.global_identification_merge as global_merge
-from h2h_lit.arxiv_snapshot_integration import ValidatedSnapshotPackage
+from h2h_lit.arxiv_snapshot_integration import (
+    ArxivSnapshotIntegrationError,
+    ValidatedSnapshotPackage,
+)
 from h2h_lit.external_retrieval_wave import (
     ExternalRetrievalWaveError,
     _exclusive_external_source_session,
@@ -202,7 +205,12 @@ def _fixture(tmp_path: Path, monkeypatch) -> tuple[dict, ValidatedSnapshotPackag
                 "staging_candidate_id": "candidate-alpha",
                 "source_line_number": 1,
             },
-            "existing_identity": {"arxiv_id": "1234.5678v2"},
+            "existing_identity": {
+                "arxiv_id": "1234.5678v2",
+                "doi": "10.1000/alpha",
+                "source_database": "SemanticScholar",
+                "survivor_occurrence_id": "existing-alpha",
+            },
         }
     ]
     relationships = [
@@ -256,19 +264,32 @@ def _fixture(tmp_path: Path, monkeypatch) -> tuple[dict, ValidatedSnapshotPackag
         "family_datasets": acm_families,
     }
     for source in ("EuropePMC", "IEEEXplore", "PubMed"):
+        records = [
+            (
+                f"{source}-occurrence",
+                _record(source, f"{source}-id", f"{source} work"),
+            )
+        ]
+        if source == "EuropePMC":
+            records.append(
+                (
+                    "europe-alpha",
+                    _record(
+                        "EuropePMC",
+                        "alpha-pmid",
+                        "Published alpha.",
+                        doi="10.1000/alpha",
+                    ),
+                )
+            )
         dataset = _dataset(
             source=source,
             run_id=f"{source}-run",
-            records=[
-                (
-                    f"{source}-occurrence",
-                    _record(source, f"{source}-id", f"{source} work"),
-                )
-            ],
+            records=records,
         )
         sources[source] = {
             "status": "COMPLETE",
-            "occurrence_count": 1,
+            "occurrence_count": len(records),
             "checkpoint_dataset": _write_dataset(tmp_path, source.lower(), dataset),
             "execution_episodes": [{"historical": True}],
         }
@@ -306,27 +327,51 @@ def _fixture(tmp_path: Path, monkeypatch) -> tuple[dict, ValidatedSnapshotPackag
         if seed == "EBK25":
             metadata["identity_resolution"] = "UNRESOLVED"
             metadata["provisional_identity_group_id"] = "ebk25-candidate:unresolved"
+        records = [
+            (
+                f"prior-{seed}-occurrence",
+                _record(
+                    "PriorSurveySeed",
+                    f"{seed}:1",
+                    f"{seed} work",
+                    metadata=metadata,
+                ),
+            )
+        ]
+        if seed == "EBK25":
+            records.append(
+                (
+                    "prior-EBK25-alpha",
+                    _record(
+                        "PriorSurveySeed",
+                        "EBK25:alpha",
+                        "Alpha preprint",
+                        metadata={
+                            "seed_set_id": "EBK25",
+                            "source_survey_membership": "UNCONFIRMED",
+                            "our_star_eligibility": "UNASSESSED",
+                            "identity_resolution": "PROVISIONAL",
+                            "identity_conflict_status": (
+                                "NO_RECORDED_METADATA_CONFLICT"
+                            ),
+                            "provisional_identity_group_id": (
+                                "ebk25-candidate:alpha"
+                            ),
+                        },
+                    ),
+                )
+            )
         dataset = _dataset(
             source="PriorSurveySeed",
             run_id=f"prior-{seed}",
-            records=[
-                (
-                    f"prior-{seed}-occurrence",
-                    _record(
-                        "PriorSurveySeed",
-                        f"{seed}:1",
-                        f"{seed} work",
-                        metadata=metadata,
-                    ),
-                )
-            ],
+            records=records,
         )
         prior[seed] = {
             "status": "AUTHORIZED_IMPORTED_NOT_GLOBALLY_MERGED",
             "dataset": _write_dataset(tmp_path, f"prior-{seed}", dataset),
             "authorization": _write_authorization(tmp_path, seed),
             "counts": {
-                "source_occurrences": 1,
+                "source_occurrences": len(records),
                 "unresolved_identity_groups": 1 if seed == "EBK25" else 0,
             },
         }
@@ -352,7 +397,7 @@ def _fixture(tmp_path: Path, monkeypatch) -> tuple[dict, ValidatedSnapshotPackag
     monkeypatch.setattr(global_merge, "validate_authorized_prior_survey_imports", lambda **_: None)
     monkeypatch.setattr(global_merge, "_implementation_bindings", lambda _root: [])
     monkeypatch.setattr(global_merge, "_snapshot_package", lambda *_: package)
-    expected = 5 + 3 + 2 + 3 + 3
+    expected = 5 + 4 + 2 + 3 + 4
     return state, package, expected
 
 
@@ -423,7 +468,7 @@ def test_plan_binds_staging_only_source_relocation(tmp_path, monkeypatch):
 
 
 def test_staging_merge_preserves_occurrences_adjudications_and_uncertainty(tmp_path, monkeypatch):
-    _state, result, output = _prepare(tmp_path, monkeypatch)
+    state, result, output = _prepare(tmp_path, monkeypatch)
     reconciliation = result["manifest"]["counts"]
     merged = global_merge.load_review_dataset(output / "review_dataset.json")
 
@@ -447,6 +492,40 @@ def test_staging_merge_preserves_occurrences_adjudications_and_uncertainty(tmp_p
         "study_grouping_decided": False,
     }
     assert len(merged.effective_duplicate_decisions()) == len(merged.occurrences)
+    alpha = next(
+        item
+        for item in merged.canonical_records
+        if item.metadata.get("dedupe_key") == "doi:10.1000/alpha"
+    )
+    assert alpha.survivor_occurrence_id == "europe-alpha"
+    assert {
+        "europe-alpha",
+        "existing-alpha",
+        "snapshot-alpha-qf01",
+        "snapshot-alpha-qf02",
+        "prior-EBK25-alpha",
+    }.issubset(alpha.occurrence_ids)
+    effective = {
+        item.occurrence_id: item for item in merged.effective_duplicate_decisions()
+    }
+    assert effective["snapshot-alpha-qf01"].canonical_record_id == alpha.canonical_id
+    assert effective["snapshot-alpha-qf02"].canonical_record_id == alpha.canonical_id
+    assert effective["existing-alpha"].canonical_record_id == alpha.canonical_id
+    propagated = effective["prior-EBK25-alpha"]
+    assert propagated.canonical_record_id == alpha.canonical_id
+    assert propagated.match_rule == "propagated_adjudicated_generic_title_group"
+    assert (
+        propagated.provenance.metadata["decision_application"]
+        == "propagated_generic_title_group_membership"
+    )
+    assert propagated.provenance.metadata["identity_restrictions_preserved"] is True
+    validated = global_merge.validate_staged_merge_package(
+        root=tmp_path,
+        package_dir=output,
+        expected_manifest_sha256=result["manifest_sha256"],
+        state=state,
+    )
+    assert validated == result["manifest"]
     beta = [
         item
         for item in merged.canonical_records
@@ -460,6 +539,29 @@ def test_staging_merge_preserves_occurrences_adjudications_and_uncertainty(tmp_p
     )
     assert ebk.record.original_metadata["source_survey_membership"] == "UNCONFIRMED"
     assert ebk.record.original_metadata["our_star_eligibility"] == "UNASSESSED"
+
+
+def test_reconciliation_rejects_changed_exact_approved_target_evidence(
+    tmp_path, monkeypatch
+):
+    state, package, _expected = _fixture(tmp_path, monkeypatch)
+    package.identity_proposals[0]["existing_identity"][
+        "survivor_occurrence_id"
+    ] = "missing-approved-target"
+
+    with pytest.raises(
+        ArxivSnapshotIntegrationError,
+        match="approved snapshot adjudication target evidence changed",
+    ):
+        global_merge.prepare_staged_global_merge(
+            root=tmp_path,
+            state=state,
+            execution_state_raw_sha256="state-sha",
+            output_dir=tmp_path / "staging" / "changed-target",
+            availability=global_merge.ResourceAvailability(
+                99 * 1024**3, 99 * 1024**3, 99 * 1024**3
+            ),
+        )
 
 
 @pytest.mark.parametrize("changed_field", ["occurrence", "source_query"])
