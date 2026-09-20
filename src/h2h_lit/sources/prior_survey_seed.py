@@ -19,6 +19,13 @@ from h2h_lit.normalize import normalize_doi
 from h2h_lit.review import IdentificationRoute, ReviewDataset
 
 SOURCE_DATABASE = "PriorSurveySeed"
+QUALIFIED_SCHEMA_VERSION = "1.1.0"
+MEMBERSHIP_STATUSES = {
+    "CONFIRMED_SURVEY_MEMBER",
+    "SUPPORTED_SURVEY_MEMBER",
+    "UNCONFIRMED",
+    "BACKGROUND_REFERENCE",
+}
 
 
 def import_seed_manifest(
@@ -34,6 +41,9 @@ def import_seed_manifest(
     manifest = json.loads(raw_manifest)
     _validate_manifest(manifest)
     seed_set_id = str(manifest["seed_set_id"])
+    source_designation = manifest.get("source_designation")
+    membership_status = manifest.get("membership_status")
+    star_eligibility_status = manifest.get("star_eligibility_status")
     items = [
         _entry_item(
             entry,
@@ -42,6 +52,9 @@ def import_seed_manifest(
             extraction_method=str(manifest["extraction_method"]),
             curator_id=str(manifest["curator_id"]),
             imported_at=str(manifest["imported_at"]),
+            source_designation=source_designation,
+            membership_status=membership_status,
+            star_eligibility_status=star_eligibility_status,
         )
         for entry in manifest["entries"]
     ]
@@ -82,6 +95,10 @@ def import_seed_manifest(
             "extraction_method": manifest["extraction_method"],
             "export_format": "seed_manifest_json",
             "artifact_hash": manifest_hash,
+            "source_designation": source_designation,
+            "membership_status": membership_status,
+            "star_eligibility_status": star_eligibility_status,
+            "identity_status": manifest.get("identity_status"),
         },
     )
     return build_artifact_review_dataset(
@@ -100,6 +117,9 @@ def _entry_item(
     extraction_method: str,
     curator_id: str,
     imported_at: str,
+    source_designation: str | None,
+    membership_status: str | None,
+    star_eligibility_status: str | None,
 ) -> ArtifactItem:
     entry_id = str(entry["entry_id"])
     source_identifier = f"{seed_set_id}:{entry_id}"
@@ -111,6 +131,13 @@ def _entry_item(
         "source_role": IdentificationRoute.PRIOR_SURVEY_SEED.value,
         "extraction_method": extraction_method,
         "curator_id": curator_id,
+        "source_designation": source_designation,
+        "source_survey_membership": entry.get(
+            "source_survey_membership", membership_status
+        ),
+        "our_star_eligibility": entry.get(
+            "our_star_eligibility", star_eligibility_status
+        ),
     }
     record = LiteratureRecord(
         title=str(entry.get("title") or ""),
@@ -136,6 +163,13 @@ def _entry_item(
                     "locator": entry.get("locator"),
                     "extraction_method": extraction_method,
                     "curator_id": curator_id,
+                    "source_designation": source_designation,
+                    "source_survey_membership": entry.get(
+                        "source_survey_membership", membership_status
+                    ),
+                    "our_star_eligibility": entry.get(
+                        "our_star_eligibility", star_eligibility_status
+                    ),
                 },
                 timestamp=imported_at,
             )
@@ -171,8 +205,33 @@ def _validate_manifest(manifest: dict[str, Any]) -> None:
     missing = sorted(required - manifest.keys())
     if missing:
         raise ValueError(f"seed manifest missing required fields: {missing}")
-    if manifest["schema_version"] != "1.0.0":
+    if manifest["schema_version"] not in {"1.0.0", QUALIFIED_SCHEMA_VERSION}:
         raise ValueError("unsupported seed manifest schema version")
+    if manifest["schema_version"] == QUALIFIED_SCHEMA_VERSION:
+        qualified_required = {
+            "source_designation",
+            "membership_status",
+            "star_eligibility_status",
+            "identity_status",
+        }
+        qualified_missing = sorted(qualified_required - manifest.keys())
+        if qualified_missing:
+            raise ValueError(
+                "qualified seed manifest missing required fields: "
+                f"{qualified_missing}"
+            )
+        if not str(manifest["source_designation"]).strip():
+            raise ValueError("qualified seed source designation is required")
+        if manifest["membership_status"] not in {*MEMBERSHIP_STATUSES, "MIXED"}:
+            raise ValueError("qualified seed membership status is unsupported")
+        if manifest["star_eligibility_status"] != "UNASSESSED":
+            raise ValueError("qualified seed STAR eligibility must remain UNASSESSED")
+        if manifest["identity_status"] not in {
+            "SUPPORTED_SOURCE_IDENTITIES",
+            "PROVISIONAL_IDENTITIES",
+            "MIXED",
+        }:
+            raise ValueError("qualified seed identity status is unsupported")
     if str(manifest["seed_set_id"]).upper() in {"EBK25", "JFR25", "FP19"} and not manifest[
         "entries"
     ]:
@@ -200,6 +259,25 @@ def _validate_manifest(manifest: dict[str, Any]) -> None:
             raise ValueError("seed entries require raw citation text")
         if not (str(entry.get("title") or "").strip() or normalize_doi(entry.get("doi"))):
             raise ValueError("seed entries require title or DOI metadata")
+        if manifest["schema_version"] == QUALIFIED_SCHEMA_VERSION:
+            entry_membership = entry.get("source_survey_membership")
+            if entry_membership not in MEMBERSHIP_STATUSES:
+                raise ValueError(
+                    "qualified seed entries require a supported survey membership status"
+                )
+            if (
+                manifest["membership_status"] != "MIXED"
+                and entry_membership != manifest["membership_status"]
+            ):
+                raise ValueError(
+                    "qualified seed entry membership disagrees with manifest"
+                )
+            if entry.get("our_star_eligibility") != "UNASSESSED":
+                raise ValueError(
+                    "qualified seed entry STAR eligibility must remain UNASSESSED"
+                )
+            if not str(entry.get("locator") or "").strip():
+                raise ValueError("qualified seed entries require occurrence locators")
 
 
 def seed_query_id(seed_set_id: str, seed_set_version: str) -> str:

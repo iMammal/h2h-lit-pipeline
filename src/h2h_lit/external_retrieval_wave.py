@@ -29,6 +29,11 @@ from h2h_lit.checkpoint import CheckpointStore, atomic_write
 from h2h_lit.http import HttpClient, RequestsHttpClient
 from h2h_lit.models import ProcessingStatus
 from h2h_lit.pagination import PageRequest, RateLimiter, RetryPolicy, native_identifier
+from h2h_lit.prior_survey_integration import (
+    PriorSurveyIntegrationError,
+    authorize_prior_survey_package_locked,
+    validate_authorized_prior_survey_imports,
+)
 from h2h_lit.production_prerequisites import load_prerequisite_package
 from h2h_lit.production_query_plan import load_production_query_plan
 from h2h_lit.production_wave import (
@@ -7992,6 +7997,60 @@ def authorize_arxiv_snapshot_integration(
         return state
 
 
+def authorize_prior_survey_import(
+    *,
+    root: str | Path,
+    package_dir: str | Path,
+    expected_package_manifest_sha256: str,
+    timestamp: Callable[[], str] = utc_now,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Authorize one qualified seed package without closing identification."""
+
+    root_path = Path(root).resolve()
+    with _exclusive_external_source_session(root_path):
+        wave, preflight = validate_persisted_external_preflight(root=root_path)
+        state_path = _safe_output_path(root_path, EXECUTION_STATE_PATH)
+        if not state_path.is_file():
+            raise ExternalRetrievalWaveError("external execution state does not exist")
+        state = _load_execution_state(state_path, root_path, wave, preflight)
+        sources_before = json.loads(json.dumps(state["sources"], sort_keys=True))
+        closure_before = {
+            key: state.get(key)
+            for key in (
+                "prior_survey_seed_imported",
+                "identification_set_closed",
+                "final_global_deduplication_executed",
+                "screening_executed",
+                "prisma_generated",
+                "corpus_modified",
+            )
+        }
+        try:
+            state, registration = authorize_prior_survey_package_locked(
+                root=root_path,
+                state=state,
+                package_dir=package_dir,
+                expected_package_manifest_sha256=expected_package_manifest_sha256,
+                authorized_at=timestamp(),
+            )
+        except PriorSurveyIntegrationError as exc:
+            raise ExternalRetrievalWaveError(str(exc)) from exc
+        if state["sources"] != sources_before:
+            raise ExternalRetrievalWaveError(
+                "prior-survey authorization changed an external source component"
+            )
+        if any(state.get(key) != value for key, value in closure_before.items()):
+            raise ExternalRetrievalWaveError(
+                "prior-survey authorization changed a closure or screening gate"
+            )
+        _save_execution_state(state_path, state)
+        try:
+            validate_authorized_prior_survey_imports(root=root_path, state=state)
+        except PriorSurveyIntegrationError as exc:
+            raise ExternalRetrievalWaveError(str(exc)) from exc
+        return state, registration
+
+
 def _active_arxiv_transport_policy(
     source_state: Mapping[str, Any],
 ) -> dict[str, Any] | None:
@@ -8916,6 +8975,10 @@ def _load_execution_state(
     try:
         validate_authorized_snapshot_substitution(root=root, state=state)
     except ArxivSnapshotIntegrationError as exc:
+        raise ExternalRetrievalWaveError(str(exc)) from exc
+    try:
+        validate_authorized_prior_survey_imports(root=root, state=state)
+    except PriorSurveyIntegrationError as exc:
         raise ExternalRetrievalWaveError(str(exc)) from exc
     return state
 
@@ -11791,10 +11854,54 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--authorize-arxiv-snapshot-integration", action="store_true"
     )
+    parser.add_argument("--authorize-prior-survey-import", action="store_true")
+    parser.add_argument("--prior-survey-package", type=Path)
+    parser.add_argument("--prior-survey-package-sha256")
     parser.add_argument("--arxiv-snapshot-package", type=Path)
     parser.add_argument("--arxiv-snapshot-integration-output", type=Path)
     parser.add_argument("--arxiv-snapshot-amendment-v2", type=Path)
     args = parser.parse_args(argv)
+    if args.authorize_prior_survey_import:
+        other_modes = [
+            value
+            for key, value in vars(args).items()
+            if key.startswith(("authorize_", "prepare_"))
+            and key != "authorize_prior_survey_import"
+        ]
+        if args.resume or args.source or any(other_modes):
+            parser.error(
+                "prior-survey import is a separate offline authorization boundary"
+            )
+        if args.prior_survey_package is None:
+            parser.error("--prior-survey-package is required")
+        if not args.prior_survey_package_sha256:
+            parser.error("--prior-survey-package-sha256 is required")
+        state, registration = authorize_prior_survey_import(
+            root=args.root,
+            package_dir=args.prior_survey_package,
+            expected_package_manifest_sha256=args.prior_survey_package_sha256,
+        )
+        print(
+            json.dumps(
+                {
+                    "execution_status": state["status"],
+                    "seed_set_id": registration["seed_set_id"],
+                    "registration": registration,
+                    "prior_survey_seed_imported": state[
+                        "prior_survey_seed_imported"
+                    ],
+                    "identification_set_closed": state[
+                        "identification_set_closed"
+                    ],
+                    "screening_executed": state["screening_executed"],
+                    "prisma_generated": state["prisma_generated"],
+                    "network_used": False,
+                },
+                sort_keys=True,
+                indent=2,
+            )
+        )
+        return 0
     snapshot_modes = (
         args.prepare_arxiv_snapshot_integration,
         args.authorize_arxiv_snapshot_integration,

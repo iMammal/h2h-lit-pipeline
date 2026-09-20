@@ -46,6 +46,7 @@ from h2h_lit.external_retrieval_wave import (
     authorize_europe_pmc_terminal_recovery,
     authorize_ieee_repeated_window_recovery,
     authorize_ieee_total_drift_recovery,
+    authorize_prior_survey_import,
     authorize_pubmed_parser_recovery,
     authorize_pubmed_transport_retry,
     authorize_semantic_scholar_candidate_5xx_recovery,
@@ -927,6 +928,87 @@ def test_external_source_session_lock_is_released_after_exception(tmp_path) -> N
         raise RuntimeError("deliberate")
     with external_module._exclusive_external_source_session(tmp_path):
         pass
+
+
+def test_prior_survey_authorization_obeys_shared_lock_before_state_load(
+    tmp_path, monkeypatch
+) -> None:
+    state_loaded = False
+
+    def unexpected_state_load(*args, **kwargs):
+        nonlocal state_loaded
+        state_loaded = True
+        raise AssertionError("state must not load while shared lock is held")
+
+    monkeypatch.setattr(external_module, "_load_execution_state", unexpected_state_load)
+    with external_module._exclusive_external_source_session(tmp_path), pytest.raises(
+        ExternalRetrievalWaveError,
+        match="another external-source session is already active",
+    ):
+        authorize_prior_survey_import(
+            root=tmp_path,
+            package_dir=tmp_path / "package",
+            expected_package_manifest_sha256="0" * 64,
+        )
+    assert state_loaded is False
+
+
+def test_prior_survey_authorization_preserves_sources_and_closure_gates(
+    tmp_path, monkeypatch, external_wave, external_preflight
+) -> None:
+    _install_isolated_runtime(
+        tmp_path, monkeypatch, external_wave, external_preflight
+    )
+    state_path = tmp_path / external_module.EXECUTION_STATE_PATH
+    state_path.parent.mkdir(parents=True, exist_ok=True)
+    state_path.write_text("existing", encoding="utf-8")
+    state = {
+        "status": "COMPLETE",
+        "sources": {"arXiv": {"status": "PAUSED_TRANSIENT_PROVIDER"}},
+        "prior_survey_seed_imported": False,
+        "identification_set_closed": False,
+        "final_global_deduplication_executed": False,
+        "screening_executed": False,
+        "prisma_generated": False,
+        "corpus_modified": False,
+    }
+    sources_before = copy.deepcopy(state["sources"])
+    saved: list[dict] = []
+    monkeypatch.setattr(external_module, "_load_execution_state", lambda *args: state)
+    monkeypatch.setattr(
+        external_module,
+        "_save_execution_state",
+        lambda _path, value: saved.append(copy.deepcopy(value)),
+    )
+    monkeypatch.setattr(
+        external_module,
+        "validate_authorized_prior_survey_imports",
+        lambda **_: None,
+    )
+
+    def authorize(**kwargs):
+        kwargs["state"].setdefault("prior_survey_imports", {})["JFR25"] = {
+            "seed_set_id": "JFR25"
+        }
+        return kwargs["state"], kwargs["state"]["prior_survey_imports"]["JFR25"]
+
+    monkeypatch.setattr(
+        external_module, "authorize_prior_survey_package_locked", authorize
+    )
+    result, registration = authorize_prior_survey_import(
+        root=tmp_path,
+        package_dir=tmp_path / "package",
+        expected_package_manifest_sha256="1" * 64,
+        timestamp=lambda: "2026-09-20T03:00:00Z",
+    )
+
+    assert registration == {"seed_set_id": "JFR25"}
+    assert result["sources"] == sources_before
+    assert result["prior_survey_seed_imported"] is False
+    assert result["identification_set_closed"] is False
+    assert result["screening_executed"] is False
+    assert result["prisma_generated"] is False
+    assert len(saved) == 1
 
 
 def test_external_source_session_lock_excludes_another_process(tmp_path) -> None:
