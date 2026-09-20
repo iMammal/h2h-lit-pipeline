@@ -364,7 +364,7 @@ def _prepare(tmp_path: Path, monkeypatch) -> tuple[dict, dict, Path]:
         state=state,
         execution_state_raw_sha256="state-sha",
         output_dir=output,
-        availability=global_merge.ResourceAvailability(99 * 1024**3, 99 * 1024**3),
+        availability=global_merge.ResourceAvailability(99 * 1024**3, 99 * 1024**3, 99 * 1024**3),
     )
     assert result["manifest"]["counts"]["output_occurrences"] == expected
     return state, result, output
@@ -392,6 +392,34 @@ def test_plan_selects_only_authoritative_registered_inputs(tmp_path, monkeypatch
         "PriorSurveySeed/EBK25",
         "PriorSurveySeed/FP19",
     }
+
+
+def test_plan_binds_staging_only_source_relocation(tmp_path, monkeypatch):
+    state, _package, _expected = _fixture(tmp_path, monkeypatch)
+    binding = {
+        "status": "STAGING_ONLY_EXACT_SOURCE_RELOCATION",
+        "authoritative_execution_state_sha256": "state-sha",
+        "production_state_modified": False,
+    }
+    plan = global_merge.build_global_merge_plan(
+        root=tmp_path,
+        state=state,
+        execution_state_raw_sha256="state-sha",
+        source_relocation_binding=binding,
+    )
+    assert plan["source_relocation"] == binding
+
+    changed = {**binding, "authoritative_execution_state_sha256": "changed"}
+    with pytest.raises(
+        global_merge.GlobalIdentificationMergeError,
+        match="differs from authoritative state",
+    ):
+        global_merge.build_global_merge_plan(
+            root=tmp_path,
+            state=state,
+            execution_state_raw_sha256="state-sha",
+            source_relocation_binding=changed,
+        )
 
 
 def test_staging_merge_preserves_occurrences_adjudications_and_uncertainty(tmp_path, monkeypatch):
@@ -478,7 +506,7 @@ def test_staging_is_idempotent_and_recovers_after_manifest_interruption(tmp_path
         state=state,
         execution_state_raw_sha256="state-sha",
         output_dir=output,
-        availability=global_merge.ResourceAvailability(100 * 1024**3, 100 * 1024**3),
+        availability=global_merge.ResourceAvailability(100 * 1024**3, 100 * 1024**3, 100 * 1024**3),
     )
     assert second["idempotent"] is True
     assert second["manifest_sha256"] == first["manifest_sha256"]
@@ -506,7 +534,9 @@ def test_staging_is_idempotent_and_recovers_after_manifest_interruption(tmp_path
             state=recovery_state,
             execution_state_raw_sha256="recovery-state",
             output_dir=recovery_output,
-            availability=global_merge.ResourceAvailability(100 * 1024**3, 100 * 1024**3),
+            availability=global_merge.ResourceAvailability(
+                100 * 1024**3, 100 * 1024**3, 100 * 1024**3
+            ),
         )
     assert (recovery_output / "review_dataset.json").is_file()
     assert not (recovery_output / "package_manifest.json").exists()
@@ -516,7 +546,7 @@ def test_staging_is_idempotent_and_recovers_after_manifest_interruption(tmp_path
         state=recovery_state,
         execution_state_raw_sha256="recovery-state",
         output_dir=recovery_output,
-        availability=global_merge.ResourceAvailability(100 * 1024**3, 100 * 1024**3),
+        availability=global_merge.ResourceAvailability(100 * 1024**3, 100 * 1024**3, 100 * 1024**3),
     )
     assert recovered["manifest"]["status"] == "STAGED_GLOBAL_MERGE_NOT_REGISTERED"
 
@@ -530,7 +560,7 @@ def test_resource_and_input_drift_refuse_before_merge(tmp_path, monkeypatch):
             state=state,
             execution_state_raw_sha256="state-sha",
             output_dir=output,
-            availability=global_merge.ResourceAvailability(1, 1),
+            availability=global_merge.ResourceAvailability(1, 1, 1),
         )
     first_input = state["sources"]["ACMDigitalLibrary"]["family_datasets"][0]["dataset"]
     (tmp_path / first_input["path"]).write_text("tampered", encoding="utf-8")
@@ -540,6 +570,37 @@ def test_resource_and_input_drift_refuse_before_merge(tmp_path, monkeypatch):
             state=state,
             execution_state_raw_sha256="state-sha",
         )
+
+
+def test_resource_guard_requires_22_gib_actually_available(tmp_path, monkeypatch):
+    state, _package, _expected = _fixture(tmp_path, monkeypatch)
+    plan = global_merge.build_global_merge_plan(
+        root=tmp_path,
+        state=state,
+        execution_state_raw_sha256="state-sha",
+    )
+    below = global_merge.resource_preflight(
+        plan,
+        global_merge.ResourceAvailability(
+            100 * 1024**3,
+            global_merge.MIN_AVAILABLE_MEMORY_BYTES - 1,
+            100 * 1024**3,
+        ),
+    )
+    at_threshold = global_merge.resource_preflight(
+        plan,
+        global_merge.ResourceAvailability(
+            100 * 1024**3,
+            global_merge.MIN_AVAILABLE_MEMORY_BYTES,
+            100 * 1024**3,
+        ),
+    )
+
+    assert below["installed_memory_sufficient"] is True
+    assert below["available_memory_sufficient"] is False
+    assert below["memory_sufficient"] is False
+    assert at_threshold["available_memory_sufficient"] is True
+    assert at_threshold["memory_sufficient"] is True
 
 
 def test_production_registration_is_idempotent_without_closing_identification(
@@ -577,6 +638,60 @@ def test_production_registration_is_idempotent_without_closing_identification(
             expected_manifest_sha256="changed",
             authorized_at="later",
         )
+
+
+def test_production_authorization_accepts_relocation_bound_return_without_redirecting_paths(
+    tmp_path, monkeypatch
+):
+    state, _result, output = _prepare(tmp_path, monkeypatch)
+    relocation_binding = {
+        "schema_version": "1.0.0",
+        "status": "STAGING_ONLY_EXACT_SOURCE_RELOCATION",
+        "manifest": {
+            "path": "outputs/staging/relocation/relocation_manifest.json",
+            "path_scope": "repository_relative",
+            "byte_size": 1,
+            "raw_sha256": "a" * 64,
+        },
+        "authoritative_execution_state_sha256": "state-sha",
+        "entry_count": 1,
+        "entries_sha256": "b" * 64,
+        "production_state_modified": False,
+    }
+    manifest_path = output / "package_manifest.json"
+    manifest = json.loads(manifest_path.read_bytes())
+    manifest["source_relocation"] = relocation_binding
+    manifest_path.write_text(json.dumps(manifest, sort_keys=True, indent=2) + "\n")
+    manifest_sha256 = hashlib.sha256(manifest_path.read_bytes()).hexdigest()
+
+    class ValidatedRelocation:
+        def binding(self, _root):
+            return relocation_binding
+
+    monkeypatch.setattr(
+        global_merge,
+        "validate_source_relocation_manifest",
+        lambda **_: ValidatedRelocation(),
+    )
+    strict_prior_validator = global_merge.validate_authorized_prior_survey_imports
+    validated = global_merge.validate_staged_merge_package(
+        root=tmp_path,
+        package_dir=output,
+        expected_manifest_sha256=manifest_sha256,
+        state=state,
+    )
+    state, registration = global_merge.authorize_production_global_merge(
+        root=tmp_path,
+        state=state,
+        package_dir=output,
+        expected_manifest_sha256=manifest_sha256,
+        authorized_at=STAMP,
+    )
+
+    assert validated["source_relocation"] == relocation_binding
+    assert registration["status"] == "COMPLETE_NOT_IDENTIFICATION_CLOSED"
+    assert state["identification_set_closed"] is False
+    assert global_merge.validate_authorized_prior_survey_imports is strict_prior_validator
 
 
 def test_global_merge_uses_shared_lock_before_state_load(tmp_path, monkeypatch):

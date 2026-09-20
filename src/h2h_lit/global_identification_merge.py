@@ -11,7 +11,7 @@ import shutil
 import subprocess
 import tempfile
 from collections import Counter
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, fields
 from pathlib import Path
 from typing import Any, BinaryIO
@@ -28,6 +28,12 @@ from h2h_lit.checkpoint import atomic_write
 from h2h_lit.prior_survey_integration import (
     merge_identification_datasets_with_prior_surveys_and_snapshot,
     validate_authorized_prior_survey_imports,
+)
+from h2h_lit.prior_survey_source_relocation import (
+    ValidatedSourceRelocations,
+    prepare_source_relocation_package,
+    relocation_validation_boundary,
+    validate_source_relocation_manifest,
 )
 from h2h_lit.retrieval import load_review_dataset
 from h2h_lit.review import ReviewDataset
@@ -48,6 +54,7 @@ PRODUCTION_OUTPUT = (
     "outputs/production/star-external-retrieval-wave-001/execution/GlobalIdentificationMerge/v1"
 )
 GIB = 1024**3
+MIN_AVAILABLE_MEMORY_BYTES = 22 * GIB
 
 
 class GlobalIdentificationMergeError(RuntimeError):
@@ -57,6 +64,7 @@ class GlobalIdentificationMergeError(RuntimeError):
 @dataclass(frozen=True, slots=True)
 class ResourceAvailability:
     physical_memory_bytes: int
+    available_memory_bytes: int
     free_disk_bytes: int
 
 
@@ -148,6 +156,7 @@ def _implementation_bindings(root: Path) -> list[dict[str, Any]]:
     paths = (
         "src/h2h_lit/global_identification_merge.py",
         "src/h2h_lit/prior_survey_integration.py",
+        "src/h2h_lit/prior_survey_source_relocation.py",
         "src/h2h_lit/arxiv_snapshot_integration.py",
         "src/h2h_lit/artifact_import.py",
         "src/h2h_lit/review.py",
@@ -182,6 +191,8 @@ def build_global_merge_plan(
     root: str | Path,
     state: Mapping[str, Any],
     execution_state_raw_sha256: str,
+    source_relocation_binding: Mapping[str, Any] | None = None,
+    prior_survey_validator: Callable[..., None] | None = None,
 ) -> dict[str, Any]:
     """Select and bind only current authoritative identification datasets."""
 
@@ -202,7 +213,9 @@ def build_global_merge_plan(
         raise GlobalIdentificationMergeError("registered external-source inventory changed")
     try:
         validate_authorized_snapshot_substitution(root=root_path, state=state)
-        validate_authorized_prior_survey_imports(root=root_path, state=state)
+        (prior_survey_validator or validate_authorized_prior_survey_imports)(
+            root=root_path, state=state
+        )
     except (RuntimeError, ValueError) as exc:
         raise GlobalIdentificationMergeError(str(exc)) from exc
 
@@ -308,6 +321,16 @@ def build_global_merge_plan(
             "authorized_prior_surveys_included": sorted(EXPECTED_PRIOR_SURVEYS),
         },
     }
+    if source_relocation_binding is not None:
+        if (
+            source_relocation_binding.get("authoritative_execution_state_sha256")
+            != execution_state_raw_sha256
+            or source_relocation_binding.get("production_state_modified") is not False
+        ):
+            raise GlobalIdentificationMergeError(
+                "source-relocation binding differs from authoritative state"
+            )
+        plan["source_relocation"] = dict(source_relocation_binding)
     plan["plan_sha256"] = _json_hash(plan)
     return plan
 
@@ -335,12 +358,48 @@ def _physical_memory_bytes() -> int:
     raise GlobalIdentificationMergeError("cannot determine physical memory safely")
 
 
+def _available_memory_bytes() -> int:
+    meminfo = Path("/proc/meminfo")
+    if meminfo.is_file():
+        for line in meminfo.read_text(encoding="utf-8").splitlines():
+            if line.startswith("MemAvailable:"):
+                return int(line.split()[1]) * 1024
+        raise GlobalIdentificationMergeError("Linux MemAvailable is missing from /proc/meminfo")
+    if platform.system() == "Darwin":
+        try:
+            output = subprocess.check_output(["vm_stat"], text=True)
+        except (OSError, subprocess.CalledProcessError) as exc:
+            raise GlobalIdentificationMergeError(
+                "cannot determine available memory safely"
+            ) from exc
+        first_line, *stat_lines = output.splitlines()
+        marker = "page size of "
+        if marker not in first_line:
+            raise GlobalIdentificationMergeError("unexpected vm_stat output")
+        page_size = int(first_line.split(marker, 1)[1].split()[0])
+        available_pages = 0
+        accepted = {"Pages free", "Pages inactive", "Pages speculative"}
+        for line in stat_lines:
+            if ":" not in line:
+                continue
+            name, raw_value = line.split(":", 1)
+            if name in accepted:
+                available_pages += int(raw_value.strip().rstrip("."))
+        if available_pages <= 0:
+            raise GlobalIdentificationMergeError(
+                "vm_stat did not report conservative available pages"
+            )
+        return available_pages * page_size
+    raise GlobalIdentificationMergeError("cannot determine available memory safely")
+
+
 def probe_resources(output_parent: Path) -> ResourceAvailability:
     existing = output_parent.resolve()
     while not existing.exists():
         existing = existing.parent
     return ResourceAvailability(
         physical_memory_bytes=_physical_memory_bytes(),
+        available_memory_bytes=_available_memory_bytes(),
         free_disk_bytes=shutil.disk_usage(existing).free,
     )
 
@@ -351,17 +410,24 @@ def resource_preflight(
     input_bytes = sum(int(item["dataset"]["byte_size"]) for item in plan["inputs"])
     required_memory = input_bytes * 6 + GIB
     required_disk = input_bytes * 2 + GIB
+    installed_memory_sufficient = availability.physical_memory_bytes >= required_memory
+    available_memory_sufficient = availability.available_memory_bytes >= MIN_AVAILABLE_MEMORY_BYTES
     return {
         "input_serialized_bytes": input_bytes,
         "estimated_peak_memory_bytes": required_memory,
         "required_free_disk_bytes": required_disk,
         "physical_memory_bytes": availability.physical_memory_bytes,
+        "available_memory_bytes": availability.available_memory_bytes,
+        "minimum_available_memory_bytes": MIN_AVAILABLE_MEMORY_BYTES,
         "free_disk_bytes": availability.free_disk_bytes,
-        "memory_sufficient": availability.physical_memory_bytes >= required_memory,
+        "installed_memory_sufficient": installed_memory_sufficient,
+        "available_memory_sufficient": available_memory_sufficient,
+        "memory_sufficient": (installed_memory_sufficient and available_memory_sufficient),
         "disk_sufficient": availability.free_disk_bytes >= required_disk,
         "estimate_qualification": (
             "Conservative estimate for simultaneous Python ReviewDataset objects, "
-            "canonicalization indexes, and bounded streaming serialization."
+            "canonicalization indexes, and bounded streaming serialization; launch "
+            "also requires at least 22 GiB reported actually available."
         ),
     }
 
@@ -777,6 +843,17 @@ def validate_staged_merge_package(
             raise GlobalIdentificationMergeError(f"staged merge {key} artifact changed")
     for reference in manifest["implementation_bindings"]:
         _resolve_reference(root_path, reference)
+    relocation_binding = manifest.get("source_relocation")
+    if relocation_binding is not None:
+        validated_relocation = validate_source_relocation_manifest(
+            root=root_path,
+            state=state,
+            execution_state_raw_sha256=manifest["prepared_from_execution_state_sha256"],
+            manifest_path=relocation_binding["manifest"]["path"],
+            expected_manifest_sha256=relocation_binding["manifest"]["raw_sha256"],
+        )
+        if validated_relocation.binding(root_path) != relocation_binding:
+            raise GlobalIdentificationMergeError("staged merge source-relocation binding changed")
     return manifest
 
 
@@ -788,6 +865,8 @@ def prepare_staged_global_merge(
     output_dir: str | Path,
     preflight_only: bool = False,
     availability: ResourceAvailability | None = None,
+    source_relocation_binding: Mapping[str, Any] | None = None,
+    prior_survey_validator: Callable[..., None] | None = None,
 ) -> dict[str, Any]:
     """Prepare a bound staging merge without mutating production state."""
 
@@ -798,6 +877,8 @@ def prepare_staged_global_merge(
         root=root_path,
         state=state,
         execution_state_raw_sha256=execution_state_raw_sha256,
+        source_relocation_binding=source_relocation_binding,
+        prior_survey_validator=prior_survey_validator,
     )
     manifest_path = output / "package_manifest.json"
     if manifest_path.is_file():
@@ -870,6 +951,8 @@ def prepare_staged_global_merge(
         "prisma_changed": False,
         "production_state_modified": False,
     }
+    if source_relocation_binding is not None:
+        manifest["source_relocation"] = dict(source_relocation_binding)
     manifest_reference = _write_json_once(manifest_path, manifest)
     return {
         "manifest": manifest,
@@ -1036,7 +1119,11 @@ def authorize_production_global_merge(
     return state, registration
 
 
-def _load_production_state(root: Path) -> tuple[Path, bytes, dict[str, Any]]:
+def _load_production_state(
+    root: Path,
+    *,
+    state_loader: Callable[..., dict[str, Any]] | None = None,
+) -> tuple[Path, bytes, dict[str, Any]]:
     from h2h_lit.external_retrieval_wave import (
         EXECUTION_STATE_PATH,
         _load_execution_state,
@@ -1047,7 +1134,33 @@ def _load_production_state(root: Path) -> tuple[Path, bytes, dict[str, Any]]:
     wave, preflight = validate_persisted_external_preflight(root=root)
     state_path = _safe_output_path(root, EXECUTION_STATE_PATH)
     raw = state_path.read_bytes()
-    return state_path, raw, _load_execution_state(state_path, root, wave, preflight)
+    loader = state_loader or _load_execution_state
+    return state_path, raw, loader(state_path, root, wave, preflight)
+
+
+def _validate_requested_source_relocation(
+    *,
+    root: Path,
+    manifest_path: str | Path,
+    expected_manifest_sha256: str,
+) -> ValidatedSourceRelocations:
+    from h2h_lit.external_retrieval_wave import (
+        EXECUTION_STATE_PATH,
+        _safe_output_path,
+        validate_persisted_external_preflight,
+    )
+
+    validate_persisted_external_preflight(root=root)
+    state_path = _safe_output_path(root, EXECUTION_STATE_PATH)
+    raw = state_path.read_bytes()
+    provisional_state = json.loads(raw)
+    return validate_source_relocation_manifest(
+        root=root,
+        state=provisional_state,
+        execution_state_raw_sha256=hashlib.sha256(raw).hexdigest(),
+        manifest_path=manifest_path,
+        expected_manifest_sha256=expected_manifest_sha256,
+    )
 
 
 def prepare_global_merge_locked(
@@ -1056,12 +1169,31 @@ def prepare_global_merge_locked(
     output_dir: str | Path,
     preflight_only: bool = False,
     availability: ResourceAvailability | None = None,
+    source_relocation_manifest: str | Path | None = None,
+    source_relocation_manifest_sha256: str | None = None,
 ) -> dict[str, Any]:
     from h2h_lit.external_retrieval_wave import _exclusive_external_source_session
 
     root_path = Path(root).resolve()
     with _exclusive_external_source_session(root_path):
-        state_path, raw, state = _load_production_state(root_path)
+        if (source_relocation_manifest is None) != (source_relocation_manifest_sha256 is None):
+            raise GlobalIdentificationMergeError(
+                "source relocation requires both manifest path and SHA-256"
+            )
+        relocations = None
+        if source_relocation_manifest is not None:
+            relocations = _validate_requested_source_relocation(
+                root=root_path,
+                manifest_path=source_relocation_manifest,
+                expected_manifest_sha256=str(source_relocation_manifest_sha256),
+            )
+        boundary = relocation_validation_boundary(relocations) if relocations else None
+        if boundary is None:
+            state_path, raw, state = _load_production_state(root_path)
+        else:
+            state_path, raw, state = _load_production_state(
+                root_path, state_loader=boundary.execution_state_loader
+            )
         result = prepare_staged_global_merge(
             root=root_path,
             state=state,
@@ -1069,9 +1201,36 @@ def prepare_global_merge_locked(
             output_dir=output_dir,
             preflight_only=preflight_only,
             availability=availability,
+            source_relocation_binding=(relocations.binding(root_path) if relocations else None),
+            prior_survey_validator=(
+                boundary.prior_survey_validator
+                if boundary is not None
+                else validate_authorized_prior_survey_imports
+            ),
         )
         if state_path.read_bytes() != raw:
             raise GlobalIdentificationMergeError("staging global merge changed production state")
+        return result
+
+
+def prepare_source_relocation_package_locked(
+    *, root: str | Path, output_dir: str | Path
+) -> dict[str, Any]:
+    from h2h_lit.external_retrieval_wave import _exclusive_external_source_session
+
+    root_path = Path(root).resolve()
+    with _exclusive_external_source_session(root_path):
+        state_path, raw, state = _load_production_state(root_path)
+        result = prepare_source_relocation_package(
+            root=root_path,
+            state=state,
+            execution_state_raw_sha256=hashlib.sha256(raw).hexdigest(),
+            output_dir=output_dir,
+        )
+        if state_path.read_bytes() != raw:
+            raise GlobalIdentificationMergeError(
+                "source-relocation preparation changed production state"
+            )
         return result
 
 
@@ -1131,11 +1290,14 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--root", type=Path, default=Path("."))
     modes = parser.add_mutually_exclusive_group(required=True)
     modes.add_argument("--prepare-global-identification-merge", action="store_true")
+    modes.add_argument("--prepare-prior-survey-source-relocation", action="store_true")
     modes.add_argument("--authorize-global-identification-merge", action="store_true")
     parser.add_argument("--preflight-only", action="store_true")
     parser.add_argument("--output-dir", type=Path)
     parser.add_argument("--package-dir", type=Path)
     parser.add_argument("--package-manifest-sha256")
+    parser.add_argument("--source-relocation-manifest", type=Path)
+    parser.add_argument("--source-relocation-manifest-sha256")
     args = parser.parse_args(argv)
     if args.prepare_global_identification_merge:
         if args.output_dir is None:
@@ -1144,12 +1306,27 @@ def main(argv: list[str] | None = None) -> int:
             root=args.root,
             output_dir=args.output_dir,
             preflight_only=args.preflight_only,
+            source_relocation_manifest=args.source_relocation_manifest,
+            source_relocation_manifest_sha256=(args.source_relocation_manifest_sha256),
+        )
+    elif args.prepare_prior_survey_source_relocation:
+        if args.preflight_only:
+            parser.error("--preflight-only is only valid for global-merge staging")
+        if args.output_dir is None:
+            parser.error("--output-dir is required for source relocation")
+        if args.source_relocation_manifest or args.source_relocation_manifest_sha256:
+            parser.error("source relocation inputs are not valid while preparing them")
+        result = prepare_source_relocation_package_locked(
+            root=args.root,
+            output_dir=args.output_dir,
         )
     else:
         if args.preflight_only:
             parser.error("--preflight-only is only valid for staging")
         if args.package_dir is None or not args.package_manifest_sha256:
             parser.error("--package-dir and --package-manifest-sha256 are required")
+        if args.source_relocation_manifest or args.source_relocation_manifest_sha256:
+            parser.error("source relocation is staging-only")
         result = authorize_global_merge_locked(
             root=args.root,
             package_dir=args.package_dir,
