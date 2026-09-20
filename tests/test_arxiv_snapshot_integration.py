@@ -7,6 +7,8 @@ from pathlib import Path
 import pytest
 
 from h2h_lit.arxiv_snapshot_integration import (
+    DIRECT_IDENTITY_MATCH_RULE,
+    PROPAGATED_IDENTITY_MATCH_RULE,
     ArxivSnapshotIntegrationError,
     ValidatedSnapshotPackage,
     apply_snapshot_adjudications,
@@ -222,6 +224,110 @@ def _fixture() -> tuple[ReviewDataset, ReviewDataset, ValidatedSnapshotPackage]:
     return existing, snapshot, package
 
 
+def _canonical_group_propagation_fixture(
+    *,
+    prior_arxiv_id: str | None = None,
+    prior_identity_resolution: str = "PROVISIONAL",
+) -> tuple[list[ReviewDataset], ValidatedSnapshotPackage]:
+    title = "A Multi-scale Visual Analytics Approach for Exploring Biomedical Knowledge"
+    doi = "10.1109/vahc53616.2021.00010"
+    arxiv_id = "2109.06828"
+    existing = _dataset(
+        source="SemanticScholar",
+        run_id="semantic-scholar-run",
+        records=[
+            (
+                occurrence_id,
+                LiteratureRecord(
+                    title=title.replace("Multi-scale", "Multi-Scale"),
+                    authors=["Fahd Husain", "Rosa Romero-Gómez"],
+                    year=2021,
+                    doi=doi,
+                    arxiv_id=arxiv_id,
+                    source_identifier="3b33acee6261b11aefb05ee631627707d3096004",
+                    source_database="SemanticScholar",
+                ),
+            )
+            for occurrence_id in (
+                "semantic-alpha-qf01",
+                "semantic-alpha-qf03",
+                "semantic-alpha-qf05",
+            )
+        ],
+    )
+    snapshot = _dataset(
+        source="arXivSnapshotV303",
+        run_id="arxiv-snapshot-v303:2109.06828",
+        records=[
+            (
+                occurrence_id,
+                LiteratureRecord(
+                    title=title,
+                    authors=["Fahd Husain", "Rosa Romero-Gomez"],
+                    year=2021,
+                    arxiv_id=arxiv_id,
+                    source_identifier=arxiv_id,
+                    source_database="arXivSnapshotV303",
+                ),
+            )
+            for occurrence_id in ("snapshot-2109-qf01", "snapshot-2109-qf03")
+        ],
+    )
+    prior = _dataset(
+        source="PriorSurveySeed",
+        run_id="prior-survey-ebk25",
+        records=[
+            (
+                occurrence_id,
+                LiteratureRecord(
+                    title=title,
+                    authors=["Husain"],
+                    year=2021,
+                    arxiv_id=prior_arxiv_id if index == 0 else None,
+                    source_identifier=f"EBK25:{occurrence_id}",
+                    source_database="PriorSurveySeed",
+                    original_metadata={
+                        "identity_resolution": prior_identity_resolution,
+                        "identity_conflict_status": "NO_RECORDED_METADATA_CONFLICT",
+                        "source_survey_membership": "UNCONFIRMED",
+                        "our_star_eligibility": "UNASSESSED",
+                        "provisional_identity_group_id": "ebk25-candidate:2109.06828",
+                    },
+                ),
+            )
+            for index, occurrence_id in enumerate(
+                ("ebk25-assignments-final-340", "ebk25-nicolas-wip-9")
+            )
+        ],
+    )
+    package = ValidatedSnapshotPackage(
+        package_dir=Path("."),
+        package_manifest={},
+        package_manifest_sha256="package-sha",
+        import_manifest={},
+        amendment_v1={},
+        snapshot_dataset=snapshot,
+        identity_proposals=[
+            {
+                "proposal_id": "arxiv-id-link:57bf3d22f010f8f485e372c8",
+                "normalized_arxiv_id": arxiv_id,
+                "proposed_disposition": "same_bibliographic_record",
+                "decision_status": "PROPOSED_NOT_APPLIED",
+                "conflicts": [],
+                "generic_dedupe_rule_changed": False,
+                "candidate_identity": {
+                    "arxiv_id": arxiv_id,
+                    "staging_candidate_id": "snapshot-candidate:2a8f90acc5db191b70d042c0",
+                    "source_line_number": 1529650,
+                },
+                "existing_identity": {"arxiv_id": arxiv_id},
+            }
+        ],
+        relationship_proposals=[],
+    )
+    return [existing, snapshot, prior], package
+
+
 def test_actual_global_merge_preserves_occurrences_and_adjudications() -> None:
     existing, snapshot, package = _fixture()
     merged = merge_identification_datasets_with_snapshot_integration(
@@ -254,6 +360,235 @@ def test_actual_global_merge_preserves_occurrences_and_adjudications() -> None:
         for item in adjudications
     )
     assert len(merged.duplicate_decisions) == 7
+
+
+def test_direct_adjudication_allows_snapshot_only_doi_group() -> None:
+    arxiv_id = "2003.04655"
+    existing = _dataset(
+        source="SemanticScholar",
+        run_id="existing-doi-asymmetric",
+        records=[
+            (
+                "existing-2003",
+                LiteratureRecord(
+                    title="Lung Infection Quantification of COVID-19 in CT Images with Deep Learning",
+                    arxiv_id=arxiv_id,
+                    source_identifier="semantic-2003",
+                    source_database="SemanticScholar",
+                ),
+            )
+        ],
+    )
+    snapshot = _dataset(
+        source="arXivSnapshotV303",
+        run_id="arxiv-snapshot-v303:2003.04655",
+        records=[
+            (
+                "snapshot-2003",
+                LiteratureRecord(
+                    title="Lung Infection Quantification of COVID-19 in CT Images with Deep Learning",
+                    doi="10.1002/mp.14609",
+                    arxiv_id=arxiv_id,
+                    source_identifier=arxiv_id,
+                    source_database="arXivSnapshotV303",
+                ),
+            )
+        ],
+    )
+    package = ValidatedSnapshotPackage(
+        package_dir=Path("."),
+        package_manifest={},
+        package_manifest_sha256="package-sha",
+        import_manifest={},
+        amendment_v1={},
+        snapshot_dataset=snapshot,
+        identity_proposals=[
+            {
+                "proposal_id": "arxiv-id-link:52c935c86fc26e42a588413e",
+                "normalized_arxiv_id": arxiv_id,
+                "candidate_identity": {
+                    "arxiv_id": arxiv_id,
+                    "source_line_number": 1255011,
+                },
+            }
+        ],
+        relationship_proposals=[],
+    )
+
+    merged = merge_identification_datasets_with_snapshot_integration(
+        [existing, snapshot], package, created_at=STAMP
+    )
+
+    assert len(merged.canonical_records) == 1
+    decision = next(
+        item
+        for item in merged.effective_duplicate_decisions()
+        if item.occurrence_id == "snapshot-2003"
+    )
+    assert decision.match_rule == DIRECT_IDENTITY_MATCH_RULE
+    assert decision.match_key == "arxiv:2003.04655"
+    assert (
+        merged.retrieval_runs[1]
+        .metadata["arxiv_snapshot_v303_integration"]
+        ["propagated_generic_title_group_occurrence_count"]
+        == 0
+    )
+    merged.validate()
+
+
+def test_arxiv_2109_group_propagation_preserves_all_seven_occurrences() -> None:
+    datasets, package = _canonical_group_propagation_fixture()
+    merged = merge_identification_datasets_with_snapshot_integration(
+        datasets, package, created_at=STAMP
+    )
+
+    expected_occurrences = {
+        "semantic-alpha-qf01",
+        "semantic-alpha-qf03",
+        "semantic-alpha-qf05",
+        "snapshot-2109-qf01",
+        "snapshot-2109-qf03",
+        "ebk25-assignments-final-340",
+        "ebk25-nicolas-wip-9",
+    }
+    assert {item.occurrence_id for item in merged.occurrences} == expected_occurrences
+    assert len(merged.canonical_records) == 1
+    target = merged.canonical_records[0]
+    assert target.metadata["dedupe_key"] == "doi:10.1109/vahc53616.2021.00010"
+    assert set(target.occurrence_ids) == expected_occurrences
+    assert all(
+        item.metadata.get("dedupe_key")
+        != "title:a multiscale visual analytics approach for exploring biomedical knowledge"
+        for item in merged.canonical_records
+    )
+
+    effective = {
+        item.occurrence_id: item for item in merged.effective_duplicate_decisions()
+    }
+    assert set(effective) == expected_occurrences
+    assert all(
+        decision.canonical_record_id == target.canonical_id
+        and decision.survivor_occurrence_id == target.survivor_occurrence_id
+        for decision in effective.values()
+    )
+    assert {
+        item.occurrence_id
+        for item in effective.values()
+        if item.match_rule == DIRECT_IDENTITY_MATCH_RULE
+    } == {"snapshot-2109-qf01", "snapshot-2109-qf03"}
+    propagated = {
+        item.occurrence_id: item
+        for item in effective.values()
+        if item.match_rule == PROPAGATED_IDENTITY_MATCH_RULE
+    }
+    assert set(propagated) == {
+        "ebk25-assignments-final-340",
+        "ebk25-nicolas-wip-9",
+    }
+    all_decisions = {item.decision_id: item for item in merged.duplicate_decisions}
+    occurrence_by_id = {item.occurrence_id: item for item in merged.occurrences}
+    for occurrence_id, decision in propagated.items():
+        assert len(decision.provenance.supersedes_ids) == 1
+        previous = all_decisions[decision.provenance.supersedes_ids[0]]
+        assert previous.occurrence_id == occurrence_id
+        assert previous.match_rule == "doi_first_title_fallback"
+        assert previous.match_key == decision.match_key
+        assert decision.provenance.metadata == {
+            "proposal_id": "arxiv-id-link:57bf3d22f010f8f485e372c8",
+            "normalized_arxiv_id": "2109.06828",
+            "candidate_source_line_number": 1529650,
+            "target_resolved_after_global_merge": True,
+            "generic_dedupe_rule_changed": False,
+            "decision_application": "propagated_generic_title_group_membership",
+            "propagated_from_canonical_id": previous.canonical_record_id,
+            "propagated_from_decision_id": previous.decision_id,
+            "propagated_from_match_key": previous.match_key,
+            "propagated_from_match_rule": previous.match_rule,
+            "identity_restrictions_preserved": True,
+        }
+        record_metadata = occurrence_by_id[occurrence_id].record.original_metadata
+        assert record_metadata["identity_resolution"] == "PROVISIONAL"
+        assert record_metadata["source_survey_membership"] == "UNCONFIRMED"
+        assert record_metadata["our_star_eligibility"] == "UNASSESSED"
+    marker = merged.retrieval_runs[1].metadata["arxiv_snapshot_v303_integration"]
+    assert marker["propagated_generic_title_group_occurrence_count"] == 2
+    assert marker["related_version_links"] == []
+    merged.validate()
+
+
+def test_group_propagation_rejects_contradictory_arxiv_identifier() -> None:
+    datasets, package = _canonical_group_propagation_fixture(
+        prior_arxiv_id="9999.0001"
+    )
+
+    with pytest.raises(
+        ArxivSnapshotIntegrationError,
+        match="generic title group has a contradictory arXiv identifier",
+    ):
+        merge_identification_datasets_with_snapshot_integration(
+            datasets, package, created_at=STAMP
+        )
+
+
+def test_group_propagation_rejects_unresolved_identity_restriction() -> None:
+    datasets, package = _canonical_group_propagation_fixture(
+        prior_identity_resolution="UNRESOLVED"
+    )
+
+    with pytest.raises(
+        ArxivSnapshotIntegrationError,
+        match="generic title group has an unresolved identity restriction",
+    ):
+        merge_identification_datasets_with_snapshot_integration(
+            datasets, package, created_at=STAMP
+        )
+
+
+def test_group_propagation_survives_snapshot_aware_remerge() -> None:
+    datasets, package = _canonical_group_propagation_fixture()
+    first = merge_identification_datasets_with_snapshot_integration(
+        datasets, package, created_at=STAMP
+    )
+    later = merge_identification_datasets_with_snapshot_integration(
+        [first], package, created_at=STAMP
+    )
+
+    assert len(later.occurrences) == 7
+    assert len(later.canonical_records) == 1
+    assert set(later.canonical_records[0].occurrence_ids) == {
+        item.occurrence_id for item in later.occurrences
+    }
+    effective = later.effective_duplicate_decisions()
+    assert sum(item.match_rule == DIRECT_IDENTITY_MATCH_RULE for item in effective) == 2
+    assert sum(item.match_rule == PROPAGATED_IDENTITY_MATCH_RULE for item in effective) == 2
+    assert all(
+        item.record.original_metadata.get("identity_resolution") == "PROVISIONAL"
+        for item in later.occurrences
+        if item.record.source_database == "PriorSurveySeed"
+    )
+    later.validate()
+
+
+def test_group_propagation_remerge_rejects_changed_provenance() -> None:
+    datasets, package = _canonical_group_propagation_fixture()
+    merged = merge_identification_datasets_with_snapshot_integration(
+        datasets, package, created_at=STAMP
+    )
+    tampered = copy.deepcopy(merged)
+    propagated = next(
+        item
+        for item in tampered.duplicate_decisions
+        if item.match_rule == PROPAGATED_IDENTITY_MATCH_RULE
+    )
+    propagated.provenance.metadata["propagated_from_match_key"] = "title:changed"
+
+    with pytest.raises(
+        ArxivSnapshotIntegrationError,
+        match="snapshot propagated identity provenance changed",
+    ):
+        merge_identification_datasets_with_snapshot_integration(
+            [tampered], package, created_at=STAMP
+        )
 
 
 def test_related_versions_remain_separate_and_links_survive_later_merge() -> None:

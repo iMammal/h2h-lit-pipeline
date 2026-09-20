@@ -82,6 +82,8 @@ INTEGRATION_OUTPUT = (
     "arXivSnapshotV303"
 )
 INTEGRATION_MARKER = "arxiv_snapshot_v303_integration"
+DIRECT_IDENTITY_MATCH_RULE = "adjudicated_exact_normalized_arxiv_id"
+PROPAGATED_IDENTITY_MATCH_RULE = "propagated_adjudicated_generic_title_group"
 
 
 class ArxivSnapshotIntegrationError(RuntimeError):
@@ -863,27 +865,149 @@ def apply_snapshot_adjudications(
     proposal_by_arxiv = {
         str(item["normalized_arxiv_id"]): item for item in package.identity_proposals
     }
-
+    planned_groups: list[
+        tuple[str, dict[str, Any], str, str, list[str], set[str]]
+    ] = []
+    claimed_groups: dict[str, tuple[str, str]] = {}
     for normalized_id, occurrence_ids in candidate_occurrences.items():
         target = targets[normalized_id]
         proposal = proposal_by_arxiv[normalized_id]
-        for occurrence_id in occurrence_ids:
-            previous = effective[occurrence_id]
-            old_canonical = canonical_by_id[previous.canonical_record_id]
+        candidate_ids = set(occurrence_ids)
+        old_canonical_ids = list(
+            dict.fromkeys(effective[item].canonical_record_id for item in occurrence_ids)
+        )
+        for old_canonical_id in old_canonical_ids:
+            old_canonical = canonical_by_id[old_canonical_id]
             if old_canonical.canonical_id == target.canonical_id:
                 raise ArxivSnapshotIntegrationError(
                     "arXiv-ID-only proposal already matches under the generic rule"
                 )
-            if any(
-                occurrence_by_id[item].record.source_database
-                != "arXivSnapshotV303"
-                for item in old_canonical.occurrence_ids
-            ):
+            claimed = claimed_groups.get(old_canonical.canonical_id)
+            if claimed is not None and claimed != (normalized_id, target.canonical_id):
                 raise ArxivSnapshotIntegrationError(
-                    "an arXiv-ID-only proposal conflicts with generic canonicalization"
+                    "a generic canonical group has competing approved identity targets"
                 )
-            old_canonical.occurrence_ids.remove(occurrence_id)
-            target.occurrence_ids.append(occurrence_id)
+            claimed_groups[old_canonical.canonical_id] = (
+                normalized_id,
+                target.canonical_id,
+            )
+            group_occurrence_ids = list(old_canonical.occurrence_ids)
+            direct_ids = candidate_ids.intersection(group_occurrence_ids)
+            if not direct_ids:
+                raise ArxivSnapshotIntegrationError(
+                    "approved snapshot occurrence left its generic canonical group"
+                )
+            group_key = str(old_canonical.metadata.get("dedupe_key") or "")
+            propagated_ids = set(group_occurrence_ids) - direct_ids
+            if propagated_ids and not group_key.startswith("title:"):
+                raise ArxivSnapshotIntegrationError(
+                    "arXiv-ID-only propagation requires a generic title group"
+                )
+            target_key = record_key(target.record)
+            for member_id in group_occurrence_ids:
+                member = occurrence_by_id[member_id]
+                previous = effective[member_id]
+                member_arxiv_id = _normalize_arxiv_id(member.record.arxiv_id)
+                member_key = record_key(member.record)
+                identity_resolution = member.record.original_metadata.get(
+                    "identity_resolution"
+                )
+                identity_conflict = member.record.original_metadata.get(
+                    "identity_conflict_status"
+                )
+                if previous.canonical_record_id != old_canonical.canonical_id:
+                    raise ArxivSnapshotIntegrationError(
+                        "generic canonical membership changed during adjudication"
+                    )
+                if (
+                    previous.match_rule != "doi_first_title_fallback"
+                    or previous.match_key != group_key
+                    or member_key != group_key
+                ):
+                    raise ArxivSnapshotIntegrationError(
+                        "arXiv-ID-only propagation requires current generic title evidence"
+                    )
+                if member_arxiv_id not in {None, normalized_id}:
+                    raise ArxivSnapshotIntegrationError(
+                        "generic title group has a contradictory arXiv identifier"
+                    )
+                if (
+                    member_id not in direct_ids
+                    and member.record.doi
+                    and member_key != target_key
+                ):
+                    raise ArxivSnapshotIntegrationError(
+                        "generic title group has a contradictory DOI identifier"
+                    )
+                if member_id not in direct_ids and identity_resolution == "UNRESOLVED":
+                    raise ArxivSnapshotIntegrationError(
+                        "generic title group has an unresolved identity restriction"
+                    )
+                if member_id not in direct_ids and identity_conflict not in {
+                    None,
+                    "",
+                    "NO_RECORDED_METADATA_CONFLICT",
+                }:
+                    raise ArxivSnapshotIntegrationError(
+                        "generic title group has an explicit identity conflict"
+                    )
+            planned_groups.append(
+                (
+                    normalized_id,
+                    proposal,
+                    target.canonical_id,
+                    old_canonical.canonical_id,
+                    group_occurrence_ids,
+                    direct_ids,
+                )
+            )
+
+    source_group_ids = {item[3] for item in planned_groups}
+    if any(item[2] in source_group_ids for item in planned_groups):
+        raise ArxivSnapshotIntegrationError(
+            "approved identity targets form competing canonical-group transfers"
+        )
+
+    propagated_count = 0
+    for (
+        normalized_id,
+        proposal,
+        target_canonical_id,
+        old_canonical_id,
+        group_occurrence_ids,
+        direct_ids,
+    ) in planned_groups:
+        target = canonical_by_id[target_canonical_id]
+        old_canonical = canonical_by_id[old_canonical_id]
+        old_canonical.occurrence_ids.clear()
+        target.occurrence_ids.extend(group_occurrence_ids)
+        for occurrence_id in group_occurrence_ids:
+            previous = effective[occurrence_id]
+            direct = occurrence_id in direct_ids
+            provenance_metadata = {
+                "proposal_id": proposal["proposal_id"],
+                "normalized_arxiv_id": normalized_id,
+                "candidate_source_line_number": proposal["candidate_identity"][
+                    "source_line_number"
+                ],
+                "target_resolved_after_global_merge": True,
+                "generic_dedupe_rule_changed": False,
+                "decision_application": (
+                    "direct_arxiv_id_adjudication"
+                    if direct
+                    else "propagated_generic_title_group_membership"
+                ),
+            }
+            if not direct:
+                provenance_metadata.update(
+                    {
+                        "propagated_from_canonical_id": old_canonical_id,
+                        "propagated_from_decision_id": previous.decision_id,
+                        "propagated_from_match_key": previous.match_key,
+                        "propagated_from_match_rule": previous.match_rule,
+                        "identity_restrictions_preserved": True,
+                    }
+                )
             decision = DuplicateDecision(
                 decision_id=_stable_id(
                     "dedupe-adjudication",
@@ -896,8 +1020,12 @@ def apply_snapshot_adjudications(
                 canonical_record_id=target.canonical_id,
                 survivor_occurrence_id=target.survivor_occurrence_id,
                 outcome=DedupeOutcome.DUPLICATE,
-                match_key=f"arxiv:{normalized_id}",
-                match_rule="adjudicated_exact_normalized_arxiv_id",
+                match_key=(f"arxiv:{normalized_id}" if direct else previous.match_key),
+                match_rule=(
+                    DIRECT_IDENTITY_MATCH_RULE
+                    if direct
+                    else PROPAGATED_IDENTITY_MATCH_RULE
+                ),
                 provenance=DecisionProvenance(
                     actor=DecisionActor(
                         actor_id="h2h_lit.arxiv_snapshot_integration",
@@ -910,25 +1038,31 @@ def apply_snapshot_adjudications(
                     created_at=created_at,
                     supersedes_ids=[previous.decision_id],
                     source_artifact_id=package.package_manifest_sha256,
-                    metadata={
-                        "proposal_id": proposal["proposal_id"],
-                        "normalized_arxiv_id": normalized_id,
-                        "candidate_source_line_number": proposal[
-                            "candidate_identity"
-                        ]["source_line_number"],
-                        "target_resolved_after_global_merge": True,
-                        "generic_dedupe_rule_changed": False,
-                    },
+                    metadata=provenance_metadata,
                 ),
             )
             dataset.duplicate_decisions.append(decision)
             effective[occurrence_id] = decision
-            occurrence_by_id[occurrence_id].metadata["identity_adjudication"] = {
+            metadata_key = (
+                "identity_adjudication"
+                if direct
+                else "identity_adjudication_propagation"
+            )
+            occurrence_by_id[occurrence_id].metadata[metadata_key] = {
                 "decision_id": decision.decision_id,
                 "proposal_id": proposal["proposal_id"],
                 "package_manifest_sha256": package.package_manifest_sha256,
                 "normalized_arxiv_id": normalized_id,
             }
+            if not direct:
+                occurrence_by_id[occurrence_id].metadata[metadata_key].update(
+                    {
+                        "propagated_from_canonical_id": old_canonical_id,
+                        "propagated_from_decision_id": previous.decision_id,
+                        "propagated_from_match_key": previous.match_key,
+                    }
+                )
+                propagated_count += 1
 
     dataset.canonical_records = [
         item for item in dataset.canonical_records if item.occurrence_ids
@@ -952,6 +1086,7 @@ def apply_snapshot_adjudications(
     snapshot_runs[0].metadata[INTEGRATION_MARKER] = {
         "package_manifest_sha256": package.package_manifest_sha256,
         "same_record_adjudication_count": len(package.identity_proposals),
+        "propagated_generic_title_group_occurrence_count": propagated_count,
         "related_version_candidate_count": len(
             {
                 item["candidate_identity"]["staging_candidate_id"]
@@ -987,6 +1122,9 @@ def validate_applied_snapshot_adjudications(
         marker.get("package_manifest_sha256") != package.package_manifest_sha256
         or marker.get("same_record_adjudication_count")
         != len(package.identity_proposals)
+        or not isinstance(
+            marker.get("propagated_generic_title_group_occurrence_count"), int
+        )
         or len(marker.get("related_version_links", []))
         != len(package.relationship_proposals)
         or marker.get("provider_completeness") != "UNPROVEN"
@@ -1011,17 +1149,20 @@ def validate_applied_snapshot_adjudications(
                 "identity_adjudication", {}
             )
             if (
-                decision.match_rule != "adjudicated_exact_normalized_arxiv_id"
+                decision.match_rule != DIRECT_IDENTITY_MATCH_RULE
                 or decision.match_key != f"arxiv:{normalized_id}"
                 or decision.provenance.authority is not DecisionAuthority.ADJUDICATED
                 or decision.provenance.source_artifact_id
                 != package.package_manifest_sha256
                 or decision.provenance.metadata.get("proposal_id")
                 != proposal["proposal_id"]
+                or decision.provenance.metadata.get("decision_application")
+                != "direct_arxiv_id_adjudication"
                 or metadata.get("decision_id") != decision.decision_id
                 or metadata.get("proposal_id") != proposal["proposal_id"]
                 or metadata.get("package_manifest_sha256")
                 != package.package_manifest_sha256
+                or metadata.get("normalized_arxiv_id") != normalized_id
             ):
                 raise ArxivSnapshotIntegrationError(
                     "snapshot identity adjudication provenance changed"
@@ -1034,6 +1175,67 @@ def validate_applied_snapshot_adjudications(
                 raise ArxivSnapshotIntegrationError(
                     "snapshot adjudication target identity changed"
                 )
+    all_decisions = {item.decision_id: item for item in dataset.duplicate_decisions}
+    propagated = [
+        item
+        for item in effective.values()
+        if item.match_rule == PROPAGATED_IDENTITY_MATCH_RULE
+    ]
+    if len(propagated) != marker["propagated_generic_title_group_occurrence_count"]:
+        raise ArxivSnapshotIntegrationError(
+            "snapshot propagated identity decision count changed"
+        )
+    for decision in propagated:
+        provenance = decision.provenance
+        metadata = provenance.metadata
+        normalized_id = metadata.get("normalized_arxiv_id")
+        proposal = proposals.get(normalized_id)
+        occurrence = occurrence_by_id[decision.occurrence_id]
+        occurrence_metadata = occurrence.metadata.get(
+            "identity_adjudication_propagation", {}
+        )
+        previous_id = metadata.get("propagated_from_decision_id")
+        previous = all_decisions.get(previous_id)
+        if (
+            proposal is None
+            or occurrence.record.source_database == "arXivSnapshotV303"
+            or provenance.authority is not DecisionAuthority.ADJUDICATED
+            or provenance.source_artifact_id != package.package_manifest_sha256
+            or provenance.supersedes_ids != [previous_id]
+            or metadata.get("proposal_id") != proposal["proposal_id"]
+            or metadata.get("decision_application")
+            != "propagated_generic_title_group_membership"
+            or metadata.get("identity_restrictions_preserved") is not True
+            or previous is None
+            or previous.occurrence_id != decision.occurrence_id
+            or previous.match_rule != "doi_first_title_fallback"
+            or previous.match_key != decision.match_key
+            or metadata.get("propagated_from_canonical_id")
+            != previous.canonical_record_id
+            or metadata.get("propagated_from_match_key") != previous.match_key
+            or metadata.get("propagated_from_match_rule") != previous.match_rule
+            or occurrence_metadata.get("decision_id") != decision.decision_id
+            or occurrence_metadata.get("proposal_id") != proposal["proposal_id"]
+            or occurrence_metadata.get("package_manifest_sha256")
+            != package.package_manifest_sha256
+            or occurrence_metadata.get("normalized_arxiv_id") != normalized_id
+            or occurrence_metadata.get("propagated_from_decision_id") != previous_id
+            or occurrence_metadata.get("propagated_from_canonical_id")
+            != previous.canonical_record_id
+            or occurrence_metadata.get("propagated_from_match_key")
+            != decision.match_key
+        ):
+            raise ArxivSnapshotIntegrationError(
+                "snapshot propagated identity provenance changed"
+            )
+        survivor = occurrence_by_id[decision.survivor_occurrence_id]
+        if (
+            survivor.record.source_database == "arXivSnapshotV303"
+            or _normalize_arxiv_id(survivor.record.arxiv_id) != normalized_id
+        ):
+            raise ArxivSnapshotIntegrationError(
+                "snapshot propagated identity target changed"
+            )
     expected_proposal_ids = {
         item["proposal_id"] for item in package.relationship_proposals
     }
