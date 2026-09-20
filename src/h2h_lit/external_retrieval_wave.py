@@ -19,6 +19,12 @@ from types import SimpleNamespace
 from typing import Any
 
 from h2h_lit.acm_field_execution import load_acm_final_reconciliation_manifest
+from h2h_lit.arxiv_snapshot_integration import (
+    ArxivSnapshotIntegrationError,
+    authorize_snapshot_substitution,
+    prepare_integration_dry_run,
+    validate_authorized_snapshot_substitution,
+)
 from h2h_lit.checkpoint import CheckpointStore, atomic_write
 from h2h_lit.http import HttpClient, RequestsHttpClient
 from h2h_lit.models import ProcessingStatus
@@ -7891,6 +7897,101 @@ def _exclusive_external_source_session(root: Path):
             fcntl.flock(lock_handle.fileno(), fcntl.LOCK_UN)
 
 
+def prepare_arxiv_snapshot_integration(
+    *,
+    root: str | Path,
+    package_dir: str | Path,
+    output_dir: str | Path,
+) -> dict[str, Any]:
+    """Validate and stage the snapshot integration without production mutation."""
+
+    root_path = Path(root).resolve()
+    with _exclusive_external_source_session(root_path):
+        wave, preflight = validate_persisted_external_preflight(root=root_path)
+        state_path = _safe_output_path(root_path, EXECUTION_STATE_PATH)
+        if not state_path.is_file():
+            raise ExternalRetrievalWaveError("external execution state does not exist")
+        state_before = state_path.read_bytes()
+        state = _load_execution_state(state_path, root_path, wave, preflight)
+        result = prepare_integration_dry_run(
+            root=root_path,
+            state=state,
+            package_dir=package_dir,
+            output_dir=output_dir,
+        )
+        if state_path.read_bytes() != state_before:
+            raise ExternalRetrievalWaveError(
+                "snapshot integration dry run changed production state"
+            )
+        return result
+
+
+def authorize_arxiv_snapshot_integration(
+    *,
+    root: str | Path,
+    package_dir: str | Path,
+    amendment_v2_path: str | Path,
+    timestamp: Callable[[], str] = utc_now,
+) -> dict[str, Any]:
+    """Authorize the v303 replacement route while preserving API episode state."""
+
+    root_path = Path(root).resolve()
+    with _exclusive_external_source_session(root_path):
+        wave, preflight = validate_persisted_external_preflight(root=root_path)
+        state_path = _safe_output_path(root_path, EXECUTION_STATE_PATH)
+        if not state_path.is_file():
+            raise ExternalRetrievalWaveError("external execution state does not exist")
+        state = _load_execution_state(state_path, root_path, wave, preflight)
+        source = state["sources"]["arXiv"]
+        if source.get("approved_snapshot_substitution") is not None:
+            validate_authorized_snapshot_substitution(root=root_path, state=state)
+            return state
+        other_sources_before = {
+            key: json.loads(json.dumps(value, sort_keys=True))
+            for key, value in state["sources"].items()
+            if key != "arXiv"
+        }
+        api_state_before = json.loads(json.dumps(source, sort_keys=True))
+        authorized_at = timestamp()
+        try:
+            authorize_snapshot_substitution(
+                root=root_path,
+                state=state,
+                package_dir=package_dir,
+                amendment_v2_path=amendment_v2_path,
+                timestamp=lambda: authorized_at,
+            )
+        except ArxivSnapshotIntegrationError as exc:
+            raise ExternalRetrievalWaveError(str(exc)) from exc
+        substitution = source.pop("approved_snapshot_substitution")
+        if source != api_state_before:
+            raise ExternalRetrievalWaveError(
+                "snapshot integration changed preserved arXiv API state"
+            )
+        source["approved_snapshot_substitution"] = substitution
+        if {
+            key: value for key, value in state["sources"].items() if key != "arXiv"
+        } != other_sources_before:
+            raise ExternalRetrievalWaveError(
+                "snapshot integration changed another source component"
+            )
+        _finalize_execution_state(state, authorized_at)
+        if (
+            state.get("identification_set_closed") is not False
+            or state.get("prior_survey_seed_imported") is not False
+            or state.get("final_global_deduplication_executed") is not False
+            or state.get("prisma_generated") is not False
+            or state.get("screening_executed") is not False
+            or state.get("corpus_modified") is not False
+        ):
+            raise ExternalRetrievalWaveError(
+                "snapshot source substitution bypassed an identification closure gate"
+            )
+        _save_execution_state(state_path, state)
+        validate_authorized_snapshot_substitution(root=root_path, state=state)
+        return state
+
+
 def _active_arxiv_transport_policy(
     source_state: Mapping[str, Any],
 ) -> dict[str, Any] | None:
@@ -8020,6 +8121,11 @@ def _execute_external_source_session_locked(
         else _initial_execution_state(root_path, wave, preflight, timestamp())
     )
     source_state = state["sources"][source]
+    if source == "arXiv" and source_state.get("approved_snapshot_substitution"):
+        raise ExternalRetrievalWaveError(
+            "arXiv API retrieval is superseded for this wave by the approved "
+            "snapshot route"
+        )
     if source == "SemanticScholar" and _semantic_native_id_overlap_recovery_active(
         source_state
     ):
@@ -8807,6 +8913,10 @@ def _load_execution_state(
         != _sha256(_safe_output_path(root, PREFLIGHT_PATH).read_bytes())
     ):
         raise ExternalRetrievalWaveError("execution checkpoint frozen-wave hash mismatch")
+    try:
+        validate_authorized_snapshot_substitution(root=root, state=state)
+    except ArxivSnapshotIntegrationError as exc:
+        raise ExternalRetrievalWaveError(str(exc)) from exc
     return state
 
 
@@ -11543,7 +11653,16 @@ def _verify_file_reference(
 
 
 def _finalize_execution_state(state: dict[str, Any], completed_at: str) -> None:
-    if all(item["status"] == "COMPLETE" for item in state["sources"].values()):
+    def source_complete(source: str, item: Mapping[str, Any]) -> bool:
+        substitution = item.get("approved_snapshot_substitution")
+        return item["status"] == "COMPLETE" or (
+            source == "arXiv"
+            and isinstance(substitution, dict)
+            and substitution.get("status")
+            == "APPROVED_COMPLETE_REPLACEMENT_ROUTE"
+        )
+
+    if all(source_complete(source, item) for source, item in state["sources"].items()):
         state["status"] = "COMPLETE"
         state["external_retrieval_completed_at_utc"] = completed_at
         state["external_retrieval_cutoff_date"] = completed_at[:10]
@@ -11666,7 +11785,79 @@ def main(argv: list[str] | None = None) -> int:
         "--authorize-semantic-scholar-native-id-overlap-recovery",
         action="store_true",
     )
+    parser.add_argument(
+        "--prepare-arxiv-snapshot-integration", action="store_true"
+    )
+    parser.add_argument(
+        "--authorize-arxiv-snapshot-integration", action="store_true"
+    )
+    parser.add_argument("--arxiv-snapshot-package", type=Path)
+    parser.add_argument("--arxiv-snapshot-integration-output", type=Path)
+    parser.add_argument("--arxiv-snapshot-amendment-v2", type=Path)
     args = parser.parse_args(argv)
+    snapshot_modes = (
+        args.prepare_arxiv_snapshot_integration,
+        args.authorize_arxiv_snapshot_integration,
+    )
+    if any(snapshot_modes):
+        if all(snapshot_modes):
+            parser.error("snapshot preparation and authorization are separate modes")
+        if args.source != "arXiv":
+            parser.error("snapshot integration is supported only for --source arXiv")
+        other_modes = [
+            value
+            for key, value in vars(args).items()
+            if key.startswith("authorize_")
+            and key != "authorize_arxiv_snapshot_integration"
+        ]
+        if args.prepare_arxiv_snapshot_integration:
+            other_modes.append(args.authorize_arxiv_snapshot_integration)
+        if args.resume or any(other_modes):
+            parser.error(
+                "arXiv snapshot integration is a separate offline authorization boundary"
+            )
+        if args.arxiv_snapshot_package is None:
+            parser.error("--arxiv-snapshot-package is required")
+        if args.prepare_arxiv_snapshot_integration:
+            if args.arxiv_snapshot_integration_output is None:
+                parser.error("--arxiv-snapshot-integration-output is required")
+            result = prepare_arxiv_snapshot_integration(
+                root=args.root,
+                package_dir=args.arxiv_snapshot_package,
+                output_dir=args.arxiv_snapshot_integration_output,
+            )
+            print(json.dumps(result, sort_keys=True, indent=2))
+            return 0
+        if args.arxiv_snapshot_amendment_v2 is None:
+            parser.error("--arxiv-snapshot-amendment-v2 is required")
+        state = authorize_arxiv_snapshot_integration(
+            root=args.root,
+            package_dir=args.arxiv_snapshot_package,
+            amendment_v2_path=args.arxiv_snapshot_amendment_v2,
+        )
+        source_state = state["sources"]["arXiv"]
+        print(
+            json.dumps(
+                {
+                    "execution_status": state["status"],
+                    "source": "arXiv",
+                    "api_source_status": source_state["status"],
+                    "snapshot_substitution": source_state[
+                        "approved_snapshot_substitution"
+                    ],
+                    "identification_set_closed": state[
+                        "identification_set_closed"
+                    ],
+                    "prior_survey_seed_imported": state[
+                        "prior_survey_seed_imported"
+                    ],
+                    "network_used": False,
+                },
+                sort_keys=True,
+                indent=2,
+            )
+        )
+        return 0
     if args.authorize_semantic_scholar_native_id_overlap_recovery and (
         args.authorize_live_external_retrieval
         or args.authorize_transport_retry_reset

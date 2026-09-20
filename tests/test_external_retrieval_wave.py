@@ -41,6 +41,7 @@ from h2h_lit.external_retrieval_wave import (
     authorize_arxiv_page_size_recovery,
     authorize_arxiv_rate_limit_recovery,
     authorize_arxiv_retryable_5xx_recovery,
+    authorize_arxiv_snapshot_integration,
     authorize_arxiv_transport_policy_recovery,
     authorize_europe_pmc_terminal_recovery,
     authorize_ieee_repeated_window_recovery,
@@ -53,6 +54,7 @@ from h2h_lit.external_retrieval_wave import (
     build_external_retrieval_wave,
     execute_external_source_session,
     preflight_external_retrieval_wave,
+    prepare_arxiv_snapshot_integration,
     validate_persisted_external_preflight,
 )
 from h2h_lit.pagination import (
@@ -5523,3 +5525,171 @@ def test_persisted_wave_hash_mismatch_fails_before_execution(
     (tmp_path / PREFLIGHT_PATH).write_text("{}\n", encoding="utf-8")
     with pytest.raises(ExternalRetrievalWaveError, match="planned wave differs"):
         validate_persisted_external_preflight(root=tmp_path)
+
+
+def _snapshot_authorization_state() -> dict:
+    sources = {
+        source: {"status": "COMPLETE"}
+        for source in EXTERNAL_IDENTIFICATION_SOURCES_V2
+        if source != "arXiv"
+    }
+    sources["arXiv"] = {
+        "status": "PAUSED_TRANSIENT_PROVIDER",
+        "active_episode_number": 6,
+        "occurrence_count": 0,
+        "execution_episodes": [{"episode_number": number} for number in range(1, 7)],
+        "checkpoint_dataset": {"path": "episode-6.json", "raw_sha256": "parent"},
+    }
+    return {
+        "created_at_utc": "2026-09-19T00:00:00Z",
+        "status": "RUNNING",
+        "sources": sources,
+        "external_retrieval_completed_at_utc": None,
+        "external_retrieval_cutoff_date": None,
+        "prior_survey_seed_imported": False,
+        "identification_set_closed": False,
+        "final_global_deduplication_executed": False,
+        "prisma_generated": False,
+        "screening_executed": False,
+        "corpus_modified": False,
+    }
+
+
+def test_snapshot_authorization_preserves_api_state_and_closure_gates(
+    tmp_path, monkeypatch, external_wave, external_preflight
+) -> None:
+    _install_isolated_runtime(
+        tmp_path, monkeypatch, external_wave, external_preflight
+    )
+    state_path = tmp_path / external_module.EXECUTION_STATE_PATH
+    state_path.parent.mkdir(parents=True, exist_ok=True)
+    state_path.write_text("persisted parent", encoding="utf-8")
+    state = _snapshot_authorization_state()
+    api_before = copy.deepcopy(state["sources"]["arXiv"])
+    saved: list[dict] = []
+    monkeypatch.setattr(
+        external_module, "_load_execution_state", lambda *args: state
+    )
+    monkeypatch.setattr(
+        external_module,
+        "_save_execution_state",
+        lambda _path, payload: saved.append(copy.deepcopy(payload)),
+    )
+    monkeypatch.setattr(
+        external_module, "validate_authorized_snapshot_substitution", lambda **_: None
+    )
+
+    def authorize(**kwargs):
+        kwargs["state"]["sources"]["arXiv"]["approved_snapshot_substitution"] = {
+            "status": "APPROVED_COMPLETE_REPLACEMENT_ROUTE"
+        }
+        return kwargs["state"]
+
+    monkeypatch.setattr(external_module, "authorize_snapshot_substitution", authorize)
+    result = authorize_arxiv_snapshot_integration(
+        root=tmp_path,
+        package_dir=tmp_path / "package",
+        amendment_v2_path=tmp_path / "amendment.json",
+        timestamp=lambda: "2026-09-20T00:00:00Z",
+    )
+
+    actual_api = copy.deepcopy(result["sources"]["arXiv"])
+    substitution = actual_api.pop("approved_snapshot_substitution")
+    assert actual_api == api_before
+    assert substitution["status"] == "APPROVED_COMPLETE_REPLACEMENT_ROUTE"
+    assert result["status"] == "COMPLETE"
+    assert result["sources"]["arXiv"]["status"] == "PAUSED_TRANSIENT_PROVIDER"
+    assert result["identification_set_closed"] is False
+    assert result["prior_survey_seed_imported"] is False
+    assert result["final_global_deduplication_executed"] is False
+    assert result["prisma_generated"] is False
+    assert len(saved) == 1
+
+
+def test_snapshot_authorization_is_idempotent_only_after_validation(
+    tmp_path, monkeypatch, external_wave, external_preflight
+) -> None:
+    _install_isolated_runtime(
+        tmp_path, monkeypatch, external_wave, external_preflight
+    )
+    state_path = tmp_path / external_module.EXECUTION_STATE_PATH
+    state_path.parent.mkdir(parents=True, exist_ok=True)
+    state_path.write_text("authorized state", encoding="utf-8")
+    state = _snapshot_authorization_state()
+    state["sources"]["arXiv"]["approved_snapshot_substitution"] = {
+        "status": "APPROVED_COMPLETE_REPLACEMENT_ROUTE"
+    }
+    validations = 0
+
+    def validate(**kwargs):
+        nonlocal validations
+        validations += 1
+
+    monkeypatch.setattr(
+        external_module, "_load_execution_state", lambda *args: state
+    )
+    monkeypatch.setattr(
+        external_module, "validate_authorized_snapshot_substitution", validate
+    )
+    monkeypatch.setattr(
+        external_module,
+        "authorize_snapshot_substitution",
+        lambda **_: pytest.fail("idempotent authorization must not recreate artifacts"),
+    )
+    monkeypatch.setattr(
+        external_module,
+        "_save_execution_state",
+        lambda *_: pytest.fail("idempotent authorization must not rewrite state"),
+    )
+
+    first = authorize_arxiv_snapshot_integration(
+        root=tmp_path,
+        package_dir=tmp_path / "package",
+        amendment_v2_path=tmp_path / "amendment.json",
+    )
+    second = authorize_arxiv_snapshot_integration(
+        root=tmp_path,
+        package_dir=tmp_path / "package",
+        amendment_v2_path=tmp_path / "amendment.json",
+    )
+    assert first is state and second is state
+    assert validations == 2
+
+
+def test_snapshot_authorization_obeys_shared_lock(tmp_path) -> None:
+    with external_module._exclusive_external_source_session(tmp_path), pytest.raises(
+        ExternalRetrievalWaveError,
+        match="another external-source session is already active",
+    ):
+        authorize_arxiv_snapshot_integration(
+            root=tmp_path,
+            package_dir=tmp_path / "package",
+            amendment_v2_path=tmp_path / "amendment.json",
+        )
+
+
+def test_snapshot_dry_run_preserves_production_state_bytes(
+    tmp_path, monkeypatch, external_wave, external_preflight
+) -> None:
+    _install_isolated_runtime(
+        tmp_path, monkeypatch, external_wave, external_preflight
+    )
+    state_path = tmp_path / external_module.EXECUTION_STATE_PATH
+    state_path.parent.mkdir(parents=True, exist_ok=True)
+    state_path.write_bytes(b"immutable production state")
+    state = _snapshot_authorization_state()
+    monkeypatch.setattr(
+        external_module, "_load_execution_state", lambda *args: state
+    )
+    monkeypatch.setattr(
+        external_module,
+        "prepare_integration_dry_run",
+        lambda **_: {"status": "VALIDATED_OFFLINE_NOT_APPLIED"},
+    )
+    result = prepare_arxiv_snapshot_integration(
+        root=tmp_path,
+        package_dir=tmp_path / "package",
+        output_dir=tmp_path / "dry-run",
+    )
+    assert result["status"] == "VALIDATED_OFFLINE_NOT_APPLIED"
+    assert state_path.read_bytes() == b"immutable production state"
