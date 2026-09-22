@@ -1,0 +1,69 @@
+{
+  "schema_version": "1.0.0",
+  "specification_id": "title-abstract-benchmark-staging-v1",
+  "status": "FROZEN_FOR_STAGING_DRAW",
+  "retrieval_cutoff_date": "2026-09-20",
+  "seed": "h2h-title-abstract-benchmark-v1-2026-09-20",
+  "frame": {
+    "registered_dataset_sha256": "44e4187fae472ff349c9a8bc3fd48df0d1263f05674068445d0fb80d9e2415b2",
+    "identity_overlay_sha256": "c287b6b4548ec4a7d0b09fafd84b93d123426d7010032611495dab9a41d1251d",
+    "canonical_records": 140959,
+    "effective_open_identity_groups": 0
+  },
+  "allocations": {
+    "uniform_random_evaluation": 70,
+    "challenge_evaluation": 30,
+    "calibration": 10,
+    "secondary_packet_a": 25,
+    "secondary_packet_b": 25
+  },
+  "challenge_strata": [
+    {
+      "stratum_id": "prior_survey_route",
+      "priority": 1,
+      "target": 6,
+      "rule": "The canonical record carries a PriorSurveySeed source database, source identifier, or provenance event."
+    },
+    {
+      "stratum_id": "missing_abstract",
+      "priority": 2,
+      "target": 6,
+      "rule": "The abstract is empty after Unicode whitespace normalization."
+    },
+    {
+      "stratum_id": "sparse_abstract",
+      "priority": 3,
+      "target": 6,
+      "rule": "The nonempty abstract contains 1 through 79 Unicode word tokens."
+    },
+    {
+      "stratum_id": "uncommon_modality_or_assistance_cue",
+      "priority": 4,
+      "target": 6,
+      "rule": "Title or abstract contains a frozen case-insensitive cue for immersive/large-display environments or conversational, adaptive, recommender, mixed-initiative, or agentic assistance."
+    },
+    {
+      "stratum_id": "document_type_boundary_cue",
+      "priority": 5,
+      "target": 6,
+      "rule": "Title contains a frozen case-insensitive survey, review, bibliometric, protocol, framework, poster, demo, workshop, position-paper, or editorial cue."
+    }
+  ],
+  "overlap_priority": [
+    "prior_survey_route",
+    "missing_abstract",
+    "sparse_abstract",
+    "uncommon_modality_or_assistance_cue",
+    "document_type_boundary_cue"
+  ],
+  "shortfall_handling": "Assign each record only to its first matching stratum. Abort before drawing if any exclusive stratum has fewer than six records; do not outcome-condition or silently reallocate the quota.",
+  "selection_algorithm": "SHA-256 rank without replacement, version title-abstract-benchmark-sampler-v1. Challenge records are the six lowest ranks within each exclusive stratum. The 70-record random set is the lowest independent random rank among the remaining canonical records. Calibration uses an independent rank after excluding all evaluation records and every known related-version component touching evaluation. Secondary A is the 25 lowest secondary-A ranks in the 100-record evaluation set; Secondary B is the 25 lowest secondary-B ranks among the remaining 75.",
+  "prohibited_selection_inputs": [
+    "model predictions",
+    "model outputs",
+    "eligibility labels",
+    "human screening decisions",
+    "expected answers"
+  ],
+  "related_version_policy": "Known related-version links remain bibliographically distinct. They are used only as a separation constraint: a component touching evaluation cannot contribute a calibration record."
+}

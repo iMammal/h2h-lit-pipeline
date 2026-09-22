@@ -285,6 +285,79 @@ def test_returned_review_is_create_only_and_validates_aggregate(tmp_path: Path) 
         review._validate_response(invalid, records[0])
 
 
+def _response_with_decisions(record_id: str, decisions: dict[str, str]) -> dict:
+    outcome = review.recompute_aggregate_outcome(decisions)
+    return {
+        "record_id": record_id,
+        "criteria": {
+            key: {
+                "decision": value,
+                "evidence_quote": f"evidence-{key}",
+                "evidence_locator": "title/abstract",
+                "rationale": f"rationale-{key}",
+            }
+            for key, value in decisions.items()
+        },
+        "eligibility_status": outcome,
+        "primary_exclusion_reason": (
+            "EX_NO_LIFE_SCIENCE_APPLICATION" if outcome == "EXCLUDED" else None
+        ),
+        "secondary_exclusion_reasons": [],
+        "full_text_escalation_required": outcome == "UNCERTAIN",
+        "excluded_record_escalation_rationale": "",
+        "confidence": "MEDIUM",
+        "notes": "",
+    }
+
+
+def test_aggregate_no_precedes_uncertain_without_mandatory_escalation() -> None:
+    decisions = {f"E{index}": "YES" for index in range(1, 8)}
+    decisions["E1"] = "NO"
+    decisions["E6"] = "UNCERTAIN"
+    response = _response_with_decisions("stable-record:01", decisions)
+
+    assert response["eligibility_status"] == "EXCLUDED"
+    assert response["full_text_escalation_required"] is False
+    review._validate_response(response, "stable-record:01")
+
+
+def test_aggregate_uncertainty_without_no_requires_escalation() -> None:
+    decisions = {f"E{index}": "YES" for index in range(1, 8)}
+    decisions["E6"] = "UNCERTAIN"
+    response = _response_with_decisions("stable-record:02", decisions)
+
+    assert response["eligibility_status"] == "UNCERTAIN"
+    assert response["full_text_escalation_required"] is True
+    review._validate_response(response, "stable-record:02")
+
+
+def test_aggregate_all_yes_is_eligible_without_escalation() -> None:
+    decisions = {f"E{index}": "YES" for index in range(1, 8)}
+    response = _response_with_decisions("stable-record:03", decisions)
+
+    assert response["eligibility_status"] == "ELIGIBLE"
+    assert response["full_text_escalation_required"] is False
+    review._validate_response(response, "stable-record:03")
+
+
+def test_aggregate_rejects_incomplete_responses() -> None:
+    decisions = {f"E{index}": "YES" for index in range(1, 7)}
+    with pytest.raises(review.HumanValidationReviewError, match="complete E1-E7"):
+        review.recompute_aggregate_outcome(decisions)
+
+
+def test_discretionary_escalation_of_excluded_record_requires_separate_rationale() -> None:
+    decisions = {f"E{index}": "YES" for index in range(1, 8)}
+    decisions["E1"] = "NO"
+    response = _response_with_decisions("stable-record:04", decisions)
+    response["full_text_escalation_required"] = True
+    with pytest.raises(review.HumanValidationReviewError, match="explicit rationale"):
+        review._validate_response(response, "stable-record:04")
+
+    response["excluded_record_escalation_rationale"] = "Resolve a conflicting source."
+    review._validate_response(response, "stable-record:04")
+
+
 def test_reassignment_history_and_tampering_are_checked(tmp_path: Path) -> None:
     records, source, rubric = _setup_root(tmp_path, 1)
     plan = {

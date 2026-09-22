@@ -238,8 +238,10 @@ def _criteria_contract() -> dict[str, Any]:
         },
         "exclusion_reasons": list(EXCLUSION_REASONS),
         "full_text_escalation_rule": (
-            "Escalate when any criterion is uncertain or title/abstract evidence cannot support "
-            "a defensible decision; acquisition failure does not itself justify exclusion."
+            "Escalate when no criterion is NO and at least one criterion is UNCERTAIN. A "
+            "conclusive NO produces EXCLUDED even when another criterion is UNCERTAIN. "
+            "Discretionary escalation of an excluded record requires a separate rationale; "
+            "acquisition failure does not itself justify exclusion."
         ),
     }
 
@@ -260,9 +262,31 @@ def _response_template(record_id: str) -> dict[str, Any]:
         "primary_exclusion_reason": None,
         "secondary_exclusion_reasons": [],
         "full_text_escalation_required": None,
+        "excluded_record_escalation_rationale": "",
         "confidence": None,
         "notes": "",
     }
+
+
+def recompute_aggregate_outcome(decisions: Mapping[str, Any]) -> str:
+    """Return the protocol aggregate from a complete E1-E7 decision mapping.
+
+    A returned workbook or JSON response may contain a blank or stale calculated value.
+    Callers must use this result as authoritative and treat any supplied aggregate only as
+    a consistency check.
+    """
+
+    expected_criteria = {item["criterion_id"] for item in CRITERIA}
+    if set(decisions) != expected_criteria:
+        raise HumanValidationReviewError("aggregate recomputation requires complete E1-E7")
+    values = [decisions[criterion_id] for criterion_id in sorted(expected_criteria)]
+    if any(value not in TRI_STATES for value in values):
+        raise HumanValidationReviewError("aggregate recomputation found invalid criterion decision")
+    if "NO" in values:
+        return "EXCLUDED"
+    if all(value == "YES" for value in values):
+        return "ELIGIBLE"
+    return "UNCERTAIN"
 
 
 def _load_source_rows(path: Path) -> list[dict[str, Any]]:
@@ -713,22 +737,16 @@ def _validate_response(response: Mapping[str, Any], record_id: str) -> None:
         item["criterion_id"] for item in CRITERIA
     }:
         raise HumanValidationReviewError("returned response criterion set changed")
-    decisions: list[str] = []
+    decisions: dict[str, str] = {}
     for criterion_id in sorted(criteria):
         item = criteria[criterion_id]
         if not isinstance(item, Mapping) or item.get("decision") not in TRI_STATES:
             raise HumanValidationReviewError("invalid returned criterion decision")
-        decisions.append(str(item["decision"]))
+        decisions[criterion_id] = str(item["decision"])
         for field in ("evidence_quote", "evidence_locator", "rationale"):
             if not isinstance(item.get(field), str):
                 raise HumanValidationReviewError(f"criterion {field} must be text")
-    expected = (
-        "EXCLUDED"
-        if "NO" in decisions
-        else "ELIGIBLE"
-        if all(value == "YES" for value in decisions)
-        else "UNCERTAIN"
-    )
+    expected = recompute_aggregate_outcome(decisions)
     if response.get("eligibility_status") != expected:
         raise HumanValidationReviewError("aggregate eligibility disagrees with E1-E7")
     primary = response.get("primary_exclusion_reason")
@@ -739,8 +757,24 @@ def _validate_response(response: Mapping[str, Any], record_id: str) -> None:
     secondary = response.get("secondary_exclusion_reasons")
     if not isinstance(secondary, list) or any(item not in EXCLUSION_REASONS for item in secondary):
         raise HumanValidationReviewError("invalid secondary exclusion reasons")
-    if response.get("full_text_escalation_required") not in (True, False):
+    escalation = response.get("full_text_escalation_required")
+    if escalation not in (True, False):
         raise HumanValidationReviewError("full_text_escalation_required must be boolean")
+    escalation_rationale = response.get("excluded_record_escalation_rationale", "")
+    if not isinstance(escalation_rationale, str):
+        raise HumanValidationReviewError("excluded-record escalation rationale must be text")
+    if expected == "UNCERTAIN" and escalation is not True:
+        raise HumanValidationReviewError("uncertain review requires full-text escalation")
+    if expected == "ELIGIBLE" and escalation is not False:
+        raise HumanValidationReviewError("eligible review cannot require full-text escalation")
+    if expected == "EXCLUDED" and escalation is True and not escalation_rationale.strip():
+        raise HumanValidationReviewError(
+            "discretionary escalation of an excluded review requires an explicit rationale"
+        )
+    if not (expected == "EXCLUDED" and escalation is True) and escalation_rationale.strip():
+        raise HumanValidationReviewError(
+            "excluded-record escalation rationale is only valid for an escalated exclusion"
+        )
     if response.get("confidence") not in ("LOW", "MEDIUM", "HIGH"):
         raise HumanValidationReviewError("confidence must be LOW, MEDIUM, or HIGH")
     if not isinstance(response.get("notes"), str):
