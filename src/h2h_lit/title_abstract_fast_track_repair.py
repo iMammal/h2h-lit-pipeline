@@ -189,6 +189,11 @@ def validate_evidence_unit_payload(payload: Any, record: Mapping[str, Any]) -> d
             "evidence": [dict(by_id[value]) for value in evidence_ids],
         }
 
+    if responses["E7"] == "YES" and any(
+        responses[key] == "UNCERTAIN" for key in ("E1", "E2", "E3", "E4", "E5")
+    ):
+        raise ValueError("E7.YES is inconsistent with an unresolved E1-E5 criterion")
+
     outcome = recompute_outcome(responses, E6_STATUS)
     abstract_missing = not str(record.get("abstract", "")).strip()
     if outcome == "EXCLUDED":
@@ -309,7 +314,7 @@ def audit_saved_run(original_run_dir: Path, batch_path: Path) -> tuple[dict[str,
     deferral_breakdown = {
         "artifact_class": "original_saved_deferral_breakdown",
         "total": len(deferred),
-        "missing_abstract": sum(not str(row.get("abstract", "")).strip() for row in deferred),
+        "missing_abstract": sum(_abstract_missing(row) for row in deferred),
         "uncertain_by_criterion_overlapping": uncertain,
         "e7_only_uncertainty": e7_only,
         "interpretation": (
@@ -838,6 +843,24 @@ def _write_repair_outputs(
     cumulative_usage = {key: int(prior_usage.get(key, 0)) + repair_usage[key] for key in repair_usage}
     deferral_breakdown = _deferral_breakdown(groups["deferred"])
     _write_json(output_dir / "combined_deferral_breakdown.json", deferral_breakdown)
+    consistency_observations = []
+    for row in combined:
+        responses = row["judgment"]["responses"]
+        if responses["E7"] == "YES" and any(
+            responses[key] == "UNCERTAIN" for key in ("E1", "E2", "E3", "E4", "E5")
+        ):
+            consistency_observations.append(
+                {
+                    "canonical_id": row["canonical_id"],
+                    "batch_order": row["batch_order"],
+                    "observation": "E7_YES_WITH_UNRESOLVED_SCIENTIFIC_CRITERION",
+                    "handling": "PRESERVED_RESPONSE; FLAGGED; NOT_IN_CLEAR_INCLUDE_HANDOFF",
+                    "result_version": row["result_version"],
+                    "computed_outcome": row["judgment"]["computed_outcome"],
+                    "operational_disposition": row["judgment"]["operational_disposition"],
+                }
+            )
+    _write_json(output_dir / "post_run_consistency_observations.json", consistency_observations)
     report = {
         **binding,
         "status": "COMPLETE" if smoke_passed and not groups["unprocessed"] else "PARTIAL",
@@ -859,6 +882,7 @@ def _write_repair_outputs(
         "repair_aggregate_latency_seconds": repair_latency,
         "ambiguous_reconciliation": reconciliation,
         "deferral_breakdown": deferral_breakdown,
+        "post_run_consistency_observation_count": len(consistency_observations),
         "accuracy_claim": "NOT_ASSESSED_BY_THIS_OPERATIONAL_RUN",
         "staging_only": True,
     }
@@ -875,7 +899,7 @@ def _deferral_breakdown(rows: list[dict[str, Any]]) -> dict[str, Any]:
     }
     return {
         "total": len(rows),
-        "missing_abstract": sum(not str(row.get("abstract", "")).strip() for row in rows),
+        "missing_abstract": sum(_abstract_missing(row) for row in rows),
         "uncertain_by_criterion_overlapping": uncertain,
         "e7_only_uncertainty": sum(
             row["judgment"]["responses"]["E7"] == "UNCERTAIN"
@@ -883,6 +907,12 @@ def _deferral_breakdown(rows: list[dict[str, Any]]) -> dict[str, Any]:
             for row in rows
         ),
     }
+
+
+def _abstract_missing(row: Mapping[str, Any]) -> bool:
+    if "abstract_missing" in row:
+        return bool(row["abstract_missing"])
+    return not str(row.get("abstract", "")).strip()
 
 
 def _write_report_markdown(path: Path, report: Mapping[str, Any]) -> None:
@@ -919,6 +949,7 @@ def _write_manifest(output_dir: Path, report: Mapping[str, Any]) -> None:
         "combined_coverage_report.json",
         "combined_coverage_report.md",
         "combined_deferral_breakdown.json",
+        "post_run_consistency_observations.json",
         "combined_clear_include_handoff.csv",
         "combined_include.jsonl",
         "combined_deferred.jsonl",

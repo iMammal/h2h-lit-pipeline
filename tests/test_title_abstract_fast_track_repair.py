@@ -82,6 +82,20 @@ def test_not_evidenced_is_valid_for_uncertainty_and_requires_no_quote():
     assert result["criteria"]["E7_evidence_sufficiency"]["evidence"] == []
 
 
+def test_e7_yes_is_rejected_when_a_scientific_criterion_is_unresolved():
+    payload = _payload()
+    item = payload["criteria"]["E3_interactive_visual_analytics"]
+    item.update(
+        decision="UNCERTAIN",
+        certainty="UNCERTAIN",
+        evidence_status=NOT_EVIDENCED,
+        evidence_ids=[],
+    )
+
+    with pytest.raises(ValueError, match="E7.YES is inconsistent"):
+        validate_evidence_unit_payload(payload, RECORD)
+
+
 def test_nonexistent_evidence_id_is_rejected():
     payload = _payload(evidence_id="ABSTRACT.999")
     with pytest.raises(ValueError, match="nonexistent IDs"):
@@ -112,7 +126,7 @@ def test_real_saved_failures_are_classified_offline_if_present():
     }
     assert len(audit["structural_defects"]) == 2
     assert breakdown["total"] == 61
-    assert breakdown["missing_abstract"] == 61
+    assert breakdown["missing_abstract"] == 25
     assert breakdown["uncertain_by_criterion_overlapping"] == {
         "E1": 8,
         "E2": 27,
