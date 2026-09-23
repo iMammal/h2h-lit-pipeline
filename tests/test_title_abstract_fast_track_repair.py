@@ -10,6 +10,7 @@ from h2h_lit.title_abstract_fast_track_batch import CRITERION_KEYS
 from h2h_lit.title_abstract_fast_track_repair import (
     EVIDENCED,
     NOT_EVIDENCED,
+    _e7_yes_needs_consistency_warning,
     audit_saved_run,
     evidence_units_for,
     validate_evidence_unit_payload,
@@ -82,7 +83,7 @@ def test_not_evidenced_is_valid_for_uncertainty_and_requires_no_quote():
     assert result["criteria"]["E7_evidence_sufficiency"]["evidence"] == []
 
 
-def test_e7_yes_is_rejected_when_a_scientific_criterion_is_unresolved():
+def test_e7_yes_without_excluding_no_is_a_warning_not_a_fatal_error():
     payload = _payload()
     item = payload["criteria"]["E3_interactive_visual_analytics"]
     item.update(
@@ -92,8 +93,28 @@ def test_e7_yes_is_rejected_when_a_scientific_criterion_is_unresolved():
         evidence_ids=[],
     )
 
-    with pytest.raises(ValueError, match="E7.YES is inconsistent"):
-        validate_evidence_unit_payload(payload, RECORD)
+    result = validate_evidence_unit_payload(payload, RECORD)
+
+    assert result["computed_outcome"] == "UNCERTAIN"
+    assert result["operational_disposition"] == "DEFER"
+    assert _e7_yes_needs_consistency_warning(result["responses"])
+
+
+def test_e7_yes_is_accepted_when_a_defensible_no_already_excludes():
+    payload = _payload()
+    payload["criteria"]["E2_relational_multiscale_relevance"].update(decision="NO")
+    payload["criteria"]["E3_interactive_visual_analytics"].update(
+        decision="UNCERTAIN",
+        certainty="UNCERTAIN",
+        evidence_status=NOT_EVIDENCED,
+        evidence_ids=[],
+    )
+
+    result = validate_evidence_unit_payload(payload, RECORD)
+
+    assert result["computed_outcome"] == "EXCLUDED"
+    assert result["operational_disposition"] == "EXCLUDE"
+    assert not _e7_yes_needs_consistency_warning(result["responses"])
 
 
 def test_nonexistent_evidence_id_is_rejected():

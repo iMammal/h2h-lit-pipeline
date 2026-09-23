@@ -37,6 +37,12 @@ OUTPUT_SCHEMA_VERSION = "1.4.1"
 EVIDENCED = "EVIDENCED"
 NOT_EVIDENCED = "NOT_EVIDENCED_IN_SUPPLIED_METADATA"
 _SENTENCE_BOUNDARY = re.compile(r"(?<=[.!?])\s+(?=\S)")
+_SCIENTIFIC_KEYS = ("E1", "E2", "E3", "E4", "E5")
+
+
+def _e7_yes_needs_consistency_warning(responses: Mapping[str, str]) -> bool:
+    scientific = [responses[key] for key in _SCIENTIFIC_KEYS]
+    return responses["E7"] == "YES" and "NO" not in scientific and "UNCERTAIN" in scientific
 
 
 def evidence_unit_response_schema() -> dict[str, Any]:
@@ -188,11 +194,6 @@ def validate_evidence_unit_payload(payload: Any, record: Mapping[str, Any]) -> d
             "rationale": item["rationale"].strip(),
             "evidence": [dict(by_id[value]) for value in evidence_ids],
         }
-
-    if responses["E7"] == "YES" and any(
-        responses[key] == "UNCERTAIN" for key in ("E1", "E2", "E3", "E4", "E5")
-    ):
-        raise ValueError("E7.YES is inconsistent with an unresolved E1-E5 criterion")
 
     outcome = recompute_outcome(responses, E6_STATUS)
     abstract_missing = not str(record.get("abstract", "")).strip()
@@ -846,9 +847,7 @@ def _write_repair_outputs(
     consistency_observations = []
     for row in combined:
         responses = row["judgment"]["responses"]
-        if responses["E7"] == "YES" and any(
-            responses[key] == "UNCERTAIN" for key in ("E1", "E2", "E3", "E4", "E5")
-        ):
+        if _e7_yes_needs_consistency_warning(responses):
             consistency_observations.append(
                 {
                     "canonical_id": row["canonical_id"],
