@@ -23,6 +23,7 @@ SUPPORTED_PARAMETERS = {
     "max_output_tokens",
     "reasoning_effort",
     "response_schema_version",
+    "service_tier",
     "store",
     "structured_output",
     "temperature",
@@ -42,11 +43,11 @@ class OpenAIResponsesProvider:
 
     @classmethod
     def from_environment(
-        cls,
-        *,
-        variable: str = "OPENAI_API_KEY",
-        endpoint: str = OPENAI_RESPONSES_URL,
-        timeout_seconds: float = 120.0,
+            cls,
+            *,
+            variable: str = "OPENAI_API_KEY",
+            endpoint: str = OPENAI_RESPONSES_URL,
+            timeout_seconds: float = 120.0,
     ) -> OpenAIResponsesProvider:
         api_key = os.environ.get(variable, "").strip()
         if not api_key:
@@ -54,14 +55,14 @@ class OpenAIResponsesProvider:
         return cls(api_key=api_key, endpoint=endpoint, timeout_seconds=timeout_seconds)
 
     def generate(
-        self,
-        *,
-        model: str,
-        prompt: str,
-        input_snapshot: dict[str, Any],
-        parameters: dict[str, Any],
-        request_id: str,
-        attempt_number: int,
+            self,
+            *,
+            model: str,
+            prompt: str,
+            input_snapshot: dict[str, Any],
+            parameters: dict[str, Any],
+            request_id: str,
+            attempt_number: int,
     ) -> str:
         unsupported = sorted(set(parameters) - SUPPORTED_PARAMETERS)
         if unsupported:
@@ -97,6 +98,18 @@ class OpenAIResponsesProvider:
             body["reasoning"] = {"effort": str(parameters["reasoning_effort"])}
         if "temperature" in parameters:
             body["temperature"] = float(parameters["temperature"])
+        if "service_tier" in parameters:
+            service_tier = str(parameters["service_tier"])
+            if service_tier not in {
+                "auto",
+                "default",
+                "fast",
+                "flex",
+                "priority",
+                "ultrafast",
+            }:
+                raise ValueError(f"unsupported OpenAI service tier: {service_tier}")
+            body["service_tier"] = service_tier
 
         try:
             response = self.session.post(
@@ -129,6 +142,7 @@ class OpenAIResponsesProvider:
             "provider_response_id": payload.get("id"),
             "provider_status": payload.get("status"),
             "provider_model": payload.get("model"),
+            "provider_service_tier": payload.get("service_tier"),
             "provider_usage": payload.get("usage"),
             "provider_error": payload.get("error"),
             "client_request_id": request_id,
@@ -160,12 +174,12 @@ class OpenAIHTTPError(RuntimeError):
 
 class _UrllibSession:
     def post(
-        self,
-        url: str,
-        *,
-        headers: dict[str, str],
-        json: dict[str, Any],
-        timeout: float,
+            self,
+            url: str,
+            *,
+            headers: dict[str, str],
+            json: dict[str, Any],
+            timeout: float,
     ) -> _UrllibResponse:
         request = Request(
             url,
@@ -311,4 +325,8 @@ def _response_schema_for_version(version: str) -> dict[str, Any]:
         from h2h_lit.pilot5d import pilot5d_response_schema
 
         return pilot5d_response_schema()
+    if version == "1.4.1":
+        from h2h_lit.title_abstract_fast_track_repair import evidence_unit_response_schema
+
+        return evidence_unit_response_schema()
     raise ValueError(f"unsupported response schema version: {version}")

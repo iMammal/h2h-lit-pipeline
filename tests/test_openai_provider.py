@@ -64,6 +64,7 @@ def test_responses_provider_uses_strict_schema_and_retains_usage_metadata():
             "max_output_tokens": 6000,
             "reasoning_effort": "low",
             "response_schema_version": "1.0.0",
+            "service_tier": "default",
             "store": False,
             "structured_output": "revised_star_proposal_v1_0_0",
             "verbosity": "low",
@@ -77,6 +78,7 @@ def test_responses_provider_uses_strict_schema_and_retains_usage_metadata():
     assert kwargs["headers"]["X-Client-Request-Id"] == "request:1"
     assert kwargs["json"]["store"] is False
     assert kwargs["json"]["reasoning"] == {"effort": "low"}
+    assert kwargs["json"]["service_tier"] == "default"
     assert kwargs["json"]["text"]["format"]["strict"] is True
     assert kwargs["json"]["text"]["format"]["schema"] == revised_star_response_schema()
     metadata = provider.metadata_for("request:1", 1)

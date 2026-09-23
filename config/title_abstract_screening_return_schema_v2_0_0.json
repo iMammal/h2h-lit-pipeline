@@ -1,0 +1,57 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://h2h-lit.local/schema/title-abstract-screening-return/2.0.0",
+  "title": "Approved E6-deferred title/abstract screening return",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "protocol_version",
+    "return_schema_version",
+    "record_id",
+    "criteria",
+    "e6_status",
+    "evidence_conflict",
+    "targeted_second_review_requested",
+    "computed_outcome",
+    "next_action"
+  ],
+  "properties": {
+    "protocol_version": {"const": "2.0.0"},
+    "return_schema_version": {"const": "2.0.0"},
+    "record_id": {"type": "string", "minLength": 1},
+    "criteria": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["E1", "E2", "E3", "E4", "E5", "E7"],
+      "properties": {
+        "E1": {"$ref": "#/$defs/criterion"},
+        "E2": {"$ref": "#/$defs/criterion"},
+        "E3": {"$ref": "#/$defs/criterion"},
+        "E4": {"$ref": "#/$defs/criterion"},
+        "E5": {"$ref": "#/$defs/criterion"},
+        "E7": {"$ref": "#/$defs/criterion"}
+      }
+    },
+    "e6_status": {"const": "NOT_ASSESSED_AT_THIS_STAGE"},
+    "evidence_conflict": {"type": "boolean"},
+    "targeted_second_review_requested": {"type": "boolean"},
+    "computed_outcome": {"enum": ["EXCLUDED", "UNCERTAIN", "INCLUDE"]},
+    "next_action": {"enum": ["NONE", "METADATA_RECOVERY", "EVIDENCE_RECONCILIATION", "TARGETED_SECOND_REVIEW", "FULL_TEXT_ASSESSMENT"]},
+    "primary_exclusion_reason": {"type": ["string", "null"]},
+    "confidence": {"enum": ["LOW", "MEDIUM", "HIGH", null]},
+    "uncertainty_or_missing_evidence": {"type": ["string", "null"]},
+    "notes": {"type": ["string", "null"]}
+  },
+  "$defs": {
+    "criterion": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["response"],
+      "properties": {
+        "response": {"enum": ["YES", "NO", "UNCERTAIN"]},
+        "rationale": {"type": ["string", "null"]},
+        "evidence": {"type": ["string", "null"]}
+      }
+    }
+  }
+}

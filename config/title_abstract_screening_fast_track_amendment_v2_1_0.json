@@ -1,0 +1,41 @@
+{
+  "amendment_id": "title-abstract-screening-fast-track",
+  "amendment_version": "2.1.0",
+  "approved_date": "2026-09-22",
+  "base_protocol_version": "2.0.0",
+  "base_return_schema_version": "2.0.0",
+  "scope": "prospective_staging_only_time_bounded",
+  "scientific_criteria_unchanged": ["E1", "E2", "E3", "E4", "E5"],
+  "e7_role": "Evidence sufficiency for the title/abstract scientific judgment. E7=NO or UNCERTAIN cannot produce INCLUDE and results in a deferred operational disposition when no scientific NO is present.",
+  "e6": {
+    "status": "NOT_ASSESSED_AT_THIS_STAGE",
+    "next_stage": "full_report_assessment",
+    "final_inclusion_requires_verification": true
+  },
+  "scientific_outcomes": ["EXCLUDED", "UNCERTAIN", "INCLUDE"],
+  "operational_dispositions": ["EXCLUDE", "ADVANCE_TO_FULL_REPORT_ASSESSMENT", "DEFER"],
+  "rules": [
+    "A defensible NO in E1-E5 yields EXCLUDED and operational EXCLUDE with an evidence-supported reason.",
+    "Without an E1-E5 NO, unresolved E1-E5 evidence or E7=NO/UNCERTAIN yields UNCERTAIN and operational DEFER.",
+    "Missing abstract yields DEFER in this round even when title-only criterion judgments were permitted under protocol 2.0.0.",
+    "INCLUDE with verified available full report advances to full-report assessment; INCLUDE with unavailable full report is DEFER.",
+    "DEFER is not an exclusion criterion or a final eligibility judgment.",
+    "Deferred records may be revisited only for a documented synthesis gap, never to reach a target paper count."
+  ],
+  "reporting_required": ["screened", "excluded", "advanced", "deferred", "unprocessed"],
+  "limitations": [
+    "pragmatic time-bounded selection",
+    "missing-evidence limitation",
+    "full-report accessibility limitation",
+    "not exhaustive screening",
+    "no claim of unbiased coverage",
+    "no claim of independent validation from this pilot"
+  ],
+  "state_effects": {
+    "production_screening_state_modified": false,
+    "registered_corpus_modified": false,
+    "prior_judgments_modified": false,
+    "identification_closed": false,
+    "prisma_modified": false
+  }
+}

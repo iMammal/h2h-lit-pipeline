@@ -1,0 +1,45 @@
+{
+  "protocol_id": "title-abstract-screening-e6-deferred",
+  "protocol_version": "2.0.0",
+  "approved_date": "2026-09-21",
+  "retrieval_cutoff": "2026-09-20",
+  "return_schema_id": "title-abstract-screening-return",
+  "return_schema_version": "2.0.0",
+  "assessed_criteria": ["E1", "E2", "E3", "E4", "E5", "E7"],
+  "scientific_criteria": ["E1", "E2", "E3", "E4", "E5"],
+  "criterion_states": ["YES", "NO", "UNCERTAIN"],
+  "e6": {
+    "status": "NOT_ASSESSED_AT_THIS_STAGE",
+    "meaning": "Deferred to administrative verification; it is not treated as YES and is not part of the title/abstract aggregate."
+  },
+  "outcomes": ["EXCLUDED", "UNCERTAIN", "INCLUDE"],
+  "outcome_rules": {
+    "EXCLUDED": "At least one of E1-E5 is a defensible scientific NO.",
+    "UNCERTAIN": "There is no E1-E5 NO and at least one E1-E5 response is UNCERTAIN, or E7 is NO or UNCERTAIN.",
+    "INCLUDE": "E1-E5 and E7 are all YES; retain for further assessment, not final inclusion."
+  },
+  "next_actions": [
+    "NONE",
+    "METADATA_RECOVERY",
+    "EVIDENCE_RECONCILIATION",
+    "TARGETED_SECOND_REVIEW",
+    "FULL_TEXT_ASSESSMENT"
+  ],
+  "routing_priority": [
+    "EVIDENCE_RECONCILIATION when the supplied title/abstract evidence is mismatched or otherwise conflicted.",
+    "TARGETED_SECOND_REVIEW when responses are incomplete or invalid.",
+    "NONE for EXCLUDED unless evidence reconciliation takes precedence.",
+    "METADATA_RECOVERY for a non-excluded record with no abstract.",
+    "TARGETED_SECOND_REVIEW when prospectively requested after the earlier routes do not apply.",
+    "FULL_TEXT_ASSESSMENT for remaining complete INCLUDE or UNCERTAIN records."
+  ],
+  "title_only_rule": "Explicit title evidence may support an individual criterion; a promising title does not establish all criteria.",
+  "formula_templates": {
+    "outcome": "=IF(COUNTIF(E{row}:I{row},\"NO\")>0,\"EXCLUDED\",IF(COUNTA(E{row}:I{row})+COUNTA(K{row})<6,\"\",IF(COUNTIF(E{row}:I{row},\"UNCERTAIN\")+COUNTIF(K{row},\"NO\")+COUNTIF(K{row},\"UNCERTAIN\")>0,\"UNCERTAIN\",IF(COUNTIF(E{row}:I{row},\"YES\")+COUNTIF(K{row},\"YES\")=6,\"INCLUDE\",\"\"))))",
+    "next_action": "=IF(COUNTA(E{row}:I{row})+COUNTA(K{row})=0,\"\",IF(L{row}=\"YES\",\"EVIDENCE_RECONCILIATION\",IF(N{row}=\"\",\"TARGETED_SECOND_REVIEW\",IF(N{row}=\"EXCLUDED\",\"NONE\",IF(C{row}=\"\",\"METADATA_RECOVERY\",IF(M{row}=\"YES\",\"TARGETED_SECOND_REVIEW\",\"FULL_TEXT_ASSESSMENT\"))))))"
+  },
+  "historical_compatibility": {
+    "schema_1_x": "Detected and validated under the frozen E1-E7/ELIGIBLE contract; no reinterpretation as version 2.0.0.",
+    "schema_2_0_0": "Detected by the explicit Return schema version instruction and recomputed from E1-E5/E7."
+  }
+}

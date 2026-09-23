@@ -17,6 +17,14 @@ from h2h_lit.human_validation_review import (
     HumanValidationReviewError,
     recompute_aggregate_outcome,
 )
+from h2h_lit.title_abstract_screening import (
+    ASSESSED_CRITERIA,
+    E6_STATUS,
+    RETURN_SCHEMA_VERSION,
+    TitleAbstractScreeningError,
+    recommend_next_action,
+    recompute_outcome,
+)
 
 _MAIN_NS = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
 _REL_NS = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
@@ -129,13 +137,16 @@ def validate_review_workbook(path: str | Path) -> dict[str, Any]:
                 "review workbook must contain Instructions and Reviews sheets"
             )
 
-        reviewer_id = ""
+        instruction_values: dict[str, str] = {}
         for row_number, cells in _iter_rows(
             archive, worksheets["Instructions"], shared_strings
         ):
-            if row_number == 3 and _text(cells, 1) == "Reviewer ID":
-                reviewer_id = _text(cells, 2)
-                break
+            label = _text(cells, 1)
+            if label:
+                instruction_values[label] = _text(cells, 2)
+        reviewer_id = instruction_values.get("Reviewer ID", "")
+        return_schema_version = instruction_values.get("Return schema version", "1.x")
+        approved_schema = return_schema_version == RETURN_SCHEMA_VERSION
 
         header_columns: dict[str, int] = {}
         row_reports: list[dict[str, Any]] = []
@@ -150,18 +161,33 @@ def validate_review_workbook(path: str | Path) -> dict[str, Any]:
             record_id = _text(cells, header_columns.get("Stable record ID", 1))
             if not record_id:
                 continue
+            criterion_names = ASSESSED_CRITERIA if approved_schema else tuple(
+                f"E{index}" for index in range(1, 8)
+            )
             criteria = {
                 criterion: _text(cells, header_columns.get(criterion, 0))
-                for criterion in (f"E{index}" for index in range(1, 8))
+                for criterion in criterion_names
             }
             problems: list[str] = []
-            if any(value not in TRI_STATES for value in criteria.values()):
-                computed_outcome = None
-                problems.append("INCOMPLETE_OR_INVALID_CRITERIA")
+            e6_status = _text(cells, header_columns.get("E6", 0))
+            if approved_schema:
+                try:
+                    computed_outcome = recompute_outcome(criteria, e6_status)
+                except TitleAbstractScreeningError:
+                    computed_outcome = None
+                    problems.append("INCOMPLETE_OR_INVALID_CRITERIA")
+                    if e6_status != E6_STATUS:
+                        problems.append("INVALID_E6_STATUS")
             else:
-                computed_outcome = recompute_aggregate_outcome(criteria)
+                if any(value not in TRI_STATES for value in criteria.values()):
+                    computed_outcome = None
+                    problems.append("INCOMPLETE_OR_INVALID_CRITERIA")
+                else:
+                    computed_outcome = recompute_aggregate_outcome(criteria)
 
-            outcome_column = header_columns.get("Eligibility status", 12)
+            outcome_column = header_columns.get(
+                "Screening outcome" if approved_schema else "Eligibility status", 14 if approved_schema else 12
+            )
             outcome_cell = cells.get(outcome_column, {})
             cached_outcome = outcome_cell.get("value")
             if cached_outcome in (None, ""):
@@ -171,25 +197,49 @@ def validate_review_workbook(path: str | Path) -> dict[str, Any]:
             else:
                 cache_status = "STALE_OR_INCORRECT"
 
-            exclusion_reason = _text(
-                cells, header_columns.get("Primary exclusion reason", 13)
-            )
-            escalation = _text(cells, header_columns.get("Full-text escalation", 14))
-            escalation_rationale = _text(
-                cells,
-                header_columns.get("Excluded-record escalation rationale", 0),
-            )
-            if computed_outcome == "EXCLUDED":
-                if exclusion_reason not in EXCLUSION_REASONS:
+            exclusion_reason = _text(cells, header_columns.get("Primary exclusion reason", 16 if approved_schema else 13))
+            if approved_schema:
+                evidence_conflict = _text(cells, header_columns.get("Evidence conflict", 12)) == "YES"
+                targeted_review = _text(cells, header_columns.get("Targeted second review", 13)) == "YES"
+                abstract_missing = not _text(cells, header_columns.get("Abstract", 3))
+                expected_action = recommend_next_action(
+                    criteria,
+                    e6_status=e6_status,
+                    abstract_missing=abstract_missing,
+                    evidence_conflict=evidence_conflict,
+                    targeted_second_review_requested=targeted_review,
+                )
+                action_column = header_columns.get("Next action", 15)
+                action_cell = cells.get(action_column, {})
+                cached_action = action_cell.get("value")
+                if cached_action in (None, ""):
+                    action_cache_status = "BLANK"
+                elif str(cached_action) == expected_action:
+                    action_cache_status = "MATCH"
+                else:
+                    action_cache_status = "STALE_OR_INCORRECT"
+                    problems.append("NEXT_ACTION_CACHE_MISMATCH")
+                if computed_outcome == "EXCLUDED" and exclusion_reason not in EXCLUSION_REASONS:
                     problems.append("EXCLUDED_WITHOUT_VALID_PRIMARY_REASON")
-                if escalation == "YES" and not escalation_rationale:
-                    problems.append("EXCLUDED_ESCALATION_WITHOUT_EXPLICIT_RATIONALE")
-            elif computed_outcome == "UNCERTAIN" and escalation != "YES":
-                problems.append("UNCERTAIN_WITHOUT_REQUIRED_ESCALATION")
-            elif computed_outcome == "ELIGIBLE" and escalation == "YES":
-                problems.append("ELIGIBLE_WITH_ESCALATION")
-            if escalation not in {"YES", "NO"}:
-                problems.append("INVALID_OR_MISSING_ESCALATION")
+                escalation = None
+                escalation_rationale = ""
+            else:
+                expected_action = None
+                cached_action = None
+                action_cache_status = None
+                escalation = _text(cells, header_columns.get("Full-text escalation", 14))
+                escalation_rationale = _text(cells, header_columns.get("Excluded-record escalation rationale", 0))
+                if computed_outcome == "EXCLUDED":
+                    if exclusion_reason not in EXCLUSION_REASONS:
+                        problems.append("EXCLUDED_WITHOUT_VALID_PRIMARY_REASON")
+                    if escalation == "YES" and not escalation_rationale:
+                        problems.append("EXCLUDED_ESCALATION_WITHOUT_EXPLICIT_RATIONALE")
+                elif computed_outcome == "UNCERTAIN" and escalation != "YES":
+                    problems.append("UNCERTAIN_WITHOUT_REQUIRED_ESCALATION")
+                elif computed_outcome == "ELIGIBLE" and escalation == "YES":
+                    problems.append("ELIGIBLE_WITH_ESCALATION")
+                if escalation not in {"YES", "NO"}:
+                    problems.append("INVALID_OR_MISSING_ESCALATION")
 
             row_reports.append(
                 {
@@ -197,12 +247,16 @@ def validate_review_workbook(path: str | Path) -> dict[str, Any]:
                     "record_id": record_id,
                     "criteria": criteria,
                     "computed_outcome": computed_outcome,
+                    "e6_status": e6_status,
                     "formula": outcome_cell.get("formula"),
                     "cached_outcome": cached_outcome,
                     "cache_status": cache_status,
                     "primary_exclusion_reason": exclusion_reason or None,
                     "full_text_escalation": escalation or None,
                     "excluded_record_escalation_rationale": escalation_rationale,
+                    "computed_next_action": expected_action,
+                    "cached_next_action": cached_action,
+                    "next_action_cache_status": action_cache_status,
                     "inconsistencies": problems,
                 }
             )
@@ -220,6 +274,7 @@ def validate_review_workbook(path: str | Path) -> dict[str, Any]:
     return {
         "workbook": str(workbook_path.resolve()),
         "reviewer_id": reviewer_id,
+        "return_schema_version": return_schema_version,
         "records": len(row_reports),
         "computed_outcome_counts": outcome_counts,
         "formula_cache_counts": cache_counts,
