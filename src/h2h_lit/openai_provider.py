@@ -138,6 +138,20 @@ class OpenAIResponsesProvider:
             raise TypeError("OpenAI response envelope must be an object")
 
         output_text = _extract_output_text(payload)
+        safe_headers = {}
+        response_headers = getattr(response, "headers", {})
+        for name in (
+            "x-ratelimit-limit-requests",
+            "x-ratelimit-limit-tokens",
+            "x-ratelimit-remaining-requests",
+            "x-ratelimit-remaining-tokens",
+            "x-ratelimit-reset-requests",
+            "x-ratelimit-reset-tokens",
+            "retry-after",
+        ):
+            value = response_headers.get(name) if hasattr(response_headers, "get") else None
+            if value is not None:
+                safe_headers[name] = str(value)
         self.response_metadata[(request_id, attempt_number)] = {
             "provider_response_id": payload.get("id"),
             "provider_status": payload.get("status"),
@@ -147,6 +161,7 @@ class OpenAIResponsesProvider:
             "provider_error": payload.get("error"),
             "client_request_id": request_id,
             "attempt_number": attempt_number,
+            "rate_limit_headers": safe_headers,
         }
         return output_text
 
@@ -155,8 +170,9 @@ class OpenAIResponsesProvider:
 
 
 class _UrllibResponse:
-    def __init__(self, payload: bytes):
+    def __init__(self, payload: bytes, headers: Any = None):
         self._payload = payload
+        self.headers = headers or {}
 
     def raise_for_status(self) -> None:
         return None
@@ -194,7 +210,7 @@ class _UrllibSession:
         )
         try:
             with urlopen(request, timeout=timeout) as response:
-                return _UrllibResponse(response.read())
+                return _UrllibResponse(response.read(), response.headers)
         except HTTPError as exc:
             body = exc.read().decode("utf-8", errors="replace")
             raise OpenAIHTTPError(exc.code, body) from exc
@@ -333,4 +349,8 @@ def _response_schema_for_version(version: str) -> dict[str, Any]:
         from h2h_lit.title_abstract_precision_rescreen import precision_response_schema
 
         return precision_response_schema()
+    if version == "coding-1.0.0":
+        from h2h_lit.title_abstract_remaining_campaign import taxonomy_coding_response_schema
+
+        return taxonomy_coding_response_schema()
     raise ValueError(f"unsupported response schema version: {version}")

@@ -1,0 +1,53 @@
+{
+  "campaign_id": "title-abstract-remaining-screening-and-coding",
+  "campaign_version": "1.0.0",
+  "created_date": "2026-09-24",
+  "screening_protocol_version": "2.0.0",
+  "screening_amendment_version": "2.2.0",
+  "screening_prompt_version": "2.2.0",
+  "coding_prompt_version": "1.0.0",
+  "scope": "staging_only_remaining_registered_corpus_and_provisional_category_coding",
+  "taxonomy": {
+    "annotation_states": ["PRESENT", "ABSENT", "UNCERTAIN"],
+    "assistance_modes": ["Algorithmic", "Adaptive", "Conversational", "Immersive"],
+    "visualization_modalities": ["Desktop 2D", "Large Display", "VR", "AR/MR", "CAVE"],
+    "tasks": [
+      "Navigation and Multiscale Orientation",
+      "Comparison and Differentiation",
+      "Selection, Filtering, and Precision Interaction",
+      "Sensemaking and Hypothesis Development",
+      "Coordination and Collaborative Reasoning"
+    ],
+    "workflow_support_review": ["SUPPORTED", "UNSUPPORTED", "UNKNOWN"]
+  },
+  "execution": {
+    "provider": "OpenAI Responses API",
+    "model": "gpt-5.6-luna",
+    "reasoning_effort": "medium",
+    "service_tier": "default",
+    "tools": [],
+    "hard_cumulative_spending_cap_usd": 200.0,
+    "runtime_hours": 12.0,
+    "drain_seconds": 300,
+    "retry_limit": 1,
+    "screening_smoke_records": 20,
+    "coding_smoke_records": 5,
+    "concurrency_ramp": [4, 8, 16, 32],
+    "maximum_concurrency": 32,
+    "steady_state_scheduling": "three screening submissions then one coding submission when coding work is available",
+    "rate_limit_policy": "advance a ramp step only after a clean phase and observed response-header capacity; reduce on throttling"
+  },
+  "scientific_policy": {
+    "screening": "approved prospective high-precision v2.2 policy",
+    "uncertain_operational_disposition": "DEFER",
+    "e6": "NOT_ASSESSED_AT_THIS_STAGE",
+    "coding_is_dispositive_for_screening": false,
+    "coding_workflow_support_flag_changes_historical_screening": false
+  },
+  "limitations": [
+    "title-and-abstract evidence only",
+    "category coding is provisional and not full-report extraction",
+    "ADVANCE is a model nomination rather than final paper eligibility",
+    "uncertainty is deferred from the current synthesis rather than treated as scientific exclusion"
+  ]
+}
