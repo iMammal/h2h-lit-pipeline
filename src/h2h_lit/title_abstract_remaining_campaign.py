@@ -439,6 +439,12 @@ class CampaignProgress:
                     "retries": self.retries["coding"], "aggregate_latency_seconds": self.latency["coding"],
                 },
                 "historical_cumulative_conservative_cost_usd": self.initial_cost,
+                "cumulative_usage": {
+                    key: self.initial_usage[key]
+                    + self.stage_usage["screening"][key]
+                    + self.stage_usage["coding"][key]
+                    for key in USAGE_KEYS
+                },
                 "cumulative_conservative_cost_usd": state["actual"], "outstanding_reservations_usd": state["reserved"],
                 "hard_cumulative_spending_cap_usd": state["cap"], "elapsed_seconds": runtime.elapsed(),
                 "combined_completions_per_hour": ((screen_done + code_done) / runtime.elapsed() * 3600 if runtime.elapsed() else 0.0),

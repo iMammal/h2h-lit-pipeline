@@ -338,6 +338,7 @@ def build_handoff(
         "hard_cumulative_cap_usd": continuation_report["hard_cumulative_spending_cap_usd"],
         "continuation_screening_usage": continuation_report["screening"]["usage"],
         "continuation_coding_usage": continuation_report["coding"]["usage"],
+        "cumulative_usage": continuation_report["cumulative_usage"],
         "stopping_reason": continuation_report["stopping_reason"],
     }
     report = {

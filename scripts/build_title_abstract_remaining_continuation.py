@@ -62,9 +62,11 @@ def freeze_continuation(
     original_manifest_path = parent_deployment / "inputs" / "remaining_campaign_manifest.json"
     original_queue_path = parent_deployment / "inputs" / "remaining_screening_queue.jsonl"
     original_coding_seed_path = parent_deployment / "inputs" / "coding_seed_646.jsonl"
+    historical_ledger_path = parent_deployment / "prior" / "precision_run_report.json"
     report = json.loads(report_path.read_text(encoding="utf-8"))
     terminal = json.loads(terminal_path.read_text(encoding="utf-8"))
     original_manifest = json.loads(original_manifest_path.read_text(encoding="utf-8"))
+    historical_ledger = json.loads(historical_ledger_path.read_text(encoding="utf-8"))
     if report.get("status") != "STOPPED" or terminal.get("status") != "STOPPED":
         raise ValueError("parent run is not terminal")
     if report.get("stopping_reason") != "RUNTIME_LIMIT_DRAIN":
@@ -165,6 +167,28 @@ def freeze_continuation(
     coding_out = output_dir / "continuation_coding_seed_4.jsonl"
     write_jsonl(queue_out, pending_rows)
     write_jsonl(coding_out, uncoded_rows)
+    usage_keys = (
+        "input_tokens", "cached_input_tokens", "cache_write_tokens",
+        "output_tokens", "reasoning_tokens",
+    )
+    continuation_ledger = {
+        "artifact_class": "title_abstract_remaining_campaign_continuation_ledger",
+        "cumulative_conservative_cost_usd": report["cumulative_conservative_cost_usd"],
+        "outstanding_reservations_usd": report["outstanding_reservations_usd"],
+        "cumulative_usage": {
+            key: int(historical_ledger["cumulative_usage"].get(key, 0))
+            + int(report["screening"]["usage"].get(key, 0))
+            + int(report["coding"]["usage"].get(key, 0))
+            for key in usage_keys
+        },
+        "parent_report": {"path": str(report_path), "sha256": sha256_file(report_path)},
+        "historical_ledger": {"path": str(historical_ledger_path), "sha256": sha256_file(historical_ledger_path)},
+    }
+    continuation_ledger_path = output_dir / "continuation_campaign_ledger.json"
+    write_create_only(
+        continuation_ledger_path,
+        (json.dumps(continuation_ledger, indent=2, sort_keys=True) + "\n").encode("utf-8"),
+    )
     bindings = {
         "config": config_path,
         "screening_prompt": screening_prompt_path,
@@ -183,6 +207,10 @@ def freeze_continuation(
         "coding_seed": {
             "path": str(coding_out), "sha256": sha256_file(coding_out),
             "records": len(uncoded_rows), "unique_ids": len(set(uncoded_ids)),
+        },
+        "campaign_ledger": {
+            "path": str(continuation_ledger_path),
+            "sha256": sha256_file(continuation_ledger_path),
         },
         "partition": {
             "original_queue_records": 126168,
@@ -211,6 +239,7 @@ def freeze_continuation(
             "input_manifest": {"path": str(original_manifest_path), "sha256": sha256_file(original_manifest_path)},
             "screening_queue": {"path": str(original_queue_path), "sha256": sha256_file(original_queue_path)},
             "coding_seed": {"path": str(original_coding_seed_path), "sha256": sha256_file(original_coding_seed_path)},
+            "historical_campaign_ledger": {"path": str(historical_ledger_path), "sha256": sha256_file(historical_ledger_path)},
             "corpus": original_manifest["frame"],
             "identity_overlay": original_manifest["identity_overlay"],
             "order": original_manifest["order"],

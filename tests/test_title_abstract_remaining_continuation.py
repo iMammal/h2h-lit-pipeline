@@ -160,6 +160,8 @@ def test_manifest_driven_continuation_counts_and_shared_budget(tmp_path):
     assert report["coding"]["counts"]["validated"] == 21
     assert report["cumulative_conservative_cost_usd"] > 194.47124293
     assert report["cumulative_conservative_cost_usd"] <= 225.0
+    assert report["cumulative_usage"]["input_tokens"] == 4100
+    assert report["cumulative_usage"]["output_tokens"] == 4100
 
 
 def test_combined_csv_rejects_duplicate_ids(tmp_path):
