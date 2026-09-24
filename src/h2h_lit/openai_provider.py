@@ -329,4 +329,8 @@ def _response_schema_for_version(version: str) -> dict[str, Any]:
         from h2h_lit.title_abstract_fast_track_repair import evidence_unit_response_schema
 
         return evidence_unit_response_schema()
+    if version == "2.2.0":
+        from h2h_lit.title_abstract_precision_rescreen import precision_response_schema
+
+        return precision_response_schema()
     raise ValueError(f"unsupported response schema version: {version}")

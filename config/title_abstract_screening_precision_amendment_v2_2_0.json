@@ -1,0 +1,74 @@
+{
+  "amendment_id": "title-abstract-screening-high-precision-candidate-pass",
+  "amendment_version": "2.2.0",
+  "approved_date": "2026-09-23",
+  "base_protocol_version": "2.0.0",
+  "supersedes_amendment_for_this_prospective_pass": "2.1.0",
+  "scope": "prospective_staging_only_existing_890_include_candidates",
+  "purpose": "Increase precision under the synthesis deadline while explicitly accepting reduced recall.",
+  "historical_interpretation": "This is a changed prospective selection policy. It preserves and does not invalidate prior screening outcomes.",
+  "scientific_criteria": {
+    "preserved": ["E1", "E2", "E3", "E4", "E5"],
+    "approved_scope_changes": [
+      "Surveys, reviews, and broad overviews are excluded from the current synthesis and retained in a separate H2H3/background list.",
+      "Eligible research reports must describe or evaluate a specific qualifying system or workflow; they need not introduce a new system.",
+      "Advancement requires explicit supplied evidence connecting the human analytical task, visual interaction or an analytically meaningful visual representation, and substantive computational assistance in the same workflow."
+    ]
+  },
+  "e6": {
+    "status": "NOT_ASSESSED_AT_THIS_STAGE",
+    "next_stage": "full_report_assessment",
+    "final_inclusion_requires_verification": true
+  },
+  "policy_rules": [
+    "Infrastructure, data hosting, browser construction, rendering or streaming performance, and generic support for downstream analysis do not by themselves establish the required integrated analytical workflow.",
+    "Do not infer integration merely because a report mentions both AI and visualization or combines a chatbot with a static explanatory image.",
+    "Clinical, monitoring, operational, and health-administration analysis may qualify; research use is not mandatory.",
+    "AI or machine learning is not mandatory. Qualifying computation may include clustering, statistical analysis, simulation, optimization, registration, or similar methods when integrated into the analytical workflow.",
+    "A defensible scientific NO or explicit contradictory workflow evidence yields EXCLUDED.",
+    "Missing or ambiguous evidence yields UNCERTAIN with DEFER, not an invented negative judgment.",
+    "Advance only clearly supported candidates. There is no INCLUDE quota, target yield, or category balancing."
+  ],
+  "document_scope_values": ["QUALIFYING_RESEARCH_REPORT", "SURVEY_REVIEW_OVERVIEW", "UNCERTAIN"],
+  "workflow_integration_values": ["SUPPORTED", "CONTRADICTED", "NOT_EVIDENCED_IN_SUPPLIED_METADATA"],
+  "scientific_outcomes": ["EXCLUDED", "UNCERTAIN", "INCLUDE"],
+  "operational_dispositions": ["EXCLUDE", "DEFER", "ADVANCE_TO_FULL_REPORT_ASSESSMENT"],
+  "routes": ["NONE", "H2H3_BACKGROUND", "FULL_REPORT_ASSESSMENT"],
+  "reviewed_check_cases": [
+    {
+      "former_candidate_number": 562,
+      "canonical_id": "canonical:6cba34b3fcffe6edee586e7c",
+      "title": "Methods in the Study of African Historical Geography, Landscapes, and Environmental Change",
+      "expected_policy_handling": "EXCLUDE_AND_RETAIN_H2H3_BACKGROUND",
+      "rationale": "Survey or broad-overview document scope is outside the current synthesis."
+    },
+    {
+      "former_candidate_number": 375,
+      "canonical_id": "canonical:63dbecba9805af2d57e4a720",
+      "title": "GIVE: toward portable genome browsers for personal websites",
+      "expected_policy_handling": "DEFER",
+      "rationale": "The supplied abstract establishes browser infrastructure but not the required integrated analytical workflow."
+    },
+    {
+      "former_candidate_number": 877,
+      "canonical_id": "canonical:7d4fb116a00ffdf960725e82",
+      "title": "3D objects visualization for remote interactive medical applications",
+      "expected_policy_handling": "DEFER",
+      "rationale": "The supplied abstract establishes remote visualization infrastructure or performance but not explicit analytical use."
+    }
+  ],
+  "model_input_policy": "Use only the original supplied title and abstract evidence units. Do not supply prior judgments, model summaries, expected outcomes, or enriched evidence.",
+  "limitations": [
+    "higher-precision deadline selection with reduced recall",
+    "title-and-abstract evidence only",
+    "model nominations require human full-report assessment",
+    "not an independent accuracy benchmark"
+  ],
+  "state_effects": {
+    "production_screening_state_modified": false,
+    "registered_corpus_modified": false,
+    "prior_judgments_modified": false,
+    "identification_closed": false,
+    "prisma_modified": false
+  }
+}
