@@ -127,8 +127,9 @@ def e7_warning_summary(result_dirs: list[Path]) -> dict[str, Any]:
                 raise ValueError(f"invalid deterministic disposition: {record_id}")
             summary[group]["valid_screenings"] += 1
             summary[group]["e7_warnings"] += int(bool(result.get("e7_consistency_warning")))
-    summary["total_valid_screenings"] = sum(row["valid_screenings"] for row in summary.values())
-    summary["total_e7_warnings"] = sum(row["e7_warnings"] for row in summary.values())
+    outcome_rows = tuple(summary.values())
+    summary["total_valid_screenings"] = sum(row["valid_screenings"] for row in outcome_rows)
+    summary["total_e7_warnings"] = sum(row["e7_warnings"] for row in outcome_rows)
     summary["advance_warning_check"] = (
         f"{summary['ADVANCE']['e7_warnings']} of "
         f"{summary['ADVANCE']['valid_screenings']} ADVANCE records carry a nonfatal E7 warning"

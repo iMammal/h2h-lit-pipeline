@@ -193,3 +193,37 @@ def test_category_summary_counts_unique_papers_separately_from_assignments():
     assert result["multilabel_present_assignments"] == 15
     assert result["labels"] == {"x": 5, "y": 1}
     assert result["workflow_support_review"]["UNSUPPORTED"] == 1
+
+
+def test_e7_warning_summary_totals_only_outcome_rows(tmp_path):
+    from scripts.build_title_abstract_combined_handoff import e7_warning_summary
+
+    result_dir = tmp_path / "results"
+    for index, (disposition, warning) in enumerate(
+        [
+            ("ADVANCE_TO_FULL_REPORT_ASSESSMENT", True),
+            ("DEFER", False),
+            ("EXCLUDE", True),
+        ]
+    ):
+        record_dir = result_dir / f"record-{index}"
+        record_dir.mkdir(parents=True)
+        (record_dir / "result.json").write_text(
+            json.dumps(
+                {
+                    "canonical_id": f"canonical:{index}",
+                    "status": "VALIDATED",
+                    "judgment": {"operational_disposition": disposition},
+                    "e7_consistency_warning": warning,
+                }
+            ),
+            encoding="utf-8",
+        )
+
+    summary = e7_warning_summary([result_dir])
+
+    assert summary["total_valid_screenings"] == 3
+    assert summary["total_e7_warnings"] == 2
+    assert summary["advance_warning_check"] == (
+        "1 of 1 ADVANCE records carry a nonfatal E7 warning"
+    )
