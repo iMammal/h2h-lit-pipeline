@@ -541,9 +541,15 @@ def run_remaining_campaign(
         raise ValueError("campaign requires 20-record smoke, concurrency 4, and at most one retry")
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     config = json.loads(config_path.read_text(encoding="utf-8"))
-    if manifest.get("screening_queue", {}).get("sha256") != sha256_file(queue_path) or manifest.get("screening_queue", {}).get("records") != 126168:
+    queue_count = int(manifest.get("screening_queue", {}).get("records", 0))
+    coding_seed_count = int(manifest.get("coding_seed", {}).get("records", 0))
+    if queue_count < settings.smoke_count:
+        raise ValueError("screening queue is smaller than the required smoke gate")
+    if coding_seed_count < 1:
+        raise ValueError("coding seed must contain at least one pending candidate")
+    if manifest.get("screening_queue", {}).get("sha256") != sha256_file(queue_path):
         raise ValueError("remaining screening queue binding drift")
-    if manifest.get("coding_seed", {}).get("sha256") != sha256_file(coding_seed_path) or manifest.get("coding_seed", {}).get("records") != 646:
+    if manifest.get("coding_seed", {}).get("sha256") != sha256_file(coding_seed_path):
         raise ValueError("coding seed binding drift")
     for name, path in (
         ("config", config_path), ("screening_prompt", screening_prompt_path),
@@ -584,8 +590,8 @@ def run_remaining_campaign(
     binding = {
         "artifact_class": "remaining_corpus_screening_and_coding_run", "runner_version": RUNNER_VERSION,
         "status": "RUNNING", "created_at_utc": utc_now(),
-        "queue": {"path": str(queue_path), "sha256": sha256_file(queue_path), "records": 126168},
-        "coding_seed": {"path": str(coding_seed_path), "sha256": sha256_file(coding_seed_path), "records": 646},
+        "queue": {"path": str(queue_path), "sha256": sha256_file(queue_path), "records": queue_count},
+        "coding_seed": {"path": str(coding_seed_path), "sha256": sha256_file(coding_seed_path), "records": coding_seed_count},
         "manifest": {"path": str(manifest_path), "sha256": sha256_file(manifest_path)},
         "config": {"path": str(config_path), "sha256": sha256_file(config_path)},
         "prompts": {"screening": sha256_file(screening_prompt_path), "coding": sha256_file(coding_prompt_path)},
@@ -631,7 +637,7 @@ def run_remaining_campaign(
     persisted_cost = sum(_attempt_usage(row)[0] for row in (*existing_screen.values(), *existing_code.values()))
     budget = Budget(settings.hard_spending_cap_usd, initial_cost + persisted_cost)
     runtime = RuntimeWindow(output_dir, runtime_hours, drain_seconds)
-    progress = CampaignProgress(output_dir, 126168, 646, initial_cost, initial_usage)
+    progress = CampaignProgress(output_dir, queue_count, coding_seed_count, initial_cost, initial_usage)
     for row in existing_screen.values():
         progress.add("screening", row)
     for row in existing_code.values():
@@ -754,12 +760,43 @@ def run_remaining_campaign(
         if screening_smoke_passed:
             coding_smoke_passed = execute_smoke("coding", smoke_code)
         if screening_smoke_passed and coding_smoke_passed and not stop_event.is_set():
-            print(json.dumps({"event": "smoke_gate_passed", "screening": 20, "coding": 5}), flush=True)
+            print(json.dumps({
+                "event": "smoke_gate_passed",
+                "screening": len(smoke_screen),
+                "coding": len(smoke_code),
+            }), flush=True)
             current_concurrency = 8
             screening_iter = iter(_iter_after(queue_path, 20))
             coding_pending = deque(row for row in _iter_after(coding_seed_path, 5) if row["canonical_id"] not in existing_code)
             screen_exhausted = False
-            coding_sequence = 646
+            coding_sequence = max(
+                (int(row.get("coding_order") or 0) for row in code_source.values()),
+                default=0,
+            )
+            for source in smoke_screen:
+                result_path = (
+                    screen_dir
+                    / source["canonical_id"].replace(":", "_")
+                    / "result.json"
+                )
+                result = json.loads(result_path.read_text(encoding="utf-8"))
+                if (
+                    result.get("status") == "VALIDATED"
+                    and result.get("judgment", {}).get("operational_disposition")
+                    == "ADVANCE_TO_FULL_REPORT_ASSESSMENT"
+                    and source["canonical_id"] not in code_source
+                ):
+                    coding_sequence += 1
+                    candidate = {
+                        **source,
+                        "coding_order": coding_sequence,
+                        "coding_source": "new_remaining_screening_advance",
+                    }
+                    code_source[candidate["canonical_id"]] = candidate
+                    _append_jsonl(
+                        output_dir / "new_advance_coding_queue.jsonl", candidate
+                    )
+                    coding_pending.append(candidate)
             schedule_counter = 0
             futures: dict[Future[dict[str, Any]], tuple[str, dict[str, Any]]] = {}
             with ThreadPoolExecutor(max_workers=32) as pool:
@@ -845,7 +882,11 @@ def run_remaining_campaign(
     _write_workbook(workbook_path, coding_csv)
     snapshot = progress.snapshot(budget, runtime, stop_reason, current_concurrency)
     snapshot.update({
-        "status": "COMPLETE" if len(existing_screen) == 126168 and len(existing_code) >= 646 and not stop_reason else "STOPPED",
+        "status": "COMPLETE" if len(existing_screen) == queue_count and not any(
+            row["canonical_id"] not in existing_code
+            or str(existing_code[row["canonical_id"]].get("status", "")).startswith("UNPROCESSED")
+            for row in code_source.values()
+        ) and not stop_reason else "STOPPED",
         "stopping_reason": stop_reason or "AVAILABLE_WORK_COMPLETE", "screening_smoke_passed": screening_smoke_passed,
         "coding_smoke_passed": coding_smoke_passed, "category_summary": category_summary,
         "screening_unprocessed_path": str(unprocessed_path), "categorized_candidate_csv": str(coding_csv),
