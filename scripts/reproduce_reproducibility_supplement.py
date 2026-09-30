@@ -30,6 +30,11 @@ LABEL_COLUMNS = {
     "task": (TASKS, "tasks_present", "tasks_unknown"),
 }
 MODALITY_ALIASES = {"Desktop 2D": "Desktop/Planar"}
+ABSTRACT_AVAILABILITY_SCOPE = (
+    "Recomputes preserved abstract-availability flags from the reduced candidate export; "
+    "abstract text is omitted and is not inspected. Historical output field names are "
+    "retained for compatibility."
+)
 TARGET_CELLS = {
     ("Adaptive", "Large Display"),
     ("Immersive", "Desktop/Planar"),
@@ -565,6 +570,7 @@ def run(supplement: Path, output: Path) -> dict[str, object]:
         "candidate_category_rows": len(state_rows),
         "candidate_cell_rows": len(cell_rows),
         "candidate_cell_task_rows": len(task_rows),
+        "abstract_availability_scope": ABSTRACT_AVAILABILITY_SCOPE,
         "systems_considered": len(eligibility_rows),
         "supported_systems": len({system for systems in systems_by_cell.values() for system in systems}),
         "supported_system_cell_placements": sum(len(systems) for systems in systems_by_cell.values()),

@@ -61,6 +61,25 @@ def test_release_license_scope_is_explicit() -> None:
     assert 'authors = [{ name = "Morris Chukhman" }]' in pyproject
 
 
+def test_final_release_creator_and_tool_metadata(tmp_path: Path) -> None:
+    MODULE.write_static_materials(tmp_path, "main", "research", "release")
+    metadata = json.loads(
+        (tmp_path / "ZENODO_METADATA_DRAFT.json").read_text(encoding="utf-8")
+    )
+    assert metadata["version"] == "3.0.0"
+    assert metadata["creators"] == [{"name": "Chukhman, Morris"}]
+    assert "ChatGPT and Codex" in metadata["development_tools_disclosure"]
+    assert "creator" not in " ".join(metadata["metadata_not_supplied"]).lower()
+    release_notes = (tmp_path / "RELEASE_NOTES_DRAFT.md").read_text(encoding="utf-8")
+    assert "sole human creator" in release_notes
+    assert "additional creators" not in release_notes
+
+
+def test_abstract_availability_scope_is_explicit() -> None:
+    assert "preserved abstract-availability flags" in REPRODUCE.ABSTRACT_AVAILABILITY_SCOPE
+    assert "abstract text is omitted and is not inspected" in REPRODUCE.ABSTRACT_AVAILABILITY_SCOPE
+
+
 def test_candidate_recomputation_normalizes_desktop_and_uses_exhaustive_omission() -> None:
     row = {
         "canonical_id": "canonical:1",

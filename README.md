@@ -64,6 +64,9 @@ python -m pip install -e '.[dev]'
 
 Copyright (c) 2026 Morris Chukhman for his original contributions.
 
+Morris Chukhman is the sole human creator of the original software and reproducibility
+supplement. ChatGPT and Codex were used as development tools and are not creators.
+
 - Morris Chukhman's original pipeline code and scripts are available under the
   [MIT License](LICENSE).
 - His original documentation, protocols, annotations, diagrams, and research
@@ -85,11 +88,11 @@ calls:
 ```bash
 python scripts/build_reproducibility_supplement.py \
   --repository-root . \
-  --output-root outputs/staging/h2h2-cgf-reproducibility-release-v3-20260930 \
+  --output-root outputs/staging/h2h2-cgf-reproducibility-final-release-v3-20260930 \
   --research-commit 27cf867f598041f846f2ce57c6a736a89539dc98
 
 python scripts/build_reproducibility_supplement.py \
-  --verify outputs/staging/h2h2-cgf-reproducibility-release-v3-20260930/supplement
+  --verify outputs/staging/h2h2-cgf-reproducibility-final-release-v3-20260930/supplement
 
 python -m pytest tests/test_reproducibility_supplement.py
 ```
@@ -110,6 +113,8 @@ included inputs. The builder validates logical CSV records, stable-ID uniqueness
 checkpoint equations, source hashes, manifest coverage, consistent excerpt treatment,
 and the same command from a clean extraction. It does not reopen the registered
 multi-gigabyte corpus or reconstruct upstream screening/deduplication from summaries.
+The abstract-availability comparison reproduces preserved availability flags; the
+redistributed candidate export omits abstract text, so the command does not inspect it.
 
 The full-report rows retain their original automated-assessment provenance. Morris
 Chukhman reports having reviewed the AI-generated material; this package-level statement

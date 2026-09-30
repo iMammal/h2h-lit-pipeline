@@ -22,6 +22,11 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 PACKAGE_VERSION = "h2h2-cgf-reproducibility-supplement-v3-20260930"
+RELEASE_VERSION = "3.0.0"
+ZENODO_CREATOR_NAME = "Chukhman, Morris"
+DEVELOPMENT_TOOL_DISCLOSURE = (
+    "ChatGPT and Codex were used as development tools; they are not creators."
+)
 EXPECTED_COUNTS = {
     "source_occurrences": 187446,
     "canonical_records": 140959,
@@ -231,7 +236,7 @@ COPY_SPECS = (
     CopySpec(
         "outputs/staging/candidate-census-full-report-expansion-v1-20260925/candidate_abstract_availability.csv",
         "candidate_records/candidate_abstract_availability.csv",
-        "candidate abstract-availability aggregate",
+        "aggregate of preserved candidate abstract-availability flags; omitted abstract text is not inspected",
         "candidate-census-v1",
     ),
     CopySpec(
@@ -685,12 +690,19 @@ output directory. It recomputes 14 category distributions, all 20 candidate cell
 and both SVG/PDF figures. Numeric outputs are checked against packaged reference tables.
 PDF content is reproducible, but byte identity can vary with renderer versions.
 
+The abstract-availability comparison reproduces preserved availability flags from the
+reduced candidate export. Abstract text is omitted and is not inspected; historical
+output field names are retained for compatibility.
+
 The candidate landscape is machine-coded and is not a verified literature-prevalence
 estimate. Original automated full-report assessment provenance remains in every row.
 Morris Chukhman reports having reviewed the AI-generated material; see
 `AUTHOR_REVIEW_STATEMENT.md`. This package-level statement is not row-level approval,
 independent review, or a blinded validation study. Technical reproducibility does not
 establish independent classification accuracy.
+
+Morris Chukhman is the sole human creator of the original software and supplement.
+ChatGPT and Codex were used as development tools and are not creators.
 
 ## Licensing
 
@@ -710,6 +722,9 @@ screenshots, metadata, reports, dependencies, or material carrying another notic
 - **system-cell placement**: one supported Assistance × Modality combination for one eligible system; multilabel and non-additive.
 
 `candidate_audit_export.csv` omits abstracts, evidence text, and coding rationale.
+The abstract-availability table and reproduction check use only the preserved
+`abstract_status` flags in that reduced export. They do not inspect omitted abstract
+text. Historical measure and field names are retained for compatibility.
 Both redistributed placement tables retain mechanisms, identifiers, hashes, and
 locators but replace source passages longer than 25 words with explicit omission
 markers. The 25-word cap is an editorial packaging rule, not a legal threshold or a
@@ -753,9 +768,9 @@ assessment authority recorded for each row. This package-level statement does no
 invent row-level approval dates, a second or independent reviewer, or a blinded
 validation study. Scientifically unresolved boundaries remain unresolved.
 """,
-        "RELEASE_NOTES_DRAFT.md": f"""# Draft release notes
+        "RELEASE_NOTES_DRAFT.md": f"""# Release notes
 
-H2H2 CGF reproducibility supplement, licensing revision 3 (2026-09-30).
+H2H2 CGF reproducibility supplement 3.0.0 (2026-09-30).
 
 Research implementation checkpoint: `{research_commit}`. Documentation/release commit:
 `{release_commit}` on `{branch}`.
@@ -767,9 +782,10 @@ use CC BY 4.0. The included scope statement excludes coauthored, collaborator-ow
 third-party material from those grants. Original automated authority remains row-level,
 while Morris Chukhman's review is recorded separately as an author-reported statement.
 
-Unresolved before publication: confirm any additional creators and separately owned
-contributions; provide optional ORCIDs and a DOI after deposition; confirm acceptance
-status.
+Morris Chukhman is the sole human creator of the original software and supplement.
+ChatGPT and Codex were used as development tools and are not creators. No ORCID,
+affiliation, DOI, or acceptance status is supplied or inferred. Existing third-party and
+separately owned material exclusions remain unchanged.
 """,
         "MANUSCRIPT_AVAILABILITY_PARAGRAPH.md": """A versioned reproducibility supplement accompanies this work. It contains exact search
 and screening protocols, provider-native query definitions, reduced record-level coding
@@ -805,8 +821,8 @@ git push origin h2h2-cgf-reproducibility-v3.0.0
 ```
 
 Create the GitHub release from that tag and upload the ZIP plus external `SHA256SUMS`.
-Upload the same two files to Zenodo after resolving any additional creator metadata. Do not
-claim availability until publication is complete.
+Upload the same two files to Zenodo using `ZENODO_METADATA_DRAFT.json` as the reviewed
+metadata source. Do not claim availability until publication is complete.
 """,
         "REVIEWER_REPRODUCIBILITY_COVERAGE.md": """# Reviewer reproducibility coverage
 
@@ -825,7 +841,8 @@ claim availability until publication is complete.
 
 ## Still unresolved
 
-- public publication, DOI, complete creator metadata, and acceptance status;
+- public publication, DOI, and acceptance status;
+- ORCID and affiliation are not supplied and must not be inferred;
 - separate authorization for any coauthored or collaborator-owned material intended for
   distribution beyond the currently scoped Morris Chukhman contributions;
 - an independent blinded estimate of classification accuracy;
@@ -847,13 +864,13 @@ The flow ledger is ready for figure authoring but is not a claim of PRISMA compl
         "description": "Protocols, reduced audit exports, corrected synthesis matrices, flow ledgers, and figure-generation inputs for the H2H2 CGF submission.",
         "creators": [
             {
-                "name": "Morris Chukhman",
-                "qualification": "Confirmed full name; creator role and additional creators unresolved",
+                "name": ZENODO_CREATOR_NAME,
             }
         ],
         "publication_date": "2026-09-30",
-        "version": "3.0.0-draft",
+        "version": RELEASE_VERSION,
         "license": "cc-by-4.0",
+        "development_tools_disclosure": DEVELOPMENT_TOOL_DISCLOSURE,
         "license_scope": {
             "record_original_research_materials": "CC-BY-4.0",
             "bundled_original_pipeline_code_and_scripts": "MIT",
@@ -864,16 +881,7 @@ The flow ledger is ready for figure authoring but is not a claim of PRISMA compl
             ),
             "details": "LICENSE_SCOPE.md",
         },
-        "doi": None,
-        "orcid": None,
-        "acceptance_status": None,
-        "unresolved": [
-            "complete creator list and roles",
-            "ORCIDs",
-            "authorization for any additional separately owned contributions",
-            "DOI after deposition",
-            "acceptance status",
-        ],
+        "metadata_not_supplied": ["ORCID", "affiliation", "DOI", "acceptance status"],
     }
     (supplement / "ZENODO_METADATA_DRAFT.json").write_text(
         json.dumps(metadata, indent=2) + "\n", encoding="utf-8"
@@ -969,8 +977,10 @@ def verify_manifest(supplement: Path) -> dict[str, object]:
     if blank_normalized:
         errors.append(f"blank_normalized_status:{blank_normalized}")
     license_scope_status = "NOT_APPLICABLE"
+    release_metadata_status = "NOT_APPLICABLE"
     if manifest.get("package_id") == PACKAGE_VERSION:
         license_scope_status = "PASS"
+        release_metadata_status = "PASS"
         required_license_files = (
             "LICENSE",
             "LICENSES/CC-BY-4.0.txt",
@@ -986,6 +996,15 @@ def verify_manifest(supplement: Path) -> dict[str, object]:
         if metadata.get("license") != "cc-by-4.0":
             errors.append("zenodo_license")
             license_scope_status = "FAIL"
+        if metadata.get("version") != RELEASE_VERSION:
+            errors.append("zenodo_release_version")
+            release_metadata_status = "FAIL"
+        if metadata.get("creators") != [{"name": ZENODO_CREATOR_NAME}]:
+            errors.append("zenodo_creators")
+            release_metadata_status = "FAIL"
+        if metadata.get("development_tools_disclosure") != DEVELOPMENT_TOOL_DISCLOSURE:
+            errors.append("zenodo_development_tools_disclosure")
+            release_metadata_status = "FAIL"
         scope = (supplement / "LICENSE_SCOPE.md").read_text(encoding="utf-8")
         for required_text in ("MIT License", "CC BY 4.0", "Material not relicensed"):
             if required_text not in scope:
@@ -1002,6 +1021,7 @@ def verify_manifest(supplement: Path) -> dict[str, object]:
         "omitted_excerpt_rows": omitted_rows,
         "blank_normalized_statuses": blank_normalized,
         "license_scope_status": license_scope_status,
+        "release_metadata_status": release_metadata_status,
         "errors": errors,
     }
 

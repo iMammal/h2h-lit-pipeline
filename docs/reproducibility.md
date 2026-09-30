@@ -75,11 +75,11 @@ From a checkout containing the preserved ignored artifacts:
 ```bash
 python scripts/build_reproducibility_supplement.py \
   --repository-root . \
-  --output-root outputs/staging/h2h2-cgf-reproducibility-release-v3-20260930 \
+  --output-root outputs/staging/h2h2-cgf-reproducibility-final-release-v3-20260930 \
   --research-commit 27cf867f598041f846f2ce57c6a736a89539dc98
 
 python scripts/build_reproducibility_supplement.py \
-  --verify outputs/staging/h2h2-cgf-reproducibility-release-v3-20260930/supplement
+  --verify outputs/staging/h2h2-cgf-reproducibility-final-release-v3-20260930/supplement
 ```
 
 The first command creates a fresh directory and refuses to overwrite an existing
@@ -163,7 +163,9 @@ runs retain their own bindings and must not be silently relabeled.
 
 ## Rights and availability
 
-Morris Chukhman has authorized the MIT License for his original pipeline code and
+Morris Chukhman is the author-confirmed sole human creator of the original software and
+reproducibility supplement. ChatGPT and Codex were used as development tools and are not
+creators. Morris Chukhman has authorized the MIT License for his original pipeline code and
 scripts, and Creative Commons Attribution 4.0 International for his original
 documentation, protocols, annotations, diagrams, and research derivatives. The
 repository's `LICENSE`, `LICENSES/CC-BY-4.0.txt`, and `LICENSE_SCOPE.md` files define the
@@ -179,9 +181,9 @@ assets, annotations, code, data, or protocols require the relevant rights holder
 authorization unless an existing license already permits distribution. Git authorship
 is provenance, not a legal ownership determination.
 
-No DOI, ORCID, acceptance status, complete creator list, or collaborator authorization
-is inferred from the local evidence. These remain publication metadata or rights-clearance
-decisions where applicable.
+No ORCID, affiliation, DOI, or acceptance status has been supplied, and none is inferred.
+The third-party and separately owned material exclusions remain in force; they do not
+make the confirmed creator identity or role unresolved.
 
 The supplement omits full-text reports, raw provider responses, abstract-bearing exports,
 internal BibTeX files of uncertain redistribution rights, and private or credentialed
@@ -189,6 +191,11 @@ material. Hashes, report identifiers, provenance paths, evidence locators, and s
 retained excerpts remain sufficient to audit the reported aggregate calculations,
 but they do not permit a clean-room reader to repeat every full-report judgment without
 lawful access to the cited reports.
+
+The abstract-availability check reproduces the preserved availability flags in the
+reduced candidate export. Because abstract text is intentionally omitted, the check does
+not inspect or independently confirm that text. Historical output field names are retained
+for compatibility.
 
 For release packaging, all redistributed copies of source passages apply an editorial
 25-word cap and explicit omission markers while retaining identifiers, locators, and
