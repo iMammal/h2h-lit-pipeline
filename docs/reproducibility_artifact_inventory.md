@@ -43,7 +43,10 @@ control current totals.
 | January manuscript and anchor draft | earlier manuscript/synthesis artifacts | HISTORICAL/SUPERSEDED | May explain history but must not be cited as current manuscript source |
 | Credentials, signed URLs, headers, caches, environments | various local-only locations | EXTERNAL/RESTRICTED | Always excluded |
 | Project DOI, author ORCIDs, acceptance status | no verified local record | MISSING | Must be supplied by authors; never inferred |
-| Release license decision | `pyproject.toml` says `Proprietary` | MISSING | Resolve code/data/document licenses before public release |
+| Original pipeline software license | `LICENSE`; `pyproject.toml` | INCLUDED | MIT for Morris Chukhman's original pipeline code and scripts only |
+| Original research-material license | `LICENSES/CC-BY-4.0.txt`; `LICENSE_SCOPE.md` | INCLUDED | CC BY 4.0 for Morris Chukhman's original documentation, protocols, annotations, diagrams, and research derivatives only |
+| Coauthored or collaborator-owned contributions | material whose ownership is not established by Morris Chukhman's authorization | EXTERNAL/RESTRICTED | Obtain the relevant rights holder's authorization or follow its existing license; do not infer ownership from Git provenance |
+| Third-party excerpts, screenshots, metadata, reports, and dependencies | source- and file-specific notices or service/provider terms | EXTERNAL/RESTRICTED | Not relicensed by the repository or supplement licenses; preserve existing notices |
 
 The generated supplement contains a machine-readable `artifact_inventory.csv` with
 full hashes, source versions, relationships, and qualifications for every included or

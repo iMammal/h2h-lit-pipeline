@@ -49,6 +49,18 @@ def test_eligibility_normalization_preserves_validated_aliases() -> None:
     ) == "EXCLUDED_CONTEXTUAL"
 
 
+def test_release_license_scope_is_explicit() -> None:
+    root = Path(__file__).parents[1]
+    assert MODULE.PACKAGE_VERSION == "h2h2-cgf-reproducibility-supplement-v3-20260930"
+    assert "MIT License" in (root / "LICENSE").read_text(encoding="utf-8")
+    scope = (root / "LICENSE_SCOPE.md").read_text(encoding="utf-8")
+    assert "CC BY 4.0" in scope
+    assert "Material not relicensed" in scope
+    pyproject = (root / "pyproject.toml").read_text(encoding="utf-8")
+    assert 'license = { file = "LICENSE" }' in pyproject
+    assert 'authors = [{ name = "Morris Chukhman" }]' in pyproject
+
+
 def test_candidate_recomputation_normalizes_desktop_and_uses_exhaustive_omission() -> None:
     row = {
         "canonical_id": "canonical:1",

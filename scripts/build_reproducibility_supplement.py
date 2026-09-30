@@ -21,7 +21,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
-PACKAGE_VERSION = "h2h2-cgf-reproducibility-supplement-v2-20260930"
+PACKAGE_VERSION = "h2h2-cgf-reproducibility-supplement-v3-20260930"
 EXPECTED_COUNTS = {
     "source_occurrences": 187446,
     "canonical_records": 140959,
@@ -60,6 +60,24 @@ class CopySpec:
 
 
 COPY_SPECS = (
+    CopySpec(
+        "LICENSE",
+        "LICENSE",
+        "MIT license for Morris Chukhman's original pipeline code and scripts",
+        "2026-09-30",
+    ),
+    CopySpec(
+        "LICENSES/CC-BY-4.0.txt",
+        "LICENSES/CC-BY-4.0.txt",
+        "CC BY 4.0 legal code for original research materials within stated scope",
+        "4.0",
+    ),
+    CopySpec(
+        "LICENSE_SCOPE.md",
+        "LICENSE_SCOPE.md",
+        "license scope, attribution, exclusions, and separate-authorization notice",
+        "2026-09-30",
+    ),
     CopySpec(
         "pyproject.toml",
         "environment/pyproject.toml",
@@ -673,6 +691,14 @@ Morris Chukhman reports having reviewed the AI-generated material; see
 `AUTHOR_REVIEW_STATEMENT.md`. This package-level statement is not row-level approval,
 independent review, or a blinded validation study. Technical reproducibility does not
 establish independent classification accuracy.
+
+## Licensing
+
+Morris Chukhman's original bundled code and scripts are licensed under MIT. His original
+documentation, protocols, annotations, diagrams, and research derivatives are licensed
+under CC BY 4.0. See `LICENSE`, `LICENSES/CC-BY-4.0.txt`, and `LICENSE_SCOPE.md`.
+These licenses do not cover coauthored or collaborator-owned work, third-party excerpts,
+screenshots, metadata, reports, dependencies, or material carrying another notice.
 """,
         "DATA_DICTIONARY.md": """# Data dictionary
 
@@ -702,8 +728,13 @@ reports; raw provider responses and internal BibTeX exports with unresolved redi
 terms; the registered corpus; manuscript source; review workbooks; credentials, signed
 URLs, authentication headers, private correspondence, caches, and environments.
 
-Excluded artifacts remain hash-bound. The repository currently declares `Proprietary`;
-code, documentation, and data licensing remain an author decision.
+Excluded artifacts remain hash-bound. Morris Chukhman's original bundled code and
+scripts are MIT-licensed. His original documentation, protocols, annotations, diagrams,
+and research derivatives are CC BY 4.0-licensed. These grants apply only to material he
+owns and may license. They do not relicense coauthored or collaborator-owned material,
+third-party excerpts, screenshots, bibliographic/provider metadata, full reports,
+dependencies, or material with a separate notice. Preserve existing notices and obtain
+separate authorization for separately owned contributions.
 """,
         "HISTORICAL_GENERATORS.md": """# Historical generators
 
@@ -724,21 +755,21 @@ validation study. Scientifically unresolved boundaries remain unresolved.
 """,
         "RELEASE_NOTES_DRAFT.md": f"""# Draft release notes
 
-H2H2 CGF reproducibility supplement, packaging revision 2 (2026-09-30).
+H2H2 CGF reproducibility supplement, licensing revision 3 (2026-09-30).
 
 Research implementation checkpoint: `{research_commit}`. Documentation/release commit:
 `{release_commit}` on `{branch}`.
 
-This replacement preserves the scientific decisions and adds a portable offline
-reproduction entry point, consistent release-only excerpt treatment, fully populated
-normalized eligibility outcomes, and regenerated vector figures. It demonstrates
-aggregate/figure reproduction from included inputs and provenance audit; it does not
-rerun retrieval or model screening. Original automated authority remains row-level,
+This replacement preserves the scientific decisions and v2 reproduction workflow while
+adding explicit licensing. Morris Chukhman's original bundled code and scripts use MIT;
+his original documentation, protocols, annotations, diagrams, and research derivatives
+use CC BY 4.0. The included scope statement excludes coauthored, collaborator-owned, and
+third-party material from those grants. Original automated authority remains row-level,
 while Morris Chukhman's review is recorded separately as an author-reported statement.
 
-Unresolved before publication: choose code/data/document licenses; provide other
-creator names and optional ORCIDs; provide a DOI only after deposition; confirm
-acceptance status.
+Unresolved before publication: confirm any additional creators and separately owned
+contributions; provide optional ORCIDs and a DOI after deposition; confirm acceptance
+status.
 """,
         "MANUSCRIPT_AVAILABILITY_PARAGRAPH.md": """A versioned reproducibility supplement accompanies this work. It contains exact search
 and screening protocols, provider-native query definitions, reduced record-level coding
@@ -750,7 +781,10 @@ redistribution terms are unresolved, institutional-access material, credentials,
 the registered multi-gigabyte corpus are excluded; their local provenance is retained
 through identifiers, locators, and cryptographic hashes. The package audits preserved
 decisions but does not rerun mutable retrieval or model services, and technical
-reproducibility does not establish independent classification accuracy.
+reproducibility does not establish independent classification accuracy. Morris
+Chukhman's original bundled software is available under MIT and his original research
+materials under CC BY 4.0; separately owned and third-party material is excluded from
+those grants as specified in the package's license-scope statement.
 """,
         "MANUAL_RELEASE_HANDOFF.md": f"""# Manual release handoff
 
@@ -766,12 +800,12 @@ Inspect first, then run from the repository root:
 git status --short --branch
 git show --stat --oneline {release_commit}
 git push origin {branch}
-git tag -a h2h2-cgf-reproducibility-v2.0.0 {release_commit} -m 'H2H2 CGF reproducibility supplement v2.0.0'
-git push origin h2h2-cgf-reproducibility-v2.0.0
+git tag -a h2h2-cgf-reproducibility-v3.0.0 {release_commit} -m 'H2H2 CGF reproducibility supplement v3.0.0'
+git push origin h2h2-cgf-reproducibility-v3.0.0
 ```
 
 Create the GitHub release from that tag and upload the ZIP plus external `SHA256SUMS`.
-Upload the same two files to Zenodo after resolving creator and license metadata. Do not
+Upload the same two files to Zenodo after resolving any additional creator metadata. Do not
 claim availability until publication is complete.
 """,
         "REVIEWER_REPRODUCIBILITY_COVERAGE.md": """# Reviewer reproducibility coverage
@@ -791,7 +825,9 @@ claim availability until publication is complete.
 
 ## Still unresolved
 
-- public publication, DOI, complete creator metadata, acceptance status, and licenses;
+- public publication, DOI, complete creator metadata, and acceptance status;
+- separate authorization for any coauthored or collaborator-owned material intended for
+  distribution beyond the currently scoped Morris Chukhman contributions;
 - an independent blinded estimate of classification accuracy;
 - identification closure (the registered state explicitly remains open);
 - redistribution of the registered corpus, raw provider responses, internal BibTeX, and
@@ -816,15 +852,25 @@ The flow ledger is ready for figure authoring but is not a claim of PRISMA compl
             }
         ],
         "publication_date": "2026-09-30",
-        "version": "2.0.0-draft",
-        "license": None,
+        "version": "3.0.0-draft",
+        "license": "cc-by-4.0",
+        "license_scope": {
+            "record_original_research_materials": "CC-BY-4.0",
+            "bundled_original_pipeline_code_and_scripts": "MIT",
+            "copyright_holder_for_licensed_contributions": "Morris Chukhman",
+            "exclusions": (
+                "Coauthored or collaborator-owned material and third-party excerpts, "
+                "screenshots, metadata, reports, dependencies, and separately noticed material"
+            ),
+            "details": "LICENSE_SCOPE.md",
+        },
         "doi": None,
         "orcid": None,
         "acceptance_status": None,
         "unresolved": [
             "complete creator list and roles",
             "ORCIDs",
-            "license(s)",
+            "authorization for any additional separately owned contributions",
             "DOI after deposition",
             "acceptance status",
         ],
@@ -922,6 +968,29 @@ def verify_manifest(supplement: Path) -> dict[str, object]:
                 blank_normalized += 1
     if blank_normalized:
         errors.append(f"blank_normalized_status:{blank_normalized}")
+    license_scope_status = "NOT_APPLICABLE"
+    if manifest.get("package_id") == PACKAGE_VERSION:
+        license_scope_status = "PASS"
+        required_license_files = (
+            "LICENSE",
+            "LICENSES/CC-BY-4.0.txt",
+            "LICENSE_SCOPE.md",
+        )
+        for relative in required_license_files:
+            if not (supplement / relative).is_file():
+                errors.append(f"missing_license_file:{relative}")
+                license_scope_status = "FAIL"
+        metadata = json.loads(
+            (supplement / "ZENODO_METADATA_DRAFT.json").read_text(encoding="utf-8")
+        )
+        if metadata.get("license") != "cc-by-4.0":
+            errors.append("zenodo_license")
+            license_scope_status = "FAIL"
+        scope = (supplement / "LICENSE_SCOPE.md").read_text(encoding="utf-8")
+        for required_text in ("MIT License", "CC BY 4.0", "Material not relicensed"):
+            if required_text not in scope:
+                errors.append(f"license_scope_text:{required_text}")
+                license_scope_status = "FAIL"
     return {
         "status": "PASS" if not errors else "FAIL",
         "manifest_entries": len(manifest["files"]),
@@ -932,6 +1001,7 @@ def verify_manifest(supplement: Path) -> dict[str, object]:
         "excerpt_rows_checked": excerpt_rows,
         "omitted_excerpt_rows": omitted_rows,
         "blank_normalized_statuses": blank_normalized,
+        "license_scope_status": license_scope_status,
         "errors": errors,
     }
 

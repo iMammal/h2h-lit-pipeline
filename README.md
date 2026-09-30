@@ -60,9 +60,22 @@ python -m pip install --upgrade pip
 python -m pip install -e '.[dev]'
 ```
 
-The public package metadata currently declares the project license as
-`Proprietary`. No repository-wide open-source or data license is inferred. Resolve the
-code, metadata, and supplement licensing choices before publication.
+## Licensing
+
+Copyright (c) 2026 Morris Chukhman for his original contributions.
+
+- Morris Chukhman's original pipeline code and scripts are available under the
+  [MIT License](LICENSE).
+- His original documentation, protocols, annotations, diagrams, and research
+  derivatives are available under
+  [Creative Commons Attribution 4.0 International](LICENSES/CC-BY-4.0.txt).
+
+See [LICENSE_SCOPE.md](LICENSE_SCOPE.md) for directory-level scope, attribution, and
+exclusions. These licenses apply only to material Morris Chukhman owns and may license.
+They do not relicense coauthored or collaborator-owned work, third-party excerpts,
+screenshots, metadata, full reports, provider content, dependencies, or material with a
+separate notice. Preserve all third-party notices and obtain separate authorization for
+separately owned contributions before distributing them.
 
 ## Bounded offline reproduction
 
@@ -72,11 +85,11 @@ calls:
 ```bash
 python scripts/build_reproducibility_supplement.py \
   --repository-root . \
-  --output-root outputs/staging/h2h2-cgf-reproducibility-release-v2-20260930 \
+  --output-root outputs/staging/h2h2-cgf-reproducibility-release-v3-20260930 \
   --research-commit 27cf867f598041f846f2ce57c6a736a89539dc98
 
 python scripts/build_reproducibility_supplement.py \
-  --verify outputs/staging/h2h2-cgf-reproducibility-release-v2-20260930/supplement
+  --verify outputs/staging/h2h2-cgf-reproducibility-release-v3-20260930/supplement
 
 python -m pytest tests/test_reproducibility_supplement.py
 ```

@@ -75,11 +75,11 @@ From a checkout containing the preserved ignored artifacts:
 ```bash
 python scripts/build_reproducibility_supplement.py \
   --repository-root . \
-  --output-root outputs/staging/h2h2-cgf-reproducibility-release-v2-20260930 \
+  --output-root outputs/staging/h2h2-cgf-reproducibility-release-v3-20260930 \
   --research-commit 27cf867f598041f846f2ce57c6a736a89539dc98
 
 python scripts/build_reproducibility_supplement.py \
-  --verify outputs/staging/h2h2-cgf-reproducibility-release-v2-20260930/supplement
+  --verify outputs/staging/h2h2-cgf-reproducibility-release-v3-20260930/supplement
 ```
 
 The first command creates a fresh directory and refuses to overwrite an existing
@@ -163,10 +163,25 @@ runs retain their own bindings and must not be silently relabeled.
 
 ## Rights and availability
 
-The repository currently declares `Proprietary` in `pyproject.toml`. No DOI, ORCID,
-acceptance status, or open license is established by the available local evidence.
-Before publication, the authors must choose and record licenses separately for code,
-original documentation, and redistributed metadata/evidence.
+Morris Chukhman has authorized the MIT License for his original pipeline code and
+scripts, and Creative Commons Attribution 4.0 International for his original
+documentation, protocols, annotations, diagrams, and research derivatives. The
+repository's `LICENSE`, `LICENSES/CC-BY-4.0.txt`, and `LICENSE_SCOPE.md` files define the
+scope and attribution. The supplement carries the same license files. Zenodo metadata
+uses CC BY 4.0 for the record's original research materials and identifies bundled
+original code as MIT-licensed.
+
+These licenses apply only to material Morris Chukhman owns and has authority to license.
+They do not establish exclusive ownership of coauthored material and do not relicense
+third-party excerpts, screenshots, bibliographic or provider metadata, full reports,
+dependencies, or material with a separate notice. Collaborator-created manuscript
+assets, annotations, code, data, or protocols require the relevant rights holder's
+authorization unless an existing license already permits distribution. Git authorship
+is provenance, not a legal ownership determination.
+
+No DOI, ORCID, acceptance status, complete creator list, or collaborator authorization
+is inferred from the local evidence. These remain publication metadata or rights-clearance
+decisions where applicable.
 
 The supplement omits full-text reports, raw provider responses, abstract-bearing exports,
 internal BibTeX files of uncertain redistribution rights, and private or credentialed
