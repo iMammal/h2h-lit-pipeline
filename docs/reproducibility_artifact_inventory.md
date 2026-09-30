@@ -31,10 +31,14 @@ control current totals.
 | Frozen human-review packets | `outputs/title-abstract-benchmark-v1-20260920/` | INCLUDED | Sampling manifest and instructions; XLSX packets excluded from public supplement |
 | Completed Morris review | `title-abstract-screening-v2-return-morris-20260922-v2` | INCLUDED | Validation report and reduced result; exposure/independence limitations retained |
 | Earlier full-report waves | anchor/v2/expanded/targeted/sparse-cell packages | HISTORICAL/SUPERSEDED | Preserved as wave provenance; corrected cumulative terminal matrices control |
-| Corrected cumulative full-report state | `target-cell-complete-pass-v1-20260926` | INCLUDED | Reduced system/report, eligibility, placement, and count tables |
+| Corrected cumulative full-report state | `target-cell-complete-pass-v1-20260926` | INCLUDED | Reduced system/report, eligibility, placement, and count tables; release derivative fills every `normalized_status` while preserving the original field |
 | Copyrighted full reports and extracted text | wave-specific `reports/` and `extracted/` | EXTERNAL/RESTRICTED | Not redistributed; hashes/identifiers/locators retained |
-| Figure 2 outputs and generators | target-cell package SVG/PDF plus `generate_target_map.mjs` and inputs | INCLUDED | Raster preview omitted; SVG/PDF and source retained |
-| Flow diagram ledger | `study-selection-flow-count-ledger-v1-20260926` | INCLUDED | Counts, relationships, unit crosswalk, structure, and builder |
+| Placement evidence passages | corrected cumulative placement and supported-evidence matrices | INCLUDED | Every redistributed copy uses the same editorial 25-word cap and omission metadata; this cap is not a legal permission threshold |
+| Portable aggregate/figure reproducer | `scripts/reproduce_reproducibility_supplement.py` | INCLUDED | Runs from an extracted supplement root using only included inputs; recomputes candidate/supported counts, equations, SVGs, and PDFs |
+| Figure outputs | portable reproducer plus redistributed count/evidence inputs | INCLUDED | Supported map and candidate co-occurrence SVG/PDF regenerated from included inputs; PDF byte identity is not promised |
+| Historical generators | original candidate census, map, render, and flow scripts | HISTORICAL/SUPERSEDED | Preserved under `historical_generators/`; require restricted or repository-local artifacts and are not the advertised workflow |
+| Flow diagram ledger | `study-selection-flow-count-ledger-v1-20260926` | INCLUDED | Counts, relationships, unit crosswalk, and structure support audit; upstream record-level flow is not reconstructed from summaries |
+| Author-reported synthesis review | package-level `AUTHOR_REVIEW_STATEMENT.md` | INCLUDED | Morris Chukhman reports reviewing AI-generated material; original automated row authority remains, with no invented row-level dates or independent/blinded study |
 | Current manuscript ZIP | `STAR-editable-source-expanded-map-20260925.zip`; SHA-256 `ed8c30…5d8f` | EXTERNAL/RESTRICTED | Bound as current source, preserved unchanged, not included |
 | January manuscript and anchor draft | earlier manuscript/synthesis artifacts | HISTORICAL/SUPERSEDED | May explain history but must not be cited as current manuscript source |
 | Credentials, signed URLs, headers, caches, environments | various local-only locations | EXTERNAL/RESTRICTED | Always excluded |

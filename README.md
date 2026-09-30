@@ -66,23 +66,41 @@ code, metadata, and supplement licensing choices before publication.
 
 ## Bounded offline reproduction
 
-These commands use saved artifacts and make no network or model calls:
+The repository builder uses preserved ignored artifacts and makes no network or model
+calls:
 
 ```bash
 python scripts/build_reproducibility_supplement.py \
   --repository-root . \
-  --output-root outputs/staging/h2h2-cgf-reproducibility-release-v1-20260930 \
+  --output-root outputs/staging/h2h2-cgf-reproducibility-release-v2-20260930 \
   --research-commit 27cf867f598041f846f2ce57c6a736a89539dc98
 
 python scripts/build_reproducibility_supplement.py \
-  --verify outputs/staging/h2h2-cgf-reproducibility-release-v1-20260930/supplement
+  --verify outputs/staging/h2h2-cgf-reproducibility-release-v2-20260930/supplement
 
 python -m pytest tests/test_reproducibility_supplement.py
 ```
 
-The builder validates logical CSV records, stable-ID uniqueness, checkpoint equations,
-source hashes, manifest completeness, and a clean extraction of the archive. It does
-not reopen the registered multi-gigabyte corpus.
+An external reader does not need the repository or ignored artifact tree. After
+extracting the supplement ZIP, install the documented rendering dependency and run:
+
+```bash
+python -m pip install -r supplement/requirements-reproduction.txt
+python supplement/reproduce.py \
+  --supplement-root supplement \
+  --output-dir reproduced
+```
+
+This portable command recomputes candidate category/cell/cell-task distributions,
+supported system-cell counts, eligibility/flow equations, and both vector figures from
+included inputs. The builder validates logical CSV records, stable-ID uniqueness,
+checkpoint equations, source hashes, manifest coverage, consistent excerpt treatment,
+and the same command from a clean extraction. It does not reopen the registered
+multi-gigabyte corpus or reconstruct upstream screening/deduplication from summaries.
+
+The full-report rows retain their original automated-assessment provenance. Morris
+Chukhman reports having reviewed the AI-generated material; this package-level statement
+is not a row-level approval date, independent review, or blinded validation study.
 
 ## Optional live services
 

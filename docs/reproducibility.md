@@ -7,11 +7,11 @@ not rerun mutable literature services or paid models, claim exhaustive screening
 turn automated judgments into independent human ground truth.
 
 The audited research-implementation checkpoint is
-`27cf867f598041f846f2ce57c6a736a89539dc98`. At audit time, local `main` and the cached
-`origin/main` reference pointed to that commit. No fetch was performed, so this is not
-evidence of the current public GitHub state. The previously observed public checkpoint
-`869f0cd932df282e0c6accc4bf0067813da198e2` is an ancestor, six commits behind the
-audited local checkpoint.
+`27cf867f598041f846f2ce57c6a736a89539dc98`; the first release-preparation commit is
+`c920d20f1ef912e04addb959cff0eeb78d1a5352`. Cached remote-tracking state is not proof of
+the current public GitHub state because no network fetch is part of this offline task.
+The previously observed public checkpoint
+`869f0cd932df282e0c6accc4bf0067813da198e2` is an ancestor of the research checkpoint.
 
 ## Precedence
 
@@ -68,24 +68,37 @@ Background designations (10,460) are a subset of exclusions, not another outcome
 Access attempts, report identities, system identities, completed system assessments,
 and system-cell placements are not interchangeable. Cell totals are non-additive.
 
-## Offline build and verification
+## Repository build and clean-extraction reproduction
 
 From a checkout containing the preserved ignored artifacts:
 
 ```bash
 python scripts/build_reproducibility_supplement.py \
   --repository-root . \
-  --output-root outputs/staging/h2h2-cgf-reproducibility-release-v1-20260930 \
+  --output-root outputs/staging/h2h2-cgf-reproducibility-release-v2-20260930 \
   --research-commit 27cf867f598041f846f2ce57c6a736a89539dc98
 
 python scripts/build_reproducibility_supplement.py \
-  --verify outputs/staging/h2h2-cgf-reproducibility-release-v1-20260930/supplement
+  --verify outputs/staging/h2h2-cgf-reproducibility-release-v2-20260930/supplement
 ```
 
 The first command creates a fresh directory and refuses to overwrite an existing
 package. The second validates the package manifest and CSV invariants. The build also
-extracts the ZIP into a temporary directory and verifies it without relying on private
-absolute paths.
+extracts the ZIP into a temporary directory and executes its portable reproducer without
+relying on private absolute paths.
+
+An external reader can run the advertised workflow using only the extracted package:
+
+```bash
+python -m pip install -r supplement/requirements-reproduction.txt
+python supplement/reproduce.py \
+  --supplement-root supplement \
+  --output-dir reproduced
+```
+
+Python 3.11 or newer is required. CairoSVG 2.9.1 is the documented SVG-to-PDF rendering
+dependency; PDF bytes may vary with renderer/library versions even when counts and
+vector content agree. The entry point refuses to overwrite a non-empty output directory.
 
 The authoritative manuscript input is
 `outputs/staging/manuscript-input-20260925/STAR-editable-source-expanded-map-20260925.zip`
@@ -94,17 +107,23 @@ It remains unchanged and is not redistributed by the supplement.
 
 ## What can be regenerated
 
-The package supports offline verification of:
+The package supports executable offline recomputation of:
 
-- provider/query-family definitions and executed source counts;
-- identification and screening equations;
-- the 9,505 unique candidate identities and their machine-coded labels, using a reduced
-  export that omits abstracts;
-- full-report/system denominators and eligibility outcomes;
-- supported assistance × modality counts and the published map from corrected inputs;
-- flow-ledger tables and the two-panel diagram structure.
+- 14 PRESENT/ABSENT/UNCERTAIN candidate category distributions;
+- all 20 candidate Assistance × Modality PRESENT co-occurrences;
+- all 100 candidate cell-task distributions;
+- supported system-cell counts and the supported-system map;
+- normalized eligibility outcomes and the identification/screening/full-report equations;
+- the machine candidate co-occurrence vector figure.
 
-Exact external-service reruns are not expected to reproduce archived retrieval results.
+It additionally supports audit of exact provider/query definitions, preserved executed
+source counts, screening lineage, system/report identities, and placement evidence. It
+does not reconstruct upstream record-level retrieval, deduplication, or effective
+screening decisions from aggregate reports.
+
+Rerunning retrieval or model screening requires excluded inputs, access, credentials,
+and potentially paid services. Exact external-service reruns are not expected to
+reproduce archived results.
 Search indexes, API behavior, access entitlements, and model deployments can change.
 The saved responses and full registered dataset remain locally hash-bound, but are not
 redistributed where rights are uncertain.
@@ -121,6 +140,12 @@ The record selection and protocol-development process exposed some records and m
 judgments. The return is evidence of completed author review, not an independent blinded
 accuracy benchmark. The earlier 40-record provisional sample is workflow/calibration
 material only and is not bound to the registered corpus.
+
+Morris Chukhman separately reports having reviewed the AI-generated full-report
+synthesis material. Original automated row-level authority is preserved. This
+package-level statement does not create row-level approval dates, an independent second
+reviewer, or a blinded validation study; scientifically unresolved boundaries remain
+unresolved.
 
 ## Environment record
 
@@ -146,6 +171,11 @@ original documentation, and redistributed metadata/evidence.
 The supplement omits full-text reports, raw provider responses, abstract-bearing exports,
 internal BibTeX files of uncertain redistribution rights, and private or credentialed
 material. Hashes, report identifiers, provenance paths, evidence locators, and short
-permissible excerpts remain sufficient to audit the reported aggregate calculations,
+retained excerpts remain sufficient to audit the reported aggregate calculations,
 but they do not permit a clean-room reader to repeat every full-report judgment without
 lawful access to the cited reports.
+
+For release packaging, all redistributed copies of source passages apply an editorial
+25-word cap and explicit omission markers while retaining identifiers, locators, and
+source hashes. The cap is a packaging policy, not a legal permission threshold; word
+count alone does not establish redistribution rights.

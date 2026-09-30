@@ -13,6 +13,7 @@ import json
 import platform
 import shutil
 import subprocess
+import sys
 import tempfile
 import zipfile
 from collections.abc import Iterable
@@ -20,7 +21,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
-PACKAGE_VERSION = "h2h2-cgf-reproducibility-supplement-v1-20260930"
+PACKAGE_VERSION = "h2h2-cgf-reproducibility-supplement-v2-20260930"
 EXPECTED_COUNTS = {
     "source_occurrences": 187446,
     "canonical_records": 140959,
@@ -229,20 +230,8 @@ COPY_SPECS = (
     ),
     CopySpec(
         "outputs/staging/candidate-census-full-report-expansion-v1-20260925/build_census_and_freeze_queue.py",
-        "generators/build_candidate_census.py",
-        "candidate-census generator",
-        "candidate-census-v1",
-    ),
-    CopySpec(
-        "outputs/staging/candidate-census-full-report-expansion-v1-20260925/machine_candidate_cooccurrence_chart.svg",
-        "figures/machine_candidate_cooccurrence_chart.svg",
-        "machine candidate landscape chart",
-        "candidate-census-v1",
-    ),
-    CopySpec(
-        "outputs/staging/candidate-census-full-report-expansion-v1-20260925/machine_candidate_cooccurrence_chart.pdf",
-        "figures/machine_candidate_cooccurrence_chart.pdf",
-        "machine candidate landscape chart",
+        "historical_generators/build_candidate_census.py",
+        "historical candidate-census generator; requires restricted source artifacts",
         "candidate-census-v1",
     ),
     CopySpec(
@@ -294,33 +283,15 @@ COPY_SPECS = (
         "target-cell-complete-pass-v1",
     ),
     CopySpec(
-        "outputs/staging/target-cell-complete-pass-v1-20260926/corrected_cumulative_placement_matrix.csv",
-        "full_report/corrected_cumulative_placement_matrix.csv",
-        "placement decisions",
-        "target-cell-complete-pass-v1",
-    ),
-    CopySpec(
-        "outputs/staging/target-cell-complete-pass-v1-20260926/figure2_targeted_assistance_modality_map.svg",
-        "figures/figure2_assistance_modality_map.svg",
-        "editable vector figure",
-        "target-cell-complete-pass-v1",
-    ),
-    CopySpec(
-        "outputs/staging/target-cell-complete-pass-v1-20260926/figure2_targeted_assistance_modality_map.pdf",
-        "figures/figure2_assistance_modality_map.pdf",
-        "print vector figure",
-        "target-cell-complete-pass-v1",
-    ),
-    CopySpec(
         "outputs/staging/target-cell-complete-pass-v1-20260926/generate_target_map.mjs",
-        "generators/generate_target_map.mjs",
-        "Figure 2 generator",
+        "historical_generators/generate_target_map.mjs",
+        "historical Figure 2 generator; retained for provenance and not portable",
         "target-cell-complete-pass-v1",
     ),
     CopySpec(
         "outputs/staging/target-cell-complete-pass-v1-20260926/render_figure.py",
-        "generators/render_figure.py",
-        "Figure 2 render helper",
+        "historical_generators/render_figure.py",
+        "historical Figure 2 render helper; retained for provenance and not portable",
         "target-cell-complete-pass-v1",
     ),
     CopySpec(
@@ -355,8 +326,8 @@ COPY_SPECS = (
     ),
     CopySpec(
         "outputs/staging/study-selection-flow-count-ledger-v1-20260926/build_flow_ledger.py",
-        "generators/build_flow_ledger.py",
-        "flow ledger generator",
+        "historical_generators/build_flow_ledger.py",
+        "historical flow-ledger generator; requires restricted source artifacts",
         "v1-20260926",
     ),
 )
@@ -454,6 +425,40 @@ def excerpt_if_permissible(value: str, limit: int = 25) -> str:
     if len(value.split()) <= limit:
         return value
     return "[OMITTED: source passage exceeds the supplement excerpt limit; use the report locator]"
+
+
+def release_excerpt_fields(value: str, limit: int = 25) -> dict[str, object]:
+    """Apply the release-only editorial excerpt rule without changing source evidence."""
+    words = len(value.split()) if value else 0
+    if not value:
+        treatment = "NO_SOURCE_PASSAGE"
+    elif words <= limit:
+        treatment = "RETAINED_AT_OR_BELOW_EDITORIAL_25_WORD_CAP"
+    else:
+        treatment = "OMITTED_ABOVE_EDITORIAL_25_WORD_CAP"
+    return {
+        "evidence_passage": excerpt_if_permissible(value, limit),
+        "original_evidence_word_count": words,
+        "excerpt_treatment": treatment,
+    }
+
+
+def normalized_eligibility_status(row: dict[str, str]) -> str:
+    """Apply the validated normalized-status/aggregate-status fallback and aliases."""
+    value = (row.get("normalized_status") or row.get("aggregate_status") or "").strip()
+    aliases = {
+        "ELIGIBLE": "ELIGIBLE",
+        "UNRESOLVED": "UNRESOLVED",
+        "HOLD": "UNRESOLVED",
+        "EXCLUDED": "EXCLUDED_CONTEXTUAL",
+        "CONTEXTUAL": "EXCLUDED_CONTEXTUAL",
+        "EXCLUDED_CONTEXTUAL": "EXCLUDED_CONTEXTUAL",
+        "INACCESSIBLE": "INACCESSIBLE",
+        "INACCESSIBLE_FULL_REPORT": "INACCESSIBLE",
+    }
+    if value not in aliases:
+        raise ValueError(f"unrecognized eligibility status for {row.get('system')}: {value!r}")
+    return aliases[value]
 
 
 def copy_csv_derivative(source: Path, destination: Path, transform=None, extra_fields=()) -> int:
@@ -642,15 +647,32 @@ def write_static_materials(
     files = {
         "README.md": """# H2H2 CGF reproducibility supplement
 
-This package supports bounded offline verification of the H2H2 study-selection,
-candidate-coding, and Assistance × Visualization Modality synthesis counts. It contains
-exact protocols and queries, reduced record-level derivatives, corrected full-report
-matrices, flow ledgers, and vector-figure inputs.
+This package supports bounded offline recomputation of H2H2 candidate-label aggregates,
+supported system-cell counts, eligibility/flow equations, and two vector figures. It
+also supports audit of preserved search, screening, identity, and full-report decisions
+and provenance. It does not reconstruct upstream record-level retrieval, identity
+consolidation, or screening from aggregate summaries.
 
-The candidate landscape is machine-coded and is not a verified literature prevalence
-estimate. Full-report judgments are automated structured assessments pending author
-approval unless a row explicitly records another authority. Technical reproducibility
-does not establish independent classification accuracy.
+## Clean-extraction reproduction
+
+From the extracted `supplement` directory, with Python 3.11+ and CairoSVG 2.9.1:
+
+```bash
+python reproduce.py --supplement-root . --output-dir ../reproduced
+```
+
+The command reads only the supplied supplement root and writes only to the separate
+output directory. It recomputes 14 category distributions, all 20 candidate cells, all
+100 cell-task distributions, supported system-cell counts, reconciliation equations,
+and both SVG/PDF figures. Numeric outputs are checked against packaged reference tables.
+PDF content is reproducible, but byte identity can vary with renderer versions.
+
+The candidate landscape is machine-coded and is not a verified literature-prevalence
+estimate. Original automated full-report assessment provenance remains in every row.
+Morris Chukhman reports having reviewed the AI-generated material; see
+`AUTHOR_REVIEW_STATEMENT.md`. This package-level statement is not row-level approval,
+independent review, or a blinded validation study. Technical reproducibility does not
+establish independent classification accuracy.
 """,
         "DATA_DICTIONARY.md": """# Data dictionary
 
@@ -662,8 +684,15 @@ does not establish independent classification accuracy.
 - **system-cell placement**: one supported Assistance × Modality combination for one eligible system; multilabel and non-additive.
 
 `candidate_audit_export.csv` omits abstracts, evidence text, and coding rationale.
-`placement_evidence_permissible.csv` retains mechanisms and locators but replaces source
-passages longer than 25 words. Full reports are not included.
+Both redistributed placement tables retain mechanisms, identifiers, hashes, and
+locators but replace source passages longer than 25 words with explicit omission
+markers. The 25-word cap is an editorial packaging rule, not a legal threshold or a
+claim that shorter excerpts are automatically redistributable. Full reports are not
+included.
+
+`normalized_status` in `eligibility_assessments.csv` is populated for every row by the
+validated rule: use the original normalized value when present, otherwise normalize the
+aggregate status. `original_normalized_status` preserves the source field.
 """,
         "AVAILABILITY_AND_REDISTRIBUTION.md": """# Availability and redistribution statement
 
@@ -676,31 +705,52 @@ URLs, authentication headers, private correspondence, caches, and environments.
 Excluded artifacts remain hash-bound. The repository currently declares `Proprietary`;
 code, documentation, and data licensing remain an author decision.
 """,
+        "HISTORICAL_GENERATORS.md": """# Historical generators
+
+Files under `historical_generators/` are preserved for provenance. They are not the
+advertised clean-extraction workflow: their original paths bind to restricted or
+undistributed artifacts, and some assume the repository's ignored `outputs/staging/`
+tree. Use `reproduce.py` for portable offline reproduction from this package.
+""",
+        "requirements-reproduction.txt": """CairoSVG==2.9.1
+""",
+        "AUTHOR_REVIEW_STATEMENT.md": """# Author-reported review statement
+
+Morris Chukhman reports that he reviewed the AI-generated material used in the
+full-report synthesis. The release derivative preserves the original automated
+assessment authority recorded for each row. This package-level statement does not
+invent row-level approval dates, a second or independent reviewer, or a blinded
+validation study. Scientifically unresolved boundaries remain unresolved.
+""",
         "RELEASE_NOTES_DRAFT.md": f"""# Draft release notes
 
-H2H2 CGF reproducibility supplement, version 1 (2026-09-30).
+H2H2 CGF reproducibility supplement, packaging revision 2 (2026-09-30).
 
 Research implementation checkpoint: `{research_commit}`. Documentation/release commit:
 `{release_commit}` on `{branch}`.
 
-This release provides exact search/protocol artifacts, reduced record-level audit
-exports, corrected full-report synthesis matrices, flow ledgers, and Figure 2 vector
-sources. Automated decisions remain distinct from author approval.
+This replacement preserves the scientific decisions and adds a portable offline
+reproduction entry point, consistent release-only excerpt treatment, fully populated
+normalized eligibility outcomes, and regenerated vector figures. It demonstrates
+aggregate/figure reproduction from included inputs and provenance audit; it does not
+rerun retrieval or model screening. Original automated authority remains row-level,
+while Morris Chukhman's review is recorded separately as an author-reported statement.
 
-Unresolved before publication: choose code/data/document licenses; provide complete
+Unresolved before publication: choose code/data/document licenses; provide other
 creator names and optional ORCIDs; provide a DOI only after deposition; confirm
 acceptance status.
 """,
-        "MANUSCRIPT_AVAILABILITY_PARAGRAPH.md": """A versioned reproducibility supplement accompanies this work. It contains the exact
-search and screening protocols, provider-native query definitions, reduced record-level
-screening and coding exports, corrected system/report and assistance–modality evidence
-matrices, study-selection count ledgers, and the inputs and source needed to regenerate
-the reported aggregate tables and vector map. Copyrighted full texts, raw provider
-responses whose redistribution terms are unresolved, institutional-access material,
-credentials, and the registered multi-gigabyte corpus are excluded; their local
-provenance is retained through identifiers, locators, and cryptographic hashes.
-Reproducing archived aggregates is distinct from rerunning changing external services
-or establishing independent classification accuracy.
+        "MANUSCRIPT_AVAILABILITY_PARAGRAPH.md": """A versioned reproducibility supplement accompanies this work. It contains exact search
+and screening protocols, provider-native query definitions, reduced record-level coding
+exports, corrected system/report and assistance–modality evidence matrices, flow-count
+ledgers, and a portable offline script that recomputes the reported candidate-label
+aggregates, supported system-cell counts, reconciliation equations, and vector figures
+from included inputs. Copyrighted full texts, raw provider responses whose
+redistribution terms are unresolved, institutional-access material, credentials, and
+the registered multi-gigabyte corpus are excluded; their local provenance is retained
+through identifiers, locators, and cryptographic hashes. The package audits preserved
+decisions but does not rerun mutable retrieval or model services, and technical
+reproducibility does not establish independent classification accuracy.
 """,
         "MANUAL_RELEASE_HANDOFF.md": f"""# Manual release handoff
 
@@ -716,8 +766,8 @@ Inspect first, then run from the repository root:
 git status --short --branch
 git show --stat --oneline {release_commit}
 git push origin {branch}
-git tag -a h2h2-cgf-reproducibility-v1.0.0 {release_commit} -m 'H2H2 CGF reproducibility supplement v1.0.0'
-git push origin h2h2-cgf-reproducibility-v1.0.0
+git tag -a h2h2-cgf-reproducibility-v2.0.0 {release_commit} -m 'H2H2 CGF reproducibility supplement v2.0.0'
+git push origin h2h2-cgf-reproducibility-v2.0.0
 ```
 
 Create the GitHub release from that tag and upload the ZIP plus external `SHA256SUMS`.
@@ -737,7 +787,7 @@ claim availability until publication is complete.
 - completed author-review evidence with exposure and independence limitations;
 - explicit separation of machine proposals, author judgments, and synthesis interpretation;
 - corrected full-report/system denominators and supported map placements;
-- editable figure sources and bounded offline aggregate regeneration.
+- executable aggregate and figure reproduction from publicly included inputs.
 
 ## Still unresolved
 
@@ -747,7 +797,8 @@ claim availability until publication is complete.
 - redistribution of the registered corpus, raw provider responses, internal BibTeX, and
   copyrighted full reports;
 - several terminal manifest-named outcome CSVs absent from the local completion package;
-- author approval of automated full-report assessments and remaining scientific boundaries.
+- remaining genuinely unresolved scientific boundaries; package-level author review is
+  recorded separately without rewriting automated row-level authority.
 
 The flow ledger is ready for figure authoring but is not a claim of PRISMA compliance.
 """,
@@ -760,18 +811,18 @@ The flow ledger is ready for figure authoring but is not a claim of PRISMA compl
         "description": "Protocols, reduced audit exports, corrected synthesis matrices, flow ledgers, and figure-generation inputs for the H2H2 CGF submission.",
         "creators": [
             {
-                "name": "Morris",
-                "qualification": "Incomplete verified local name; replace before deposition",
+                "name": "Morris Chukhman",
+                "qualification": "Confirmed full name; creator role and additional creators unresolved",
             }
         ],
         "publication_date": "2026-09-30",
-        "version": "1.0.0-draft",
+        "version": "2.0.0-draft",
         "license": None,
         "doi": None,
         "orcid": None,
         "acceptance_status": None,
         "unresolved": [
-            "complete creator list and names",
+            "complete creator list and roles",
             "ORCIDs",
             "license(s)",
             "DOI after deposition",
@@ -817,6 +868,7 @@ def deterministic_zip(source_dir: Path, archive_path: Path) -> None:
 def verify_manifest(supplement: Path) -> dict[str, object]:
     manifest = json.loads((supplement / "package_manifest.json").read_text(encoding="utf-8"))
     errors = []
+    listed = {entry["relative_path"] for entry in manifest["files"]}
     for entry in manifest["files"]:
         path = supplement / entry["relative_path"]
         if not path.is_file():
@@ -826,17 +878,60 @@ def verify_manifest(supplement: Path) -> dict[str, object]:
             errors.append(f"size:{entry['relative_path']}")
         if sha256_file(path) != entry["sha256"]:
             errors.append(f"hash:{entry['relative_path']}")
+    actual = {
+        str(path.relative_to(supplement))
+        for path in supplement.rglob("*")
+        if path.is_file() and path.name != "package_manifest.json"
+    }
+    if actual != listed:
+        errors.append(
+            f"manifest_coverage:missing={sorted(actual - listed)}:stale={sorted(listed - actual)}"
+        )
     candidate_rows = logical_csv_rows(supplement / "candidate_records/candidate_audit_export.csv")
     placement_rows = logical_csv_rows(supplement / "full_report/placement_evidence_permissible.csv")
     if candidate_rows != EXPECTED_COUNTS["advance"]:
         errors.append("candidate_row_count")
     if placement_rows != EXPECTED_COUNTS["supported_placements"]:
         errors.append("placement_row_count")
+    with (
+        supplement / "candidate_records/candidate_audit_export.csv"
+    ).open("r", encoding="utf-8-sig", newline="") as handle:
+        candidate_ids = [row["canonical_id"] for row in csv.DictReader(handle)]
+    if len(candidate_ids) != len(set(candidate_ids)):
+        errors.append("candidate_id_uniqueness")
+    excerpt_rows = 0
+    omitted_rows = 0
+    for relative in (
+        "full_report/placement_evidence_permissible.csv",
+        "full_report/corrected_cumulative_placement_matrix.csv",
+    ):
+        with (supplement / relative).open("r", encoding="utf-8-sig", newline="") as handle:
+            for row in csv.DictReader(handle):
+                excerpt_rows += 1
+                passage = row.get("evidence_passage", "")
+                if len(passage.split()) > 25:
+                    errors.append(f"excerpt_over_cap:{relative}:{row.get('placement_id')}")
+                if row.get("excerpt_treatment") == "OMITTED_ABOVE_EDITORIAL_25_WORD_CAP":
+                    omitted_rows += 1
+    blank_normalized = 0
+    with (
+        supplement / "full_report/eligibility_assessments.csv"
+    ).open("r", encoding="utf-8-sig", newline="") as handle:
+        for row in csv.DictReader(handle):
+            if not row.get("normalized_status", "").strip():
+                blank_normalized += 1
+    if blank_normalized:
+        errors.append(f"blank_normalized_status:{blank_normalized}")
     return {
         "status": "PASS" if not errors else "FAIL",
         "manifest_entries": len(manifest["files"]),
+        "manifest_coverage_files": len(actual),
         "candidate_rows": candidate_rows,
+        "candidate_unique_ids": len(set(candidate_ids)),
         "placement_rows": placement_rows,
+        "excerpt_rows_checked": excerpt_rows,
+        "omitted_excerpt_rows": omitted_rows,
+        "blank_normalized_statuses": blank_normalized,
         "errors": errors,
     }
 
@@ -859,6 +954,20 @@ def build(root: Path, output_root: Path, research_commit: str) -> tuple[Path, Pa
     branch = run_text(["git", "branch", "--show-current"], root)
     entries = [copy_bound(root, supplement, spec) for spec in COPY_SPECS]
 
+    portable_source = root / "scripts/reproduce_reproducibility_supplement.py"
+    portable_destination = supplement / "reproduce.py"
+    shutil.copyfile(portable_source, portable_destination)
+    entries.append(
+        manifest_entry(
+            portable_destination,
+            supplement,
+            source_path=str(portable_source.relative_to(root)),
+            source_sha256=sha256_file(portable_source),
+            source_version=PACKAGE_VERSION,
+            relationship="portable clean-extraction aggregate and figure reproducer",
+        )
+    )
+
     candidate_path = supplement / "candidate_records/candidate_audit_export.csv"
     candidate_count, candidate_ids = write_candidate_derivative(root, candidate_path)
     add_generated(
@@ -869,7 +978,7 @@ def build(root: Path, output_root: Path, research_commit: str) -> tuple[Path, Pa
     placement_path = supplement / "full_report/placement_evidence_permissible.csv"
 
     def placement_transform(row):
-        row["evidence_passage"] = excerpt_if_permissible(row.get("evidence_passage", ""))
+        row.update(release_excerpt_fields(row.get("evidence_passage", "")))
         row["report_distributed"] = "NO"
         return row
 
@@ -877,9 +986,28 @@ def build(root: Path, output_root: Path, research_commit: str) -> tuple[Path, Pa
         source_base / "corrected_cumulative_supported_evidence_matrix.csv",
         placement_path,
         placement_transform,
-        ("report_distributed",),
+        ("original_evidence_word_count", "excerpt_treatment", "report_distributed"),
     )
-    add_generated(entries, placement_path, supplement, "placement matrix with bounded excerpts")
+    add_generated(
+        entries,
+        placement_path,
+        supplement,
+        "supported placement derivative with editorially bounded excerpts",
+    )
+
+    cumulative_placement_path = supplement / "full_report/corrected_cumulative_placement_matrix.csv"
+    cumulative_placement_count = copy_csv_derivative(
+        source_base / "corrected_cumulative_placement_matrix.csv",
+        cumulative_placement_path,
+        placement_transform,
+        ("original_evidence_word_count", "excerpt_treatment", "report_distributed"),
+    )
+    add_generated(
+        entries,
+        cumulative_placement_path,
+        supplement,
+        "complete placement-decision derivative with editorially bounded excerpts",
+    )
 
     crosswalk_path = supplement / "full_report/system_report_crosswalk.csv"
 
@@ -896,8 +1024,21 @@ def build(root: Path, output_root: Path, research_commit: str) -> tuple[Path, Pa
     add_generated(entries, crosswalk_path, supplement, "report/system identity crosswalk")
 
     eligibility_path = supplement / "full_report/eligibility_assessments.csv"
+
+    def eligibility_transform(row):
+        row["original_normalized_status"] = row.get("normalized_status", "")
+        row["normalized_status"] = normalized_eligibility_status(row)
+        row["normalization_rule"] = (
+            "original normalized_status when present; otherwise aggregate_status; "
+            "legacy aliases mapped to four validated outcome classes"
+        )
+        return row
+
     eligibility_count = copy_csv_derivative(
-        source_base / "corrected_cumulative_eligibility_assessments.csv", eligibility_path
+        source_base / "corrected_cumulative_eligibility_assessments.csv",
+        eligibility_path,
+        eligibility_transform,
+        ("original_normalized_status", "normalization_rule"),
     )
     add_generated(entries, eligibility_path, supplement, "system eligibility matrix")
 
@@ -932,6 +1073,7 @@ def build(root: Path, output_root: Path, research_commit: str) -> tuple[Path, Pa
         {
             "candidate_rows": candidate_count,
             "placement_rows": placement_count,
+            "cumulative_placement_rows": cumulative_placement_count,
             "crosswalk_rows": crosswalk_count,
             "eligibility_rows": eligibility_count,
         }
@@ -940,6 +1082,44 @@ def build(root: Path, output_root: Path, research_commit: str) -> tuple[Path, Pa
     generated = write_static_materials(supplement, branch, research_commit, release_commit)
     for name, relationship in generated.items():
         add_generated(entries, supplement / name, supplement, relationship)
+
+    # The portable reproducer requires only a supplement-root marker while staging.
+    # The final complete manifest replaces this temporary file below.
+    (supplement / "package_manifest.json").write_text("{}\n", encoding="utf-8")
+    with tempfile.TemporaryDirectory(prefix="h2h2-repro-figures-") as tmp:
+        reproduction_output = Path(tmp) / "reproduced"
+        subprocess.run(
+            [
+                sys.executable,
+                str(portable_destination),
+                "--supplement-root",
+                str(supplement),
+                "--output-dir",
+                str(reproduction_output),
+            ],
+            cwd=supplement,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        for name in (
+            "figure2_assistance_modality_map.svg",
+            "figure2_assistance_modality_map.pdf",
+            "machine_candidate_cooccurrence_chart.svg",
+            "machine_candidate_cooccurrence_chart.pdf",
+        ):
+            destination = supplement / "figures" / name
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(reproduction_output / "figures" / name, destination)
+            add_generated(entries, destination, supplement, "portable reproduced vector figure")
+        annotation_checks = supplement / "figures/figure_annotation_checks.csv"
+        shutil.copyfile(reproduction_output / "figure_annotation_checks.csv", annotation_checks)
+        add_generated(
+            entries,
+            annotation_checks,
+            supplement,
+            "representative annotations checked against recomputed supported cells",
+        )
 
     environment = {
         "artifact_class": "release_preparation_environment",
@@ -1013,9 +1193,28 @@ def build(root: Path, output_root: Path, research_commit: str) -> tuple[Path, Pa
     with tempfile.TemporaryDirectory(prefix="h2h2-repro-verify-") as tmp:
         with zipfile.ZipFile(archive) as zf:
             zf.extractall(tmp)
-        clean_verification = verify_manifest(Path(tmp) / supplement.name)
+        extracted_supplement = Path(tmp) / supplement.name
+        clean_verification = verify_manifest(extracted_supplement)
         if clean_verification["status"] != "PASS":
             raise ValueError(f"clean extraction verification failed: {clean_verification}")
+        clean_reproduction_output = Path(tmp) / "reproduced"
+        completed = subprocess.run(
+            [
+                sys.executable,
+                str(extracted_supplement / "reproduce.py"),
+                "--supplement-root",
+                str(extracted_supplement),
+                "--output-dir",
+                str(clean_reproduction_output),
+            ],
+            cwd=tmp,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        clean_reproduction = json.loads(completed.stdout)
+        if clean_reproduction["status"] != "PASS":
+            raise ValueError(f"clean extraction reproduction failed: {clean_reproduction}")
 
     outer_validation = {
         "status": "PASS",
@@ -1023,6 +1222,7 @@ def build(root: Path, output_root: Path, research_commit: str) -> tuple[Path, Pa
         "archive_bytes": archive.stat().st_size,
         "archive_sha256": sha256_file(archive),
         "clean_extraction": clean_verification,
+        "clean_extraction_reproduction": clean_reproduction,
         "supplement_manifest_sha256": sha256_file(manifest_path),
     }
     (output_root / "release_validation_report.json").write_text(

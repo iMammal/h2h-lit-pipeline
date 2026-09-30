@@ -12,12 +12,67 @@ assert SPEC.loader is not None
 sys.modules[SPEC.name] = MODULE
 SPEC.loader.exec_module(MODULE)
 
+REPRODUCE_SCRIPT = (
+    Path(__file__).parents[1] / "scripts" / "reproduce_reproducibility_supplement.py"
+)
+REPRODUCE_SPEC = importlib.util.spec_from_file_location(
+    "reproduce_reproducibility_supplement", REPRODUCE_SCRIPT
+)
+REPRODUCE = importlib.util.module_from_spec(REPRODUCE_SPEC)
+assert REPRODUCE_SPEC.loader is not None
+sys.modules[REPRODUCE_SPEC.name] = REPRODUCE
+REPRODUCE_SPEC.loader.exec_module(REPRODUCE)
+
 
 def test_excerpt_limit_preserves_short_and_omits_long() -> None:
     short = "one two three"
     long = " ".join(f"w{i}" for i in range(26))
     assert MODULE.excerpt_if_permissible(short) == short
     assert MODULE.excerpt_if_permissible(long).startswith("[OMITTED:")
+    fields = MODULE.release_excerpt_fields(long)
+    assert fields["original_evidence_word_count"] == 26
+    assert fields["excerpt_treatment"] == "OMITTED_ABOVE_EDITORIAL_25_WORD_CAP"
+
+
+def test_eligibility_normalization_preserves_validated_aliases() -> None:
+    assert MODULE.normalized_eligibility_status(
+        {"system": "a", "normalized_status": "", "aggregate_status": "ELIGIBLE"}
+    ) == "ELIGIBLE"
+    assert MODULE.normalized_eligibility_status(
+        {"system": "b", "normalized_status": "UNRESOLVED", "aggregate_status": "HOLD"}
+    ) == "UNRESOLVED"
+    assert MODULE.normalized_eligibility_status(
+        {"system": "c", "normalized_status": "", "aggregate_status": "HOLD"}
+    ) == "UNRESOLVED"
+    assert MODULE.normalized_eligibility_status(
+        {"system": "d", "normalized_status": "", "aggregate_status": "CONTEXTUAL"}
+    ) == "EXCLUDED_CONTEXTUAL"
+
+
+def test_candidate_recomputation_normalizes_desktop_and_uses_exhaustive_omission() -> None:
+    row = {
+        "canonical_id": "canonical:1",
+        "abstract_status": "PRESENT",
+        "assistance_present": "Algorithmic",
+        "assistance_unknown": "Adaptive",
+        "modalities_present": "Desktop 2D",
+        "modalities_unknown": "",
+        "tasks_present": "Comparison and Differentiation",
+        "tasks_unknown": "",
+    }
+    states, cells, tasks, abstracts = REPRODUCE.candidate_tables([row])
+    state = {(item["dimension"], item["label"]): item for item in states}
+    assert state[("assistance", "Algorithmic")]["PRESENT"] == 1
+    assert state[("assistance", "Adaptive")]["UNCERTAIN"] == 1
+    assert state[("assistance", "Conversational")]["ABSENT"] == 1
+    cell = {
+        (item["assistance_mode"], item["visualization_modality"]): item for item in cells
+    }
+    assert cell[("Algorithmic", "Desktop/Planar")][
+        "present_label_cooccurrence_records"
+    ] == 1
+    assert len(tasks) == 100
+    assert abstracts[0]["candidate_records"] == 1
 
 
 def test_verify_manifest_and_logical_csv_rows(tmp_path: Path) -> None:
@@ -27,6 +82,8 @@ def test_verify_manifest_and_logical_csv_rows(tmp_path: Path) -> None:
     report_dir.mkdir()
     candidate = candidate_dir / "candidate_audit_export.csv"
     placement = report_dir / "placement_evidence_permissible.csv"
+    cumulative = report_dir / "corrected_cumulative_placement_matrix.csv"
+    eligibility = report_dir / "eligibility_assessments.csv"
     with candidate.open("w", encoding="utf-8", newline="") as handle:
         writer = csv.writer(handle)
         writer.writerow(["canonical_id", "title"])
@@ -36,12 +93,22 @@ def test_verify_manifest_and_logical_csv_rows(tmp_path: Path) -> None:
             )
     with placement.open("w", encoding="utf-8", newline="") as handle:
         writer = csv.writer(handle)
-        writer.writerow(["placement_id"])
+        writer.writerow(["placement_id", "evidence_passage", "excerpt_treatment"])
         for index in range(MODULE.EXPECTED_COUNTS["supported_placements"]):
-            writer.writerow([f"P{index:03d}"])
+            writer.writerow([f"P{index:03d}", "short passage", "RETAINED_AT_OR_BELOW_EDITORIAL_25_WORD_CAP"])
+    with cumulative.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.writer(handle)
+        writer.writerow(["placement_id", "evidence_passage", "excerpt_treatment"])
+        for index in range(125):
+            writer.writerow([f"C{index:03d}", "[OMITTED: source passage exceeds the supplement excerpt limit; use the report locator]", "OMITTED_ABOVE_EDITORIAL_25_WORD_CAP"])
+    with eligibility.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.writer(handle)
+        writer.writerow(["system", "normalized_status"])
+        for index in range(MODULE.EXPECTED_COUNTS["systems_considered"]):
+            writer.writerow([f"system-{index:03d}", "INACCESSIBLE"])
 
     files = []
-    for path in (candidate, placement):
+    for path in (candidate, placement, cumulative, eligibility):
         files.append(
             {
                 "relative_path": str(path.relative_to(tmp_path)),
@@ -53,4 +120,6 @@ def test_verify_manifest_and_logical_csv_rows(tmp_path: Path) -> None:
     result = MODULE.verify_manifest(tmp_path)
     assert result["status"] == "PASS"
     assert result["candidate_rows"] == 9505
+    assert result["candidate_unique_ids"] == 9505
     assert result["placement_rows"] == 118
+    assert result["blank_normalized_statuses"] == 0
