@@ -147,6 +147,15 @@ package-level statement does not create row-level approval dates, an independent
 reviewer, or a blinded validation study; scientifically unresolved boundaries remain
 unresolved.
 
+On 9 October 2026, Morris Chukhman further confirmed that he issued the full-report
+selection instructions and authorized their priorities, bounds, and three target cells;
+Codex selected candidates within those instructions. His subsequent review concerned the
+resulting evidence and reported placements and is not represented as separate
+pre-assessment review of every frozen queue. The contemporaneous evidence, actor-specific
+roles, preserved unknown shortlist origins, and the correction to the 200-entry audit's
+incomplete sort description are documented in
+[`full_report_selection_authority.md`](full_report_selection_authority.md).
+
 ## Environment record
 
 The repository declares Python `>=3.11`, `pydantic>=2.8`, and `requests>=2.32`, with
